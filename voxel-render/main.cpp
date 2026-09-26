@@ -40,7 +40,7 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     lastX = (float)xpos; lastY = (float)ypos;
     camera.ProcessMouseMovement(xo, yo);
 }
-void scroll_callback(GLFWwindow*, double, double y) { camera.ProcessMouseScroll((float)y); }
+void scroll_callback(GLFWwindow*, double, double) { /* зум только из консоли cam.fov */ }
 void processInput(GLFWwindow* w) {
     if (!console.open && glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
     // WASD — через Player::update, камера следует за игроком
@@ -189,6 +189,12 @@ int main()
     cvar.reg("time.speed", 600.0f); // длина суток, 0 = стоп
     cvar.reg("fog.near", 0.0f);
     cvar.reg("fog.far", 260.0f);
+    cvar.reg("cam.fov", 70.0f);
+    cvar.reg("move.walk", 4.3f);
+    cvar.reg("move.fly", 8.0f);
+    cvar.reg("move.jump", 7.5f);
+    cvar.reg("move.bhop", 0.0f);
+    cvar.reg("tick.rate", 120.0f);
     cvar.load("gfx.cfg");
     gCvar = &cvar;
     cvar.onPrint = [](const std::string& s) { console.print(s); };
@@ -267,6 +273,12 @@ int main()
         if (!console.open && curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
         prevG = curG;
         glm::vec2 mv(0.0f);
+        if (!console.open) {
+        player.walkSpeed = cvar.get("move.walk", 4.3f);
+        player.flySpeed = cvar.get("move.fly", 8.0f);
+        player.jumpVel = cvar.get("move.jump", 7.5f);
+        player.autoJump = cvar.get("move.bhop", 0.0f) > 0.5f;
+        }
         bool jump = false, down = false;
         if (!console.open) {
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
@@ -276,7 +288,17 @@ int main()
         jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         }
-        player.update(deltaTime, world, mv, glm::radians(camera.Yaw), jump, down);
+        static float tickAcc = 0.0f; // фикс. тикрейт физики
+        float rate = cvar.get("tick.rate", 120.0f);
+        if (rate < 30.0f) rate = 30.0f;
+        if (rate > 240.0f) rate = 240.0f;
+        tickAcc += deltaTime;
+        float h = 1.0f / rate;
+        if (tickAcc > h * 8) tickAcc = h * 8;
+        while (tickAcc >= h) {
+            player.update(h, world, mv, glm::radians(camera.Yaw), jump, down);
+            tickAcc -= h;
+        }
         // упал за мир — респаун в центр
         if (player.pos.y < -10.0f) player.spawn(world, W / 2, W / 2);
         camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eye, 0.0f);
@@ -285,7 +307,7 @@ int main()
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 600.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(cvar.get("cam.fov", 70.0f)), 1280.0f/720.0f, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
         Frustum frustum = Frustum::fromVP(projection * view);
         auto chunkVisible = [&](int cx, int cz) {
@@ -505,15 +527,16 @@ int main()
             slider("fog.near", "fog.near", 0.0f, 200.0f);
             slider("fog.far", "fog.far", 50.0f, 500.0f);
             slider("time.speed", "time.speed", 0.0f, 1200.0f);
+            slider("cam.fov", "cam.fov", 30.0f, 110.0f);
+            slider("walk", "move.walk", 1.0f, 12.0f);
+            slider("fly", "move.fly", 2.0f, 30.0f);
+            slider("jump", "move.jump", 2.0f, 12.0f);
+            slider("tick", "tick.rate", 30.0f, 240.0f);
             ImGui::Checkbox("flash (F)", &flashOn);
             ImGui::Checkbox("lamps (L)", &followOn);
             ImGui::Checkbox("fly (V)", &player.fly);
-            const char* blocks[3] = {"grass", "dirt", "stone"};
-            for (int i = 0; i < 3; i++) {
-                if (i) ImGui::SameLine();
-                bool sel = (placeId == i + 1);
-                if (ImGui::RadioButton(blocks[i], sel)) placeId = i + 1;
-            }
+            bool bhop = cvar.get("move.bhop", 0.0f) > 0.5f;
+            if (ImGui::Checkbox("bhop on space", &bhop)) cvar.set("move.bhop", bhop ? 1.0f : 0.0f);
             ImGui::Separator();
             ImGui::BeginChild("log", ImVec2(0, 200), true);
             for (auto& ln : console.lines) ImGui::TextUnformatted(ln.c_str());

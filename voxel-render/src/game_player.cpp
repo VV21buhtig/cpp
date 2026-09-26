@@ -30,14 +30,15 @@ void Player::spawn(const World& w, int wx, int wz) {
 
 void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
                     bool jump, bool down) {
-    // фронт пробела считаем всегда (и для fly), тратим буфер только в walk
-    if (jump && !prevJumpHeld) jumpBuf = 0.15f;
+    // фронт пробела считаем всегда (и для fly), тратим буфер только в walk.
+    // autoJump: зажатый пробел распрыгивает сам
+    if ((jump && !prevJumpHeld) || (autoJump && jump && (onGround || fly))) jumpBuf = 0.15f;
     prevJumpHeld = jump;
     if (jumpBuf > 0.0f) jumpBuf -= dt;
     glm::vec3 fwd(cos(yaw), 0.0f, sin(yaw));
     glm::vec3 right(-fwd.z, 0.0f, fwd.x);
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
-    float speed = fly ? 8.0f : 4.3f;
+    float speed = fly ? flySpeed : walkSpeed;
     glm::vec3 wish = (fwd * move.x + right * move.y) * speed;
     { // диагональ W+D не должна давать x1.41: нормируем
         float l = sqrt(wish.x * wish.x + wish.z * wish.z);
@@ -100,7 +101,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     }
     vel.y -= g * dt;
     if (vel.y < -30.0f) vel.y = -30.0f;
-    if (onGround && jumpBuf > 0.0f) { vel.y = 7.5f; onGround = false; jumpBuf = 0.0f; }
+    if (onGround && jumpBuf > 0.0f) { vel.y = jumpVel; onGround = false; jumpBuf = 0.0f; }
 
     glm::vec3 np = pos + vel * dt;
     glm::vec3 t = pos;
