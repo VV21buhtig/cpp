@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include "engine/mesh.h"
 #include "engine/texture.h"
+#include "engine/atlas.h"
 #include "engine/chunk.h"
 #include "engine/world.h"
 #include "game/pick.h"
@@ -95,7 +96,7 @@ int main()
     CubeMesh outlineCube;
     outlineCube.init();
 
-    unsigned int diffuseMap  = loadTexture("texture/container2.png");
+    unsigned int diffuseMap  = makeAtlas2("texture/container.png", "texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
 
     lightingShader.use();

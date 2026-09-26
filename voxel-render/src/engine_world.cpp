@@ -73,7 +73,8 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                 out.push_back(kWF[f][v][3]);
                 out.push_back(kWF[f][v][4]);
                 out.push_back(kWF[f][v][5]);
-                out.push_back(kWF[f][v][6]);
+                float tile = (f == 5) ? 1.0f : 0.0f; // top=container2, бока/низ=container
+                out.push_back((tile + kWF[f][v][6]) * 0.5f);
                 out.push_back(kWF[f][v][7]);
             }
         }

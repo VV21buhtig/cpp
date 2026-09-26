@@ -42,7 +42,8 @@ std::vector<float> Chunk::buildMesh() const {
                 out.push_back(kFaces[f][v][3]);
                 out.push_back(kFaces[f][v][4]);
                 out.push_back(kFaces[f][v][5]);
-                out.push_back(kFaces[f][v][6]);
+                float tile = (f == 5) ? 1.0f : 0.0f; // top=container2, бока/низ=container
+                out.push_back((tile + kFaces[f][v][6]) * 0.5f);
                 out.push_back(kFaces[f][v][7]);
             }
         }
