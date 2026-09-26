@@ -90,8 +90,8 @@ vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
     // ambient
     vec3 ambient = light.ambient * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
 
-    // diffuse
-    float diff    = max(dot(normal, lightDir), 0.0);
+    // diffuse (wrap: скользящий свет не даёт черноты утром, Valve-style)
+    float diff    = clamp((dot(normal, lightDir) + 0.4) / 1.4, 0.0, 1.0);
     vec3  diffuse = light.diffuse * diff * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
 
     // specular

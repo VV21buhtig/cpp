@@ -181,9 +181,11 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), F fly/walk, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
+    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), V fly/walk, F фонарик, L лампы, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
 
-    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false, prevF = false;
+    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
+    bool prevV = false, prevF = false, prevG = false;
+    bool flashOn = true, followOn = true;
     int placeId = 1;
     bool prev1 = false, prev2 = false, prev3 = false;
 
@@ -194,14 +196,20 @@ int main()
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         processInput(window);
 
-        // --- PLAYER: F — fly/walk, камера = глаза ---
-        bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
-        if (curF && !prevF) {
+        // --- PLAYER: V — fly/walk, F — фонарик, L — лампы, камера = глаза ---
+        bool curV = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
+        if (curV && !prevV) {
             player.fly = !player.fly;
             player.vel = glm::vec3(0.0f);
             std::cout << (player.fly ? "FLY\n" : "WALK\n");
         }
+        prevV = curV;
+        bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
         prevF = curF;
+        bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
+        if (curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
+        prevG = curG;
         glm::vec2 mv(0.0f);
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
@@ -224,10 +232,13 @@ int main()
         // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
         float sunA = now * 6.2831853f / 240.0f;
         glm::vec3 sunVec = glm::normalize(glm::vec3(cos(sunA), sin(sunA), 0.35f));
-        float morn = glm::smoothstep(-0.05f, 0.12f, sunVec.y); // быстрый рассвет
+        // Тайминг как у людей: сумерки раньше прямого света (буфер ниже горизонта),
+        // ambient тёплый ведёт, direct догоняет. Роблокс так и делает: cutoff y>-0.3.
+        float twi = glm::smoothstep(-0.14f, 0.02f, sunVec.y);   // сумерки: небо/ambient
+        float morn = glm::smoothstep(-0.05f, 0.12f, sunVec.y);  // быстрый рассвет direct
         float noonCut = 1.0f - 0.35f * glm::smoothstep(0.5f, 0.95f, sunVec.y); // полдень не ядерный
         float sunI = morn * noonCut;
-        float dayF = morn;
+        float dayF = twi;
         float nightF = 1.0f - dayF;
         glm::vec3 topColor = glm::mix(glm::vec3(0.008f, 0.015f, 0.05f), glm::vec3(0.30f, 0.55f, 0.92f), dayF);
         glm::vec3 horizonColor = glm::mix(glm::vec3(0.04f, 0.06f, 0.11f), glm::vec3(0.74f, 0.83f, 0.93f), dayF);
@@ -340,10 +351,12 @@ int main()
         lightingShader.setVec2("fogRange", 50.0f, 170.0f);
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
-        lightingShader.setFloat("shadowStrength", morn); // тени с рассвета
+        lightingShader.setFloat("shadowStrength", morn * glm::smoothstep(-0.02f, 0.15f, sunVec.y)); // тени мягко с рассвета
 
+        float duskF = glm::clamp(1.0f - glm::abs(sunVec.y) / 0.25f, 0.0f, 1.0f) * twi; // тёплые сумерки
+        glm::vec3 ambDay = glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.28f), dayF);
         lightingShader.setVec3("dirLight.direction", -sunVec);
-        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.28f), dayF));
+        lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
         lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.02f), glm::vec3(1.0f), sunI));
         lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), sunI));
 
@@ -355,22 +368,24 @@ int main()
         };
         for (int i = 0; i < 4; i++) {
             std::string b = "pointLights[" + std::to_string(i) + "].";
+            float lon = followOn ? 1.0f : 0.0f;
             lightingShader.setVec3 (b + "position", pp + lampOff[i] + worldOffset);
-            lightingShader.setVec3 (b + "ambient",   0.02f, 0.02f, 0.02f);
-            lightingShader.setVec3 (b + "diffuse",   0.3f,  0.3f,  0.3f);
-            lightingShader.setVec3 (b + "specular",  0.3f,  0.3f,  0.3f);
+            lightingShader.setVec3 (b + "ambient",   0.02f * lon, 0.02f * lon, 0.02f * lon);
+            lightingShader.setVec3 (b + "diffuse",   0.3f * lon, 0.3f * lon, 0.3f * lon);
+            lightingShader.setVec3 (b + "specular",  0.3f * lon, 0.3f * lon, 0.3f * lon);
             lightingShader.setFloat(b + "constant",  1.0f);
             lightingShader.setFloat(b + "linear",    0.22f);
             lightingShader.setFloat(b + "quadratic", 0.06f);
         }
 
+        float fon = flashOn ? 1.0f : 0.0f;
         lightingShader.setVec3 ("spotLight.position",  camera.Position);
         lightingShader.setVec3 ("spotLight.direction", camera.Front);
         lightingShader.setFloat("spotLight.cutOff",      glm::cos(glm::radians(12.5f)));
         lightingShader.setFloat("spotLight.outerCutOff", glm::cos(glm::radians(15.0f)));
         lightingShader.setVec3 ("spotLight.ambient",   0.0f, 0.0f, 0.0f);
-        lightingShader.setVec3 ("spotLight.diffuse",   1.0f, 1.0f, 1.0f);
-        lightingShader.setVec3 ("spotLight.specular",  1.0f, 1.0f, 1.0f);
+        lightingShader.setVec3 ("spotLight.diffuse",   fon, fon, fon);
+        lightingShader.setVec3 ("spotLight.specular",  fon, fon, fon);
         lightingShader.setFloat("spotLight.constant",  1.0f);
         lightingShader.setFloat("spotLight.linear",    0.09f);
         lightingShader.setFloat("spotLight.quadratic", 0.032f);
