@@ -65,18 +65,35 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
 
     glm::vec3 np = pos + vel * dt;
     glm::vec3 t = pos;
-    // Автошаг на 1 блок (как MC auto-jump): упёрся и на земле — пробуем встать выше
+    // Автошаг на 1 блок: триггер — подъём анимируется в stepT, не телепорт
+    auto tryStep = [&](glm::vec3& tt) {
+        glm::vec3 up = tt; up.y += 1.0f;
+        if (onGround && stepT <= 0.0f && !collides(w, up, halfW, height)) {
+            stepT = stepDur; stepFromY = pos.y; stepToY = pos.y + 1.0f;
+            tt = up; tt.y = pos.y; // горизонталь сразу, вертикаль догонит анимацией
+            return true;
+        }
+        return false;
+    };
     t.x = np.x;
     if (collides(w, t, halfW, height)) {
-        glm::vec3 up = t; up.y += 1.0f;
-        if (onGround && !collides(w, up, halfW, height)) t = up;
-        else { t.x = pos.x; vel.x = 0; }
+        if (!tryStep(t)) { t.x = pos.x; vel.x = 0; }
     }
     t.z = np.z;
     if (collides(w, t, halfW, height)) {
-        glm::vec3 up = t; up.y += 1.0f;
-        if (onGround && !collides(w, up, halfW, height)) t = up;
-        else { t.z = pos.z; vel.z = 0; }
+        if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
+    }
+    // идёт подъём: y едет smoothstep'ом, гравитация молчит
+    if (stepT > 0.0f) {
+        stepT -= dt;
+        float k = stepT <= 0.0f ? 1.0f : 1.0f - stepT / stepDur;
+        k = k * k * (3.0f - 2.0f * k);
+        t.y = stepFromY + (stepToY - stepFromY) * k;
+        vel.y = 0;
+        pos = t;
+        onGround = stepT <= 0.0f;
+        if (t.y < -10.0f) { spawn(w, 24, 24); return; }
+        return;
     }
     t.y = np.y;
     if (collides(w, t, halfW, height)) {
