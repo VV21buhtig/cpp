@@ -143,15 +143,26 @@ int main()
     }
 
     unsigned int diffuseMap  = loadTileArray("texture/tiles");
-    unsigned int specularMap = loadTexture("texture/container2_specular.png");
+    // земля/трава/камень матовые: спекуляр глушим чёрной 1x1 (металлик от контейнера снят)
+    unsigned int specularMap = 0;
+    {
+        unsigned char black[4] = {0, 0, 0, 255};
+        glGenTextures(1, &specularMap);
+        glBindTexture(GL_TEXTURE_2D, specularMap);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, black);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
 
     lightingShader.use();
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), F fly/walk, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
+    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), F fly/walk, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false, prevF = false;
+    int placeId = 1;
+    bool prev1 = false, prev2 = false, prev3 = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -212,12 +223,20 @@ int main()
                                  py + 1 > player.pos.y && py < player.pos.y + player.height &&
                                  pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
                 if (world.getBlock(px, py, pz) == 0 && !inPlayer) {
-                    world.setBlock(px, py, pz, 1);
+                    world.setBlock(px, py, pz, (unsigned char)placeId);
                     touchEdit(px, pz);
                 }
             }
         }
         prevL = curL; prevR = curR;
+        // выбор блока: 1 трава 2 земля 3 камень
+        bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
+        bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
+        bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
+        if (c1 && !prev1) { placeId = 1; std::cout << "hold: grass\n"; }
+        if (c2 && !prev2) { placeId = 2; std::cout << "hold: dirt\n"; }
+        if (c3 && !prev3) { placeId = 3; std::cout << "hold: stone\n"; }
+        prev1 = c1; prev2 = c2; prev3 = c3;
         bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
         bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
         if (curF5 && !prevF5) {
