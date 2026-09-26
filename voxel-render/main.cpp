@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <functional>
+#include <initializer_list>
 #include "shader.h"
 #include "camera.h"
 #include <unistd.h>
@@ -56,15 +57,49 @@ static std::vector<std::string> listDirs(const char* path) {
     DIR* dp = opendir(path);
     if (dp) {
         struct dirent* e;
-        while ((e = readdir(dp)))
-            if (e->d_name[0] != '.') out.push_back(e->d_name);
+        while ((e = readdir(dp))) {
+            if (e->d_name[0] == '.') continue;
+            bool isDir = (e->d_type == DT_DIR || e->d_type == DT_LNK);
+            if (e->d_type == DT_UNKNOWN) {
+                char full[1024];
+                snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+                DIR* t = opendir(full);
+                isDir = (t != nullptr);
+                if (t) closedir(t);
+            }
+            if (isDir) out.push_back(e->d_name);
+        }
         closedir(dp);
     }
     return out;
 }
 
-static std::vector<std::string> listWorlds() {
-    std::vector<std::string> out;
+static bool hasFiles(const std::string& dir, std::initializer_list<const char*> rel, std::string& miss) {
+    for (auto r : rel) {
+        FILE* f = fopen((dir + "/" + r).c_str(), "rb");
+        if (!f) { miss = r; return false; }
+        fclose(f);
+    }
+    return true;
+}
+
+// Папка как пак: symlink в targetDir/<basename>. Возвращает имя или "".
+static std::string linkPack(const char* targetDir, const char* srcPath) {
+    std::string src = srcPath;
+    while (!src.empty() && src.back() == '/') src.pop_back();
+    size_t p = src.find_last_of('/');
+    std::string name = (p == std::string::npos) ? src : src.substr(p + 1);
+    if (name.empty()) return "";
+    std::string dst = std::string(targetDir) + "/" + name;
+    FILE* probe = fopen(dst.c_str(), "rb");
+    if (probe) fclose(probe);
+    DIR* dd = opendir(dst.c_str());
+    if (probe || dd) { if (dd) closedir(dd); return ""; } // занято
+    if (symlink(src.c_str(), dst.c_str()) != 0) return "";
+    return name;
+}
+
+static std::vector<std::string> listWorlds() {    std::vector<std::string> out;
     DIR* dp = opendir("worlds");
     if (dp) {
         struct dirent* e;
@@ -170,8 +205,8 @@ int main()
         ImGui::SetNextWindowSize(ImVec2((float)ww, (float)hh));
         ImGui::Begin("menu", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-        ImGui::SetCursorPosX((ww - 500) / 2);
-        ImGui::BeginGroup();
+        ImGui::SetCursorPos(ImVec2(((float)ww - 520.0f) / 2.0f, 20.0f));
+        ImGui::BeginChild("center", ImVec2(520.0f, (float)hh - 40.0f), false);
         ImGui::Text("VOXEL");
         ImGui::Separator();
         std::vector<std::string> worlds = listWorlds();
@@ -231,14 +266,55 @@ int main()
             if (menuPackIdx >= (int)packNames.size()) menuPackIdx = 0;
             ImGui::Combo("##tpack", &menuPackIdx, [](void* d, int i) { return (*(std::vector<std::string>*)d)[i].c_str(); },
                          (void*)&packNames, (int)packNames.size());
+            static char addT[512] = "";
+            ImGui::InputText("folder##t", addT, sizeof(addT));
+            ImGui::SameLine();
+            if (ImGui::Button("Add pack")) {
+                std::string miss;
+                bool ok = hasFiles(addT, {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"}, miss) ||
+                          hasFiles(addT, {"assets/minecraft/textures/block/grass_block_top.png",
+                                          "assets/minecraft/textures/block/grass_block_side.png",
+                                          "assets/minecraft/textures/block/dirt.png",
+                                          "assets/minecraft/textures/block/stone.png"}, miss);
+                if (!ok) console.print(std::string("pack rejected, missing: ") + miss + "\n");
+                else {
+                    std::string nm = linkPack("texture/packs", addT);
+                    if (nm.empty()) console.print("pack add failed (exists?)\n");
+                    else {
+                        packNames = {"default"};
+                        for (auto& d : listDirs("texture/packs")) packNames.push_back(d);
+                        console.print("pack added: " + nm + "\n");
+                    }
+                }
+            }
         }
         ImGui::Text("Shader pack:");
         ImGui::Combo("##spack", &menuShaderSel, [](void* d, int i) { return (*(std::vector<std::string>*)d)[i].c_str(); },
                      (void*)&shaderPacks, (int)shaderPacks.size());
+        {
+            static char addS[512] = "";
+            ImGui::InputText("folder##s", addS, sizeof(addS));
+            ImGui::SameLine();
+            if (ImGui::Button("Add shaders")) {
+                std::string miss;
+                bool ok = hasFiles(addS, {"lighting.vs", "lighting.fs", "line.vs", "outline.fs",
+                                          "sky.vs", "sky.fs", "crosshair.vs", "crosshair.fs"}, miss);
+                if (!ok) console.print(std::string("shader pack rejected, missing: ") + miss + "\n");
+                else {
+                    std::string nm = linkPack("shaders/packs", addS);
+                    if (nm.empty()) console.print("shader add failed (exists?)\n");
+                    else {
+                        shaderPacks = {"default"};
+                        for (auto& d : listDirs("shaders/packs")) shaderPacks.push_back(d);
+                        console.print("shader pack added: " + nm + "\n");
+                    }
+                }
+            }
+        }
         if (ImGui::Button("Save settings")) cvar.exec("save");
         ImGui::SameLine();
         if (ImGui::Button("Quit")) wantQuit = true;
-        ImGui::EndGroup();
+        ImGui::EndChild();
         ImGui::End();
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
