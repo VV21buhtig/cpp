@@ -17,16 +17,31 @@
 #include <iostream>
 #include "shader.h"
 #include "camera.h"
+#include "game/console.h"
 #include <unistd.h>
 #include <fcntl.h>
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
+GameConsole console;
+CVarSys* gCvar = nullptr;
 float lastX = 640.0f, lastY = 360.0f;
 bool  firstMouse = true;
 float deltaTime = 0.0f, lastFrame = 0.0f;
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
+static void keyCb(GLFWwindow*, int key, int, int action, int) {
+    if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+    if (key == GLFW_KEY_F1) { console.open = !console.open; console.clearInput(); return; }
+    if (!console.open) return;
+    if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
+        if (gCvar) gCvar->exec(console.input);
+        console.clearInput();
+    } else if (key == GLFW_KEY_BACKSPACE) console.backspace();
+    else if (key == GLFW_KEY_ESCAPE) console.open = false;
+}
+static void charCb(GLFWwindow*, unsigned int cp) { if (console.open) console.onChar(cp); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
+    if (console.open) { firstMouse = true; return; }
     if (firstMouse) { lastX = (float)xpos; lastY = (float)ypos; firstMouse = false; }
     float xo = (float)xpos - lastX, yo = lastY - (float)ypos;
     lastX = (float)xpos; lastY = (float)ypos;
@@ -34,7 +49,7 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 }
 void scroll_callback(GLFWwindow*, double, double y) { camera.ProcessMouseScroll((float)y); }
 void processInput(GLFWwindow* w) {
-    if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
+    if (!console.open && glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
     // WASD — через Player::update, камера следует за игроком
 }
 
@@ -54,6 +69,8 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
+    glfwSetKeyCallback(window, keyCb);
+    glfwSetCharCallback(window, charCb);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     if (gladLoadGL(glfwGetProcAddress) == 0) { glfwTerminate(); return -1; }
@@ -74,6 +91,17 @@ int main()
     Shader crosshairShader("shaders/crosshair.vs", "shaders/crosshair.fs");
     Shader skyShader("shaders/sky.vs", "shaders/sky.fs");
     Shader depthShader("shaders/depth.vs", "shaders/depth.fs");
+    Shader uiShader("shaders/ui.vs", "shaders/ui.fs");
+    unsigned int uiVAO = 0, uiVBO = 0;
+    glGenVertexArrays(1, &uiVAO);
+    glGenBuffers(1, &uiVBO);
+    glBindVertexArray(uiVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 16, (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, 16, (void*)12);
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
 
     // Shadow map солнца 2048 (книга гл.35). Светит только dirLight.
     const int SHADOW_RES = 2048;
@@ -194,7 +222,10 @@ int main()
     cvar.reg("fog.near", 90.0f);
     cvar.reg("fog.far", 260.0f);
     cvar.load("gfx.cfg");
-    std::cout << "console: set/get/list/save/load/help (stdin, Enter). Try: set sun.i 2\n";
+    gCvar = &cvar;
+    cvar.onPrint = [](const std::string& s) { console.print(s); };
+    console.print("console F1. try: set sun.i 2");
+    std::cout << "console: F1 in game, or stdin+Enter. Try: set sun.i 2\n";
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
     std::string conLine;
 
@@ -229,29 +260,41 @@ int main()
         }
 
         // --- PLAYER: V — fly/walk, F — фонарик, L — лампы, камера = глаза ---
+        // консоль открыта: ввод глушим, фронты сбрасываем чтобы не выстрелило при закрытии
         bool curV = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
-        if (curV && !prevV) {
+        bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
+        bool curP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+        bool curL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+        bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
+        if (console.open) {
+            prevV = curV; prevF = curF; prevG = curG; prevP = curP;
+            prevL = curL; prevR = curR; prevF5 = curF5; prevF9 = curF9;
+        }
+        if (!console.open && curV && !prevV) {
             player.fly = !player.fly;
             player.vel = glm::vec3(0.0f);
             std::cout << (player.fly ? "FLY\n" : "WALK\n");
         }
         prevV = curV;
-        bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
-        if (curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
+        if (!console.open && curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
         prevF = curF;
-        bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
-        if (curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
+        if (!console.open && curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
         prevG = curG;
-        bool curP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
-        if (curP && !prevP) { dbgShadow = !dbgShadow; std::cout << (dbgShadow ? "shadow DBG\n" : "shadow OFF-dbg\n"); }
+        if (!console.open && curP && !prevP) { dbgShadow = !dbgShadow; std::cout << (dbgShadow ? "shadow DBG\n" : "shadow OFF-dbg\n"); }
         prevP = curP;
         glm::vec2 mv(0.0f);
+        bool jump = false, down = false;
+        if (!console.open) {
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mv.y += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mv.y -= 1.0f;
-        bool jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        bool down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        }
         player.update(deltaTime, world, mv, glm::radians(camera.Yaw), jump, down);
         // упал за мир — респаун в центр
         if (player.pos.y < -10.0f) player.spawn(world, W / 2, W / 2);
@@ -338,10 +381,8 @@ int main()
         float hitT = world.pick(rayO, camera.Front, 100.0f, wx, wy, wz, hitN);
         bool hasHit = (hitT > 0.0f);
 
-        // ---- BREAK / PLACE (по фронту нажатия) ----
-        bool curL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-        if (hasHit) {
+        // ---- BREAK / PLACE (по фронту нажатия; консоль глушит) ----
+        if (hasHit && !console.open) {
             if (curL && !prevL) {
                 world.setBlock(wx, wy, wz, 0); // дно тоже роется: под миром пустота, упадёшь — респаун
                 touchEdit(wx, wz);
@@ -363,17 +404,15 @@ int main()
         bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
         bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
-        if (c1 && !prev1) { placeId = 1; std::cout << "hold: grass\n"; }
-        if (c2 && !prev2) { placeId = 2; std::cout << "hold: dirt\n"; }
-        if (c3 && !prev3) { placeId = 3; std::cout << "hold: stone\n"; }
+        if (!console.open && c1 && !prev1) { placeId = 1; std::cout << "hold: grass\n"; }
+        if (!console.open && c2 && !prev2) { placeId = 2; std::cout << "hold: dirt\n"; }
+        if (!console.open && c3 && !prev3) { placeId = 3; std::cout << "hold: stone\n"; }
         prev1 = c1; prev2 = c2; prev3 = c3;
-        bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
-        bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
-        if (curF5 && !prevF5) {
+        if (!console.open && curF5 && !prevF5) {
             if (saveWorld(world, savePath)) std::cout << "Saved " << savePath << "\n";
             else std::cout << "Save FAILED\n";
         }
-        if (curF9 && !prevF9) {
+        if (!console.open && curF9 && !prevF9) {
             if (loadWorld(world, savePath)) { rebuildAll(); std::cout << "Loaded " << savePath << "\n"; }
             else std::cout << "Load FAILED\n";
         }
@@ -496,6 +535,23 @@ int main()
             glEnable(GL_DEPTH_TEST);
         }
 
+        // консоль поверх всего
+        if (console.open) {
+            int ww, hh;
+            glfwGetFramebufferSize(window, &ww, &hh);
+            std::vector<unsigned char> uib;
+            console.buildQuads(ww, uib);
+            glDisable(GL_DEPTH_TEST);
+            uiShader.use();
+            uiShader.setVec2("res", (float)ww, (float)hh);
+            glBindVertexArray(uiVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
+            glBufferData(GL_ARRAY_BUFFER, uib.size(), uib.data(), GL_DYNAMIC_DRAW);
+            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(uib.size() / 16));
+            glBindVertexArray(0);
+            glEnable(GL_DEPTH_TEST);
+        }
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -503,6 +559,8 @@ int main()
     glDeleteVertexArrays(1, &lineVAO);
     glDeleteBuffers(1, &lineVBO);
     glDeleteVertexArrays(1, &triVAO);
+    glDeleteVertexArrays(1, &uiVAO);
+    glDeleteBuffers(1, &uiVBO);
     for (int cz = 0; cz < World::CZ; cz++)
         for (int cx = 0; cx < World::CX; cx++)
             meshes[cx][cz].destroy();

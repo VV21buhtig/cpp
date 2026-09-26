@@ -4,6 +4,11 @@
 #include <iostream>
 #include <sstream>
 
+void CVarSys::say(const std::string& s) {
+    std::cout << s;
+    if (onPrint) onPrint(s);
+}
+
 static std::unordered_map<std::string, float> g_vars;
 
 void CVarSys::reg(const std::string& name, float def) {
@@ -17,13 +22,13 @@ float CVarSys::get(const std::string& name, float fallback) const {
 
 void CVarSys::set(const std::string& name, float v) {
     auto it = g_vars.find(name);
-    if (it == g_vars.end()) { std::cout << "unknown cvar: " << name << "\n"; return; }
+    if (it == g_vars.end()) { say("unknown cvar: " + name + "\n"); return; }
     it->second = v;
-    std::cout << name << " = " << v << "\n";
+    say(name + " = " + std::to_string(v) + "\n");
 }
 
-void CVarSys::list() const {
-    for (auto& kv : g_vars) std::cout << "  " << kv.first << " = " << kv.second << "\n";
+void CVarSys::list() {
+    for (auto& kv : g_vars) say("  " + kv.first + " = " + std::to_string(kv.second) + "\n");
 }
 
 bool CVarSys::save(const char* path) const {
@@ -44,10 +49,10 @@ bool CVarSys::load(const char* path) {
     int n = 0;
     while (fscanf(f, "%127s %f", name, &v) == 2) {
         if (g_vars.count(name)) { g_vars[name] = v; n++; }
-        else std::cout << "cfg: unknown " << name << "\n";
+        else say(std::string("cfg: unknown ") + name + "\n");
     }
     fclose(f);
-    std::cout << "cfg loaded " << n << " vars\n";
+    say("cfg loaded " + std::to_string(n) + " vars\n");
     return true;
 }
 
@@ -58,21 +63,21 @@ void CVarSys::exec(const std::string& line) {
     if (cmd == "set") {
         std::string n; float v;
         if (ss >> n >> v) set(n, v);
-        else std::cout << "usage: set <name> <value>\n";
+        else say("usage: set <name> <value>\n");
     } else if (cmd == "get") {
         std::string n;
-        if (ss >> n) std::cout << n << " = " << get(n) << "\n";
-        else std::cout << "usage: get <name>\n";
+        if (ss >> n) say(n + " = " + std::to_string(get(n)) + "\n");
+        else say("usage: get <name>\n");
     } else if (cmd == "list") list();
     else if (cmd == "save") {
         std::string p; ss >> p;
-        std::cout << (save(p.empty() ? "gfx.cfg" : p.c_str()) ? "saved\n" : "save FAILED\n");
+        say(save(p.empty() ? "gfx.cfg" : p.c_str()) ? "saved\n" : "save FAILED\n");
     } else if (cmd == "load") {
         std::string p; ss >> p;
-        if (!load(p.empty() ? "gfx.cfg" : p.c_str())) std::cout << "load FAILED\n";
+        if (!load(p.empty() ? "gfx.cfg" : p.c_str())) say("load FAILED\n");
     } else if (cmd == "help" || cmd == "?") {
-        std::cout << "set <n> <v> | get <n> | list | save [f] | load [f] | help\n";
+        say("set <n> <v> | get <n> | list | save [f] | load [f] | help\n");
     } else if (!cmd.empty() && cmd[0] != '#') {
-        std::cout << "unknown: " << cmd << "\n";
+        say("unknown: " + cmd + "\n");
     }
 }

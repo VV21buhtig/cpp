@@ -41,6 +41,7 @@ target_link_libraries(engine PUBLIC glad glfw OpenGL::GL)
 add_library(game STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game_pick.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game_player.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/game_console.cpp
 )
 target_include_directories(game PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
