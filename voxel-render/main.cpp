@@ -212,7 +212,7 @@ int main()
                 meshes[cx][cz].draw();
             }
 
-        // PASS 2: OUTLINE вокселя (потом сделаем жирнее/ярче)
+        // PASS 2: OUTLINE вокселя — жирный поверх
         if (hasHit) {
             glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
             glStencilMask(0x00);
@@ -221,10 +221,11 @@ int main()
             outlineShader.use();
             outlineShader.setMat4("projection", projection);
             outlineShader.setMat4("view", view);
+            outlineShader.setVec3("outlineColor", 1.0f, 0.55f, 0.1f);
 
             glm::vec3 center = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
             glm::mat4 model = glm::translate(glm::mat4(1.0f), center);
-            model = glm::scale(model, glm::vec3(1.05f));
+            model = glm::scale(model, glm::vec3(1.1f));
             outlineShader.setMat4("model", model);
 
             outlineCube.bindCube();
