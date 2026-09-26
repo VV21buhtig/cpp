@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include "engine/mesh.h"
 #include "engine/texture.h"
+#include "engine/chunk.h"
 #include "game/pick.h"
 
 #include <glm/glm.hpp>
@@ -112,6 +113,18 @@ int main()
     CubeMesh mesh;
     mesh.init();
 
+    // Engine: один тестовый чанк 16x16 (пол + столбик). Отдельный VAO/VBO, кубы не трогаем.
+    Chunk chunk;
+    for (int z = 0; z < 16; z++)
+        for (int x = 0; x < 16; x++)
+            chunk.set(x, 0, z, 1);
+    chunk.set(8, 1, 8, 1);
+    chunk.set(8, 2, 8, 1);
+    chunk.set(8, 3, 8, 1);
+    ChunkMesh chunkMesh;
+    chunkMesh.upload(chunk.buildMesh());
+    std::cout << "Chunk verts: " << chunkMesh.vertexCount << "\n";
+
     unsigned int diffuseMap  = loadTexture("texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
 
@@ -190,6 +203,14 @@ int main()
             glDrawArrays(GL_TRIANGLES, 0, 36);
         }
 
+        // чанк: тот же lightingShader, model=сдвиг под ногами (пишет в stencil как opaque)
+        {
+            glm::mat4 model = glm::mat4(1.0f);
+            model = glm::translate(model, glm::vec3(-8.0f, -3.0f, -8.0f));
+            lightingShader.setMat4("model", model);
+            chunkMesh.draw();
+        }
+
         // лампы
         glStencilMask(0x00);
         lightCubeShader.use();
@@ -259,6 +280,7 @@ int main()
     }
 
     mesh.destroy();
+    chunkMesh.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
     glfwDestroyWindow(window);

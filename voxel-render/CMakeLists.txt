@@ -28,6 +28,7 @@ target_link_libraries(shader PUBLIC glad)
 add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_texture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_chunk.cpp
 )
 target_include_directories(engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
