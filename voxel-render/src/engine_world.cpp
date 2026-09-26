@@ -19,11 +19,29 @@ static const float kWF[6][6][8] = {
 static const int kWN[6][3] = {{0,0,-1},{0,0,1},{-1,0,0},{1,0,0},{0,-1,0},{0,1,0}};
 
 World::World() {
-    for (int cz = 0; cz < CZ; cz++)
-        for (int cx = 0; cx < CX; cx++)
-            for (int z = 0; z < Chunk::SZ; z++)
-                for (int x = 0; x < Chunk::SX; x++)
-                    chunks[cx][cz].set(x, 0, z, 1); // чистый пол, без столбиков и висяков
+    // Холмы: value-noise 2 октавы, deterministic. h=1..4, текстур пока 2 — мешим теми же.
+    auto hash01 = [](int x, int z) -> float {
+        int h = x * 374761393 + z * 668265263;
+        h = (h ^ (h >> 13)) * 1274126177;
+        h = h ^ (h >> 16);
+        return (float)(h & 0xffff) / 65535.0f;
+    };
+    auto smooth = [](float t) { return t * t * (3.0f - 2.0f * t); };
+    auto noise2 = [&](float fx, float fz) {
+        int x0 = (int)floor(fx), z0 = (int)floor(fz);
+        float tx = smooth(fx - x0), tz = smooth(fz - z0);
+        float a = hash01(x0, z0), b = hash01(x0 + 1, z0);
+        float c = hash01(x0, z0 + 1), d = hash01(x0 + 1, z0 + 1);
+        return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
+    };
+    for (int wz = 0; wz < CZ * Chunk::SZ; wz++)
+        for (int wx = 0; wx < CX * Chunk::SX; wx++) {
+            float n = 0.65f * noise2(wx / 9.0f, wz / 9.0f)
+                    + 0.35f * noise2(wx / 4.0f + 13.7f, wz / 4.0f + 7.3f);
+            int h = 1 + (int)(n * 3.0f); // 1..4
+            for (int y = 0; y <= h && y < Chunk::SY; y++)
+                setBlock(wx, y, wz, 1);
+        }
 }
 
 unsigned char World::getBlock(int wx, int y, int wz) const {
