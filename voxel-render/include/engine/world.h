@@ -5,12 +5,14 @@
 #include <glm/glm.hpp>
 #include <vector>
 
-// Engine: мир 3x3 чанка, плоский пол y=0. Соседи видны через границы (без швов).
+// Engine: ограниченный мир CX*16 x CZ*16 по сиду (граница = пустота).
+// Данные всех чанков всегда в RAM (~1MB), стримятся только МЕШИ вокруг игрока.
 struct World {
-    static const int CX = 3, CZ = 3;
+    static const int CX = 16, CZ = 16;
     Chunk chunks[CX][CZ];
+    int seed = 1337;
 
-    World();
+    World(int s = 1337);
     bool inXZ(int wx, int wz) const {
         return wx >= 0 && wx < CX * Chunk::SX && wz >= 0 && wz < CZ * Chunk::SZ;
     }

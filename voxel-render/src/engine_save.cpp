@@ -9,7 +9,7 @@ bool saveWorld(const World& w, const char* path) {
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     FILE* f = fopen(tmp, "wb");
     if (!f) return false;
-    const char magic[4] = {'V', 'X', 'W', '1'};
+    const char magic[4] = {'V', 'X', 'W', '2'};
     bool ok = true;
     ok &= fwrite(magic, 1, 4, f) == 4;
     int dims[5] = {World::CX, World::CZ, Chunk::SX, Chunk::SY, Chunk::SZ};
@@ -26,7 +26,7 @@ bool loadWorld(World& w, const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return false;
     char magic[4];
-    if (fread(magic, 1, 4, f) != 4 || magic[0] != 'V' || magic[1] != 'X' || magic[2] != 'W' || magic[3] != '1') {
+    if (fread(magic, 1, 4, f) != 4 || magic[0] != 'V' || magic[1] != 'X' || magic[2] != 'W' || magic[3] != '2') {
         fclose(f);
         return false;
     }

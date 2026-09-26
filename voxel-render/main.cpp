@@ -7,7 +7,6 @@
 #include "engine/world.h"
 #include "engine/save.h"
 #include "game/player.h"
-#include "game/pick.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,6 +33,8 @@ void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
     // WASD — через Player::update, камера следует за игроком
 }
+
+static const int VIEW_R = 4; // радиус мешей вокруг чанка игрока
 
 int main()
 {
@@ -72,40 +73,58 @@ int main()
     glBindVertexArray(triVAO);
     glBindVertexArray(0);
 
-    glm::vec3 pointLightPositions[] = {
-        glm::vec3(24.0f, 6.0f, 26.0f),
-        glm::vec3(10.0f, 5.0f, 10.0f),
-        glm::vec3(38.0f, 6.0f, 38.0f),
-        glm::vec3(24.0f, 4.0f, 24.0f),
-    };
-
-    // Чистая мапа: мир 3x3 чанка, пол y=0. Никаких висяков.
-    // Мировые координаты блоков 0..48, рендерим со сдвигом чтобы центр был в нуле.
-    const glm::vec3 worldOffset(-24.0f, 0.0f, -24.0f);
-    World world;
+    // Ограниченный мир 16x16 чанков по сиду. Данные всегда в RAM, стримятся МЕШИ.
+    const int W = World::CX * 16; // 256
+    const glm::vec3 worldOffset(-W / 2.0f, 0.0f, -W / 2.0f);
+    static World world(1337); // static: 1MB, не на стеке
     const char* savePath = "world.bin";
     if (loadWorld(world, savePath)) std::cout << "Loaded " << savePath << "\n";
     else std::cout << "New world (no " << savePath << ")\n";
     Player player;
-    player.spawn(world, 24, 24);
+    player.spawn(world, W / 2, W / 2);
+
     ChunkMesh meshes[World::CX][World::CZ];
+    bool meshLoaded[World::CX][World::CZ] = {};
     auto rebuild = [&](int cx, int cz) {
+        if (cx < 0 || cx >= World::CX || cz < 0 || cz >= World::CZ) return;
         meshes[cx][cz].upload(world.buildChunk(cx, cz));
+        meshLoaded[cx][cz] = true;
+    };
+    auto unload = [&](int cx, int cz) {
+        if (cx < 0 || cx >= World::CX || cz < 0 || cz >= World::CZ) return;
+        meshes[cx][cz].destroy();
+        meshLoaded[cx][cz] = false;
     };
     auto rebuildAll = [&]() {
         for (int cz = 0; cz < World::CZ; cz++)
             for (int cx = 0; cx < World::CX; cx++)
                 rebuild(cx, cz);
     };
-    size_t totalVerts = 0;
-    for (int cz = 0; cz < World::CX; cz++)
-        for (int cx = 0; cx < World::CX; cx++) {
-            rebuild(cx, cz);
-            totalVerts += meshes[cx][cz].vertexCount;
-        }
-    std::cout << "World 3x3 verts: " << totalVerts << "\n";
+    int curPCX = -1, curPCZ = -1;
+    auto ensureAround = [&]() {
+        int pcx = (int)player.pos.x / 16, pcz = (int)player.pos.z / 16;
+        if (pcx == curPCX && pcz == curPCZ) return;
+        curPCX = pcx; curPCZ = pcz;
+        size_t nv = 0;
+        for (int cz = 0; cz < World::CZ; cz++)
+            for (int cx = 0; cx < World::CX; cx++) {
+                int dd = std::max(abs(cx - pcx), abs(cz - pcz));
+                if (dd <= VIEW_R) { if (!meshLoaded[cx][cz]) rebuild(cx, cz); nv += meshes[cx][cz].vertexCount; }
+                else if (meshLoaded[cx][cz]) unload(cx, cz);
+            }
+        std::cout << "stream chunk " << pcx << "," << pcz << " verts " << nv << "\n";
+    };
+    auto touchEdit = [&](int wx, int wz) {
+        int cx = wx / 16, cz = wz / 16;
+        if (meshLoaded[cx][cz]) rebuild(cx, cz);
+        if (wx % 16 == 0 && cx > 0 && meshLoaded[cx-1][cz]) rebuild(cx - 1, cz);
+        if (wx % 16 == 15 && cx < World::CX - 1 && meshLoaded[cx+1][cz]) rebuild(cx + 1, cz);
+        if (wz % 16 == 0 && cz > 0 && meshLoaded[cx][cz-1]) rebuild(cx, cz - 1);
+        if (wz % 16 == 15 && cz < World::CZ - 1 && meshLoaded[cx][cz+1]) rebuild(cx, cz + 1);
+    };
+    ensureAround();
 
-    // Линии рёбер куба [0,1]^3 — подсветка поверх граней, depth ON (не режется stencil).
+    // Линии рёбер куба [0,1]^3 — подсветка, depth честный.
     unsigned int lineVAO = 0, lineVBO = 0;
     {
         float e[] = {
@@ -141,7 +160,7 @@ int main()
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         processInput(window);
 
-        // --- PLAYER (движок): F — fly/walk, камера = глаза ---
+        // --- PLAYER: F — fly/walk, камера = глаза ---
         bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         if (curF && !prevF) {
             player.fly = !player.fly;
@@ -157,16 +176,18 @@ int main()
         bool jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         bool down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         player.update(deltaTime, world, mv, glm::radians(camera.Yaw), jump, down);
-        // player живёт в координатах мира (0..48), рендер сдвинут на worldOffset
+        // упал за мир — респаун в центр
+        if (player.pos.y < -10.0f) player.spawn(world, W / 2, W / 2);
         camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eye, 0.0f);
+        ensureAround();
 
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 200.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
 
-        // ---- PICK по миру (луч в мировых координатах чанков) ----
+        // ---- PICK по миру DDA (луч в координатах чанков) ----
         glm::vec3 rayO = camera.Position - worldOffset;
         int wx = -1, wy = -1, wz = -1;
         glm::vec3 hitN(0.0f);
@@ -178,17 +199,8 @@ int main()
         bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
         if (hasHit) {
             if (curL && !prevL) {
-                if (!(wx >= 0 && wx < 48 && wy == 0 && wz >= 0 && wz < 48 && wx % 16 == 0)) {
-                    // пол y=0 ломать можно, но не будем дырявить до пустоты? можно — разрешаем
-                }
                 world.setBlock(wx, wy, wz, 0);
-                int cx = wx / 16, cz = wz / 16;
-                rebuild(cx, cz);
-                // шов: если на границе чанка — пересобрать соседа
-                if (wx % 16 == 0 && cx > 0) rebuild(cx - 1, cz);
-                if (wx % 16 == 15 && cx < 2) rebuild(cx + 1, cz);
-                if (wz % 16 == 0 && cz > 0) rebuild(cx, cz - 1);
-                if (wz % 16 == 15 && cz < 2) rebuild(cx, cz + 1);
+                touchEdit(wx, wz);
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
@@ -198,14 +210,7 @@ int main()
                                  pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
                 if (world.getBlock(px, py, pz) == 0 && !inPlayer) {
                     world.setBlock(px, py, pz, 1);
-                    int cx = px / 16, cz = pz / 16;
-                    if (cx >= 0 && cx < 3 && cz >= 0 && cz < 3) {
-                        rebuild(cx, cz);
-                        if (px % 16 == 0 && cx > 0) rebuild(cx - 1, cz);
-                        if (px % 16 == 15 && cx < 2) rebuild(cx + 1, cz);
-                        if (pz % 16 == 0 && cz > 0) rebuild(cx, cz - 1);
-                        if (pz % 16 == 15 && cz < 2) rebuild(cx, cz + 1);
-                    }
+                    touchEdit(px, pz);
                 }
             }
         }
@@ -222,7 +227,7 @@ int main()
         }
         prevF5 = curF5; prevF9 = curF9;
 
-        // PASS 1: opaque (пишут в stencil)
+        // PASS 1: opaque (пишут в stencil). Только загруженные меши.
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         glStencilFunc(GL_ALWAYS, 1, 0xFF);
         glStencilMask(0xFF);
@@ -236,9 +241,15 @@ int main()
         lightingShader.setVec3("dirLight.diffuse",   0.4f,  0.4f,  0.4f);
         lightingShader.setVec3("dirLight.specular",  0.5f,  0.5f,  0.5f);
 
+        // лампы следуют за игроком (мир большой, статика у центра бесполезна)
+        glm::vec3 pp = player.pos;
+        glm::vec3 lampOff[4] = {
+            glm::vec3(3.0f, 4.0f, 2.0f), glm::vec3(-4.0f, 3.0f, -3.0f),
+            glm::vec3(5.0f, 2.0f, -4.0f), glm::vec3(0.0f, 5.0f, 0.0f),
+        };
         for (int i = 0; i < 4; i++) {
             std::string b = "pointLights[" + std::to_string(i) + "].";
-            lightingShader.setVec3 (b + "position", pointLightPositions[i] + worldOffset);
+            lightingShader.setVec3 (b + "position", pp + lampOff[i] + worldOffset);
             lightingShader.setVec3 (b + "ambient",   0.05f, 0.05f, 0.05f);
             lightingShader.setVec3 (b + "diffuse",   0.8f,  0.8f,  0.8f);
             lightingShader.setVec3 (b + "specular",  1.0f,  1.0f,  1.0f);
@@ -268,13 +279,14 @@ int main()
 
         for (int cz = 0; cz < World::CZ; cz++)
             for (int cx = 0; cx < World::CX; cx++) {
+                if (!meshLoaded[cx][cz]) continue;
                 glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), off);
                 lightingShader.setMat4("model", model);
                 meshes[cx][cz].draw();
             }
 
-        // PASS 2: подсветка рёбер — честный depth (прячется за стеной, стыки режет сосед)
+        // PASS 2: подсветка рёбер честным depth
         if (hasHit) {
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);

@@ -2,10 +2,10 @@
 #include <algorithm>
 #include <cmath>
 
-World::World() {
-    // Холмы: value-noise 2 октавы, deterministic. h=1..4, текстур пока 2 — мешим теми же.
-    auto hash01 = [](int x, int z) -> float {
-        int h = x * 374761393 + z * 668265263;
+World::World(int s) : seed(s) {
+    // Холмы: value-noise 2 октавы + сид. h=1..4.
+    auto hash01 = [s](int x, int z) -> float {
+        int h = (x + s * 131) * 374761393 + (z + s * 57) * 668265263;
         h = (h ^ (h >> 13)) * 1274126177;
         h = h ^ (h >> 16);
         return (float)(h & 0xffff) / 65535.0f;
@@ -104,53 +104,27 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     return out;
 }
 
-static float rayBox(glm::vec3 o, glm::vec3 d, glm::vec3 mn, glm::vec3 mx, glm::vec3& n) {
-    float tmin = 0.0f, tmax = 1e9f;
-    glm::vec3 nn(0.0f);
-    for (int a = 0; a < 3; a++) {
-        float dd = d[a], oo = o[a];
-        if (fabs(dd) < 1e-8f) {
-            if (oo < mn[a] || oo > mx[a]) return -1.0f;
-        } else {
-            float t1 = (mn[a] - oo) / dd, t2 = (mx[a] - oo) / dd;
-            glm::vec3 n1(0.0f), n2(0.0f);
-            n1[a] = -1.0f; n2[a] = 1.0f;
-            if (t1 > t2) { std::swap(t1, t2); std::swap(n1, n2); }
-            // направление: если луч идёт +, вход через min (норма -), иначе через max
-            if (dd < 0) std::swap(n1, n2);
-            if (t1 > tmin) { tmin = t1; nn = (dd > 0) ? glm::vec3(n1) : glm::vec3(n2); }
-            // проще: нормаль по доминирующей оси входа
-            tmax = std::min(tmax, t2);
-            if (tmin > tmax) return -1.0f;
-        }
-    }
-    // нормаль: ось с максимальным t1
-    float best = -1e9f; int ax = -1; float s = 0;
-    for (int a = 0; a < 3; a++) {
-        float t1 = (d[a] > 0) ? (mn[a]-o[a])/d[a] : (mx[a]-o[a])/d[a];
-        if (fabs(d[a]) < 1e-8f) continue;
-        if (t1 > best) { best = t1; ax = a; s = (d[a] > 0) ? -1.0f : 1.0f; }
-    }
-    n = glm::vec3(0.0f);
-    if (ax >= 0) n[ax] = s;
-    (void)nn;
-    return tmin;
-}
-
 float World::pick(glm::vec3 o, glm::vec3 d, float maxDist,
                   int& wx, int& wy, int& wz, glm::vec3& normal) const {
-    float best = maxDist;
-    bool found = false;
-    glm::vec3 bn(0.0f);
-    for (int z = 0; z < CZ * Chunk::SZ; z++)
-    for (int y = 0; y < Chunk::SY; y++)
-    for (int x = 0; x < CX * Chunk::SX; x++) {
-        if (getBlock(x, y, z) == 0) continue;
-        glm::vec3 mn(x, y, z), mx(x + 1, y + 1, z + 1);
-        glm::vec3 n(0.0f);
-        float t = rayBox(o, d, mn, mx, n);
-        if (t > 0.0f && t < best) { best = t; wx = x; wy = y; wz = z; bn = n; found = true; }
+    // DDA (Amanatides & Woo): шагаем по сетке, а не по всем блокам.
+    int x = (int)floor(o.x), y = (int)floor(o.y), z = (int)floor(o.z);
+    int sx = (d.x > 0) ? 1 : -1, sy = (d.y > 0) ? 1 : -1, sz = (d.z > 0) ? 1 : -1;
+    const float INF = 1e9f;
+    float tdx = (fabs(d.x) < 1e-8f) ? INF : fabs(1.0f / d.x);
+    float tdy = (fabs(d.y) < 1e-8f) ? INF : fabs(1.0f / d.y);
+    float tdz = (fabs(d.z) < 1e-8f) ? INF : fabs(1.0f / d.z);
+    float tmx = (fabs(d.x) < 1e-8f) ? INF : ((sx > 0 ? (x + 1 - o.x) : (o.x - x)) * tdx);
+    float tmy = (fabs(d.y) < 1e-8f) ? INF : ((sy > 0 ? (y + 1 - o.y) : (o.y - y)) * tdy);
+    float tmz = (fabs(d.z) < 1e-8f) ? INF : ((sz > 0 ? (z + 1 - o.z) : (o.z - z)) * tdz);
+    if (getBlock(x, y, z)) { wx = x; wy = y; wz = z; normal = glm::vec3(0.0f); return 0.0f; }
+    float t = 0.0f;
+    glm::vec3 n(0.0f);
+    while (t <= maxDist) {
+        if (tmx < tmy && tmx < tmz)      { x += sx; t = tmx; tmx += tdx; n = glm::vec3((float)-sx, 0, 0); }
+        else if (tmy < tmz)              { y += sy; t = tmy; tmy += tdy; n = glm::vec3(0, (float)-sy, 0); }
+        else                             { z += sz; t = tmz; tmz += tdz; n = glm::vec3(0, 0, (float)-sz); }
+        if (t > maxDist) break;
+        if (getBlock(x, y, z)) { wx = x; wy = y; wz = z; normal = n; return t; }
     }
-    normal = bn;
-    return found ? best : -1.0f;
+    return -1.0f;
 }
