@@ -224,7 +224,10 @@ int main()
         // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
         float sunA = now * 6.2831853f / 240.0f;
         glm::vec3 sunVec = glm::normalize(glm::vec3(cos(sunA), sin(sunA), 0.35f));
-        float dayF = glm::smoothstep(-0.08f, 0.25f, sunVec.y);
+        float morn = glm::smoothstep(-0.05f, 0.12f, sunVec.y); // быстрый рассвет
+        float noonCut = 1.0f - 0.35f * glm::smoothstep(0.5f, 0.95f, sunVec.y); // полдень не ядерный
+        float sunI = morn * noonCut;
+        float dayF = morn;
         float nightF = 1.0f - dayF;
         glm::vec3 topColor = glm::mix(glm::vec3(0.008f, 0.015f, 0.05f), glm::vec3(0.30f, 0.55f, 0.92f), dayF);
         glm::vec3 horizonColor = glm::mix(glm::vec3(0.04f, 0.06f, 0.11f), glm::vec3(0.74f, 0.83f, 0.93f), dayF);
@@ -234,7 +237,7 @@ int main()
         glm::mat4 lightSpace(1.0f);
         bool sunUp = dayF > 0.01f;
         if (sunUp) {
-            glm::mat4 lightProj = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 1.0f, 400.0f);
+            glm::mat4 lightProj = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 50.0f, 350.0f);
             glm::mat4 lightView = glm::lookAt(centerR - sunVec * 200.0f, centerR, glm::vec3(0.0f, 1.0f, 0.0f));
             lightSpace = lightProj * lightView;
             depthShader.use();
@@ -337,12 +340,12 @@ int main()
         lightingShader.setVec2("fogRange", 50.0f, 170.0f);
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
-        lightingShader.setFloat("shadowStrength", dayF);
+        lightingShader.setFloat("shadowStrength", morn); // тени с рассвета
 
         lightingShader.setVec3("dirLight.direction", -sunVec);
-        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.28f), dayF));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.05f), glm::vec3(1.15f), dayF));
-        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), dayF));
+        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.28f), dayF));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.02f), glm::vec3(1.0f), sunI));
+        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), sunI));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
         glm::vec3 pp = player.pos;
@@ -353,12 +356,12 @@ int main()
         for (int i = 0; i < 4; i++) {
             std::string b = "pointLights[" + std::to_string(i) + "].";
             lightingShader.setVec3 (b + "position", pp + lampOff[i] + worldOffset);
-            lightingShader.setVec3 (b + "ambient",   0.05f, 0.05f, 0.05f);
-            lightingShader.setVec3 (b + "diffuse",   0.8f,  0.8f,  0.8f);
-            lightingShader.setVec3 (b + "specular",  1.0f,  1.0f,  1.0f);
+            lightingShader.setVec3 (b + "ambient",   0.02f, 0.02f, 0.02f);
+            lightingShader.setVec3 (b + "diffuse",   0.3f,  0.3f,  0.3f);
+            lightingShader.setVec3 (b + "specular",  0.3f,  0.3f,  0.3f);
             lightingShader.setFloat(b + "constant",  1.0f);
-            lightingShader.setFloat(b + "linear",    0.09f);
-            lightingShader.setFloat(b + "quadratic", 0.032f);
+            lightingShader.setFloat(b + "linear",    0.22f);
+            lightingShader.setFloat(b + "quadratic", 0.06f);
         }
 
         lightingShader.setVec3 ("spotLight.position",  camera.Position);
