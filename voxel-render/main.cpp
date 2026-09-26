@@ -79,7 +79,7 @@ int main()
     glGenTextures(1, &depthMap);
     glBindTexture(GL_TEXTURE_2D, depthMap);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, SHADOW_RES, SHADOW_RES, 0,
-                 GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+                 GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
@@ -184,8 +184,8 @@ int main()
     std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), V fly/walk, F фонарик, L лампы, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
-    bool prevV = false, prevF = false, prevG = false;
-    bool flashOn = true, followOn = true;
+    bool prevV = false, prevF = false, prevG = false, prevP = false;
+    bool flashOn = true, followOn = true, dbgShadow = false;
     int placeId = 1;
     bool prev1 = false, prev2 = false, prev3 = false;
 
@@ -210,6 +210,9 @@ int main()
         bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
         if (curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
         prevG = curG;
+        bool curP = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+        if (curP && !prevP) { dbgShadow = !dbgShadow; std::cout << (dbgShadow ? "shadow DBG\n" : "shadow OFF-dbg\n"); }
+        prevP = curP;
         glm::vec2 mv(0.0f);
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
@@ -235,8 +238,8 @@ int main()
         // Тайминг как у людей: сумерки раньше прямого света (буфер ниже горизонта),
         // ambient тёплый ведёт, direct догоняет. Роблокс так и делает: cutoff y>-0.3.
         float twi = glm::smoothstep(-0.14f, 0.02f, sunVec.y);   // сумерки: небо/ambient
-        float morn = glm::smoothstep(-0.05f, 0.12f, sunVec.y);  // быстрый рассвет direct
-        float noonCut = 1.0f - 0.35f * glm::smoothstep(0.5f, 0.95f, sunVec.y); // полдень не ядерный
+        float morn = glm::smoothstep(-0.02f, 0.06f, sunVec.y);  // свет почти сразу с восходом
+        float noonCut = 1.0f - 0.20f * glm::smoothstep(0.5f, 0.95f, sunVec.y); // полдень чуть мягче
         float sunI = morn * noonCut;
         float dayF = twi;
         float nightF = 1.0f - dayF;
@@ -352,12 +355,13 @@ int main()
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
         lightingShader.setFloat("shadowStrength", morn * glm::smoothstep(-0.02f, 0.15f, sunVec.y)); // тени мягко с рассвета
+        lightingShader.setFloat("debugShadow", dbgShadow ? 1.0f : 0.0f);
 
         float duskF = glm::clamp(1.0f - glm::abs(sunVec.y) / 0.25f, 0.0f, 1.0f) * twi; // тёплые сумерки
-        glm::vec3 ambDay = glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.28f), dayF);
+        glm::vec3 ambDay = glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.24f), dayF);
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.02f), glm::vec3(1.0f), sunI));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.02f), glm::vec3(1.3f), sunI));
         lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), sunI));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)

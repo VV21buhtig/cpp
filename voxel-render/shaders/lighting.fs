@@ -59,6 +59,7 @@ uniform vec2       fogRange; // near far
 uniform sampler2D  shadowMap;
 uniform vec3       sunDirW; // направление НА солнце (мир)
 uniform float      shadowStrength; // 0 ночью
+uniform float      debugShadow; // 1: показать тени ч/б (клавиша P)
 
 // =========================================================
 //  Функции расчёта для каждого типа света
@@ -182,6 +183,11 @@ void main()
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
     vec3 shaded = result * fshade;
+    if (debugShadow > 0.5) {
+        float sh = ShadowCalculation(FragPosLightSpace, norm);
+        FragColor = vec4(vec3(1.0 - sh), 1.0);
+        return;
+    }
     float fd = length(viewPos - FragPos);
     float ff = clamp((fd - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
     FragColor = vec4(mix(shaded, fogColor, ff), 1.0);
