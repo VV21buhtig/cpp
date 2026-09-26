@@ -56,6 +56,12 @@ unsigned int loadTileArray(const char* dir) {
     unsigned int tex;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    // tile0 grass_top в паках под OptiFine идёт ч/б (красит колормапа) — печём plains-tint #91BD59
+    for (int p = 0; p < T * T; p++) {
+        all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 145 / 255);
+        all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 189 / 255);
+        all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 89 / 255);
+    }
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, T, T, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, all.data());
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);

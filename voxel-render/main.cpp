@@ -199,8 +199,11 @@ int main()
         bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
         if (hasHit) {
             if (curL && !prevL) {
+                if (wy == 0) { /* bedrock-пол не ломается, иначе дыра в невидимый солид */ }
+                else {
                 world.setBlock(wx, wy, wz, 0);
                 touchEdit(wx, wz);
+                }
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
