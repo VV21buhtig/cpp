@@ -35,6 +35,10 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
     float speed = fly ? 8.0f : 4.3f;
     glm::vec3 wish = (fwd * move.x + right * move.y) * speed;
+    { // диагональ W+D не должна давать x1.41: нормируем
+        float l = sqrt(wish.x * wish.x + wish.z * wish.z);
+        if (l > speed && l > 1e-6f) { wish.x *= speed / l; wish.z *= speed / l; }
+    }
 
     if (fly) {
         vel.x = wish.x; vel.z = wish.z;
