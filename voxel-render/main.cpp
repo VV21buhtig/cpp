@@ -233,7 +233,8 @@ int main()
         glm::mat4 view = camera.GetViewMatrix();
 
         // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
-        float sunA = now * 6.2831853f / 240.0f;
+        // День 10 минут как в MC + старт утром (высота ~30°), а не на самой кромке
+        float sunA = 0.56f + now * 6.2831853f / 600.0f;
         glm::vec3 sunVec = glm::normalize(glm::vec3(cos(sunA), sin(sunA), 0.35f));
         // Тайминг как у людей: сумерки раньше прямого света (буфер ниже горизонта),
         // ambient тёплый ведёт, direct догоняет. Роблокс так и делает: cutoff y>-0.3.
@@ -361,11 +362,13 @@ int main()
         lightingShader.setFloat("debugShadow", dbgShadow ? 1.0f : 0.0f);
 
         float duskF = glm::clamp(1.0f - glm::abs(sunVec.y) / 0.25f, 0.0f, 1.0f) * twi; // тёплые сумерки
+        glm::vec3 sunCol = glm::mix(glm::vec3(1.0f, 0.55f, 0.25f), glm::vec3(1.0f, 0.97f, 0.9f),
+                                    glm::smoothstep(0.0f, 0.4f, sunVec.y)); // низкое = оранжевое
         glm::vec3 ambDay = glm::mix(glm::vec3(0.03f, 0.035f, 0.07f), glm::vec3(0.20f), dayF);
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), glm::vec3(1.1f), sunI));
-        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.01f), glm::vec3(0.3f), sunI));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), sunCol * 1.1f, sunI));
+        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.01f), sunCol * 0.3f, sunI));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
         glm::vec3 pp = player.pos;
