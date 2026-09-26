@@ -237,9 +237,9 @@ int main()
             lineShader.setMat4("view", view);
             lineShader.setVec3("outlineColor", 1.0f, 0.55f, 0.1f);
 
-            glm::vec3 mn = worldOffset + glm::vec3(wx - 0.01f, wy - 0.01f, wz - 0.01f);
+            glm::vec3 mn = worldOffset + glm::vec3(wx, wy, wz);
             glm::mat4 model = glm::translate(glm::mat4(1.0f), mn);
-            model = glm::scale(model, glm::vec3(1.02f));
+            model = glm::scale(model, glm::vec3(1.0f)); // ровно по граням: LEQUAL держит линии на поверхностях
             lineShader.setMat4("model", model);
 
             glBindVertexArray(lineVAO);
