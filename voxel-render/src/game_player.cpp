@@ -52,6 +52,13 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
 
     const float g = 22.0f;
     vel.x = wish.x; vel.z = wish.z;
+    // страховка: если уже внутри солида (старый сейв, чужой блок) — вытолкнуть вверх
+    if (collides(w, pos, halfW, height)) {
+        for (int k = 1; k <= 3; k++) {
+            glm::vec3 up = pos; up.y += (float)k;
+            if (!collides(w, up, halfW, height)) { pos = up; vel = glm::vec3(0.0f); break; }
+        }
+    }
     vel.y -= g * dt;
     if (vel.y < -30.0f) vel.y = -30.0f;
     if (onGround && jump) { vel.y = 7.5f; onGround = false; }

@@ -188,7 +188,11 @@ int main()
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
-                if (world.getBlock(px, py, pz) == 0) {
+                // в себя ставить нельзя: клетка vs AABB игрока
+                bool inPlayer = (px + 1 > player.pos.x - player.halfW && px < player.pos.x + player.halfW &&
+                                 py + 1 > player.pos.y && py < player.pos.y + player.height &&
+                                 pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
+                if (world.getBlock(px, py, pz) == 0 && !inPlayer) {
                     world.setBlock(px, py, pz, 1);
                     int cx = px / 16, cz = pz / 16;
                     if (cx >= 0 && cx < 3 && cz >= 0 && cz < 3) {
