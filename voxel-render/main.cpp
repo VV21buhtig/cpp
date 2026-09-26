@@ -1,7 +1,9 @@
 // Glad 2 — инклуд <glad/gl.h>, и он ДО GLFW
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
-#include <stb/stb_image.h>
+#include "engine/mesh.h"
+#include "engine/texture.h"
+#include "game/pick.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -33,68 +35,9 @@ void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT,    deltaTime);
 }
 
-unsigned int loadTexture(const char* path) {
-    unsigned int tex; glGenTextures(1, &tex);
-    int w, h, ch;
-    stbi_set_flip_vertically_on_load(true);
-    unsigned char* data = stbi_load(path, &w, &h, &ch, 0);
-    if (data) {
-        GLenum fmt = (ch == 4) ? GL_RGBA : GL_RGB;
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        std::cout << "Loaded: " << path << "\n";
-    } else std::cerr << "Failed: " << path << "\n";
-    stbi_image_free(data);
-    return tex;
-}
+// Engine loadTexture -> engine/texture.h, Game pick -> game/pick.h
 
-glm::mat4 cubeModelMatrix(glm::vec3 pos, unsigned int index) {
-    glm::mat4 m = glm::mat4(1.0f);
-    m = glm::translate(m, pos);
-    m = glm::rotate(m, glm::radians(20.0f * index), glm::vec3(1.0f, 0.3f, 0.5f));
-    return m;
-}
-
-// ---------------------------------------------------------
-//  Ray-AABB — выбор куба под прицелом (глава 23)
-// ---------------------------------------------------------
-float rayAABBLocal(glm::vec3 origin, glm::vec3 dir) {
-    float tmin = 0.0f, tmax = 1e9f;
-    for (int a = 0; a < 3; a++) {
-        float o = origin[a], d = dir[a];
-        if (fabs(d) < 1e-6f) {
-            if (o < -0.5f || o > 0.5f) return -1.0f;
-        } else {
-            float t1 = (-0.5f - o) / d;
-            float t2 = ( 0.5f - o) / d;
-            if (t1 > t2) std::swap(t1, t2);
-            tmin = std::max(tmin, t1);
-            tmax = std::min(tmax, t2);
-            if (tmin > tmax) return -1.0f;
-        }
-    }
-    return tmin;
-}
-
-int pickCube(glm::vec3 rayOrigin, glm::vec3 rayDir,
-             const glm::vec3* positions, int count, float maxDist) {
-    int bestIdx = -1;
-    float bestT = maxDist;
-    for (int i = 0; i < count; i++) {
-        glm::mat4 model = cubeModelMatrix(positions[i], i);
-        glm::mat4 inv   = glm::inverse(model);
-        glm::vec3 lo = glm::vec3(inv * glm::vec4(rayOrigin, 1.0f));
-        glm::vec3 ld = glm::vec3(inv * glm::vec4(rayDir,    0.0f));
-        float t = rayAABBLocal(lo, ld);
-        if (t > 0.0f && t < bestT) { bestT = t; bestIdx = i; }
-    }
-    return bestIdx;
-}
+// (moved to engine/game modules)
 
 int main()
 {
@@ -165,78 +108,9 @@ int main()
     // =========================================================
     //  КУБ — массив из главы 15 (position + normal + uv)
     // =========================================================
-    float vertices[] = {
-        // positions          // normals           // texture coords
-        // back (-z) — CCW fix (глава 25)
-         0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f,
-
-        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f,
-
-        -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-        -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 0.0f,
-        -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-
-        // right (+x) — CCW fix (глава 25)
-         0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-         0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f,
-         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 0.0f,
-         0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f,
-
-        -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f,
-         0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 1.0f,
-         0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f,
-         0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f,
-        -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 0.0f,
-        -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f,
-
-        // top (+y) — CCW fix (глава 25)
-         0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f,
-         0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f,
-        -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 0.0f,
-         0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f,
-    };
-
-    unsigned int VBO;
-    glGenBuffers(1, &VBO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    unsigned int cubeVAO;
-    glGenVertexArrays(1, &cubeVAO);
-    glBindVertexArray(cubeVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3*sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6*sizeof(float)));
-    glEnableVertexAttribArray(2);
-
-    unsigned int lightCubeVAO;
-    glGenVertexArrays(1, &lightCubeVAO);
-    glBindVertexArray(lightCubeVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    glBindVertexArray(0);
+    // Engine: вершины CCW + VBO/VAO живут в engine/mesh.h (порядок GL 1:1)
+    CubeMesh mesh;
+    mesh.init();
 
     unsigned int diffuseMap  = loadTexture("texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
@@ -309,7 +183,7 @@ int main()
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, specularMap);
 
-        glBindVertexArray(cubeVAO);
+        mesh.bindCube();
         for (int i = 0; i < NR_CUBES; i++) {
             glm::mat4 model = cubeModelMatrix(cubePositions[i], i);
             lightingShader.setMat4("model", model);
@@ -321,7 +195,7 @@ int main()
         lightCubeShader.use();
         lightCubeShader.setMat4("projection", projection);
         lightCubeShader.setMat4("view", view);
-        glBindVertexArray(lightCubeVAO);
+        mesh.bindLight();
         for (int i = 0; i < 4; i++) {
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, pointLightPositions[i]);
@@ -346,7 +220,7 @@ int main()
             model = glm::scale(model, glm::vec3(1.05f));
             outlineShader.setMat4("model", model);
 
-            glBindVertexArray(cubeVAO);
+            mesh.bindCube();
             glDrawArrays(GL_TRIANGLES, 0, 36);
 
             glEnable(GL_DEPTH_TEST);
@@ -371,7 +245,7 @@ int main()
         alphaShader.setFloat("alpha", 0.35f);
 
         glDepthMask(GL_FALSE);
-        glBindVertexArray(cubeVAO);
+        mesh.bindCube();
         for (auto it = sorted.rbegin(); it != sorted.rend(); ++it) {
             glm::mat4 model = glm::mat4(1.0f);
             model = glm::translate(model, it->second);
@@ -384,9 +258,7 @@ int main()
         glfwPollEvents();
     }
 
-    glDeleteVertexArrays(1, &cubeVAO);
-    glDeleteVertexArrays(1, &lightCubeVAO);
-    glDeleteBuffers(1, &VBO);
+    mesh.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
     glfwDestroyWindow(window);

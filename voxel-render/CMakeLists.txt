@@ -24,12 +24,29 @@ target_include_directories(shader PUBLIC
 )
 target_link_libraries(shader PUBLIC glad)
 
+# --- Engine (mesh/texture) и Game (pick) — распил main.cpp, GL-порядок 1:1 ---
+add_library(engine STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_mesh.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_texture.cpp
+)
+target_include_directories(engine PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(engine PUBLIC glad glfw OpenGL::GL)
+
+add_library(game STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/game_pick.cpp
+)
+target_include_directories(game PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # --- Executable ---
 add_executable(voxel_render
     main.cpp
     src/stb_impl.cpp
 )
-target_link_libraries(voxel_render PRIVATE shader glad glfw OpenGL::GL)
+target_link_libraries(voxel_render PRIVATE shader engine game glad glfw OpenGL::GL)
 
 if (UNIX AND NOT APPLE)
     target_link_libraries(voxel_render PRIVATE dl)
