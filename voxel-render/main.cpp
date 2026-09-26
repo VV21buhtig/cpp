@@ -6,6 +6,7 @@
 #include "engine/atlas.h"
 #include "engine/chunk.h"
 #include "engine/world.h"
+#include "engine/save.h"
 #include "game/pick.h"
 
 #include <glm/glm.hpp>
@@ -80,9 +81,17 @@ int main()
     // Мировые координаты блоков 0..48, рендерим со сдвигом чтобы центр был в нуле.
     const glm::vec3 worldOffset(-24.0f, 0.0f, -24.0f);
     World world;
+    const char* savePath = "world.bin";
+    if (loadWorld(world, savePath)) std::cout << "Loaded " << savePath << "\n";
+    else std::cout << "New world (no " << savePath << ")\n";
     ChunkMesh meshes[World::CX][World::CZ];
     auto rebuild = [&](int cx, int cz) {
         meshes[cx][cz].upload(world.buildChunk(cx, cz));
+    };
+    auto rebuildAll = [&]() {
+        for (int cz = 0; cz < World::CZ; cz++)
+            for (int cx = 0; cx < World::CX; cx++)
+                rebuild(cx, cz);
     };
     size_t totalVerts = 0;
     for (int cz = 0; cz < World::CX; cz++)
@@ -117,9 +126,9 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\nLMB сломать, RMB поставить, ESC выход.\n";
+    std::cout << "\nLMB сломать, RMB поставить, F5 сейв, F9 загрузка, ESC выход.\n";
 
-    bool prevL = false, prevR = false;
+    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -173,6 +182,17 @@ int main()
             }
         }
         prevL = curL; prevR = curR;
+        bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+        bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
+        if (curF5 && !prevF5) {
+            if (saveWorld(world, savePath)) std::cout << "Saved " << savePath << "\n";
+            else std::cout << "Save FAILED\n";
+        }
+        if (curF9 && !prevF9) {
+            if (loadWorld(world, savePath)) { rebuildAll(); std::cout << "Loaded " << savePath << "\n"; }
+            else std::cout << "Load FAILED\n";
+        }
+        prevF5 = curF5; prevF9 = curF9;
 
         // PASS 1: opaque (пишут в stencil)
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
