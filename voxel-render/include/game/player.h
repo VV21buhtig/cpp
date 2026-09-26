@@ -13,6 +13,8 @@ struct Player {
     bool fly = true; // стартуем с fly чтобы не упасть в текстуры, F — переключить
     float halfW = 0.3f, height = 1.8f, eye = 1.62f;
     float walkSpeed = 4.3f, flySpeed = 8.0f, jumpVel = 7.5f;
+    bool stepOn = true;
+    float stepH = 1.0f;
     bool autoJump = false; // bhop на зажатый пробел
     // плавный автошаг: подъём stepFromY -> stepToY за stepDur
     float stepT = 0.0f, stepDur = 0.12f, stepFromY = 0.0f, stepToY = 0.0f;

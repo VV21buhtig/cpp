@@ -24,6 +24,7 @@
 #include "imgui_impl_opengl3.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
@@ -164,7 +165,19 @@ int main()
         glBindVertexArray(0);
     }
 
-    unsigned int diffuseMap  = loadTileArray("texture/tiles");
+    std::string packDir = "texture/tiles";
+    std::vector<std::string> packNames = {"default"};
+    {
+        DIR* dp = opendir("texture/packs");
+        if (dp) {
+            struct dirent* e;
+            while ((e = readdir(dp)))
+                if (e->d_name[0] != '.') packNames.push_back(e->d_name);
+            closedir(dp);
+        }
+    }
+    unsigned int diffuseMap  = loadTileArray(packDir.c_str());
+
     // земля/трава/камень матовые: спекуляр глушим чёрной 1x1 (металлик от контейнера снят)
     unsigned int specularMap = 0;
     {
@@ -194,16 +207,33 @@ int main()
     cvar.reg("move.fly", 8.0f);
     cvar.reg("move.jump", 7.5f);
     cvar.reg("move.bhop", 0.0f);
+    cvar.reg("move.step", 1.0f);
+    cvar.reg("move.step_h", 1.0f);
     cvar.reg("tick.rate", 120.0f);
     cvar.load("gfx.cfg");
     gCvar = &cvar;
     cvar.onPrint = [](const std::string& s) { console.print(s); };
     console.print("console F1. try: set sun.i 2");
+    auto applyPack = [&](const std::string& pn) {
+        std::string nd;
+        if (pn == "default" || pn == "texture/tiles") nd = "texture/tiles";
+        else if (!pn.empty() && pn[0] == '/') nd = pn; // абсолютный путь (MC-пак целиком)
+        else nd = "texture/packs/" + pn;
+        unsigned int nt = loadTileArray(nd.c_str());
+        glDeleteTextures(1, &diffuseMap);
+        diffuseMap = nt;
+        packDir = nd;
+        console.print("pack: " + nd + "\n");
+    };
+    auto runLine = [&](const std::string& s) {
+        if (s.rfind("pack ", 0) == 0) applyPack(s.substr(5));
+        else cvar.exec(s);
+    };
     std::cout << "console: F1 in game, or stdin+Enter. Try: set sun.i 2\n";
     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
     std::string conLine;
 
-    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), V fly/walk, F фонарик, L лампы, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
+    std::cout << "\nWASD move, Space jump/up, C down (fly), V fly/walk, F flashlight, L lamps, 1/2/3 block, LMB break, RMB place, F5 save, F9 load.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
     bool prevV = false, prevF = false, prevG = false;
@@ -228,7 +258,7 @@ int main()
                 conLine += buf;
                 size_t p;
                 while ((p = conLine.find('\n')) != std::string::npos) {
-                    cvar.exec(conLine.substr(0, p));
+                    runLine(conLine.substr(0, p));
                     conLine.erase(0, p + 1);
                 }
             }
@@ -277,6 +307,8 @@ int main()
         player.walkSpeed = cvar.get("move.walk", 4.3f);
         player.flySpeed = cvar.get("move.fly", 8.0f);
         player.jumpVel = cvar.get("move.jump", 7.5f);
+        player.stepOn = cvar.get("move.step", 1.0f) > 0.5f;
+        player.stepH = cvar.get("move.step_h", 1.0f);
         player.autoJump = cvar.get("move.bhop", 0.0f) > 0.5f;
         }
         bool jump = false, down = false;
@@ -386,9 +418,9 @@ int main()
         bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
         bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
-        if (!console.open && c1 && !prev1) { placeId = 1; std::cout << "hold: grass\n"; }
-        if (!console.open && c2 && !prev2) { placeId = 2; std::cout << "hold: dirt\n"; }
-        if (!console.open && c3 && !prev3) { placeId = 3; std::cout << "hold: stone\n"; }
+        if (!console.open && c1 && !prev1) { placeId = 1; std::cout << "block: grass\n"; }
+        if (!console.open && c2 && !prev2) { placeId = 2; std::cout << "block: dirt\n"; }
+        if (!console.open && c3 && !prev3) { placeId = 3; std::cout << "block: stone\n"; }
         prev1 = c1; prev2 = c2; prev3 = c3;
         if (!console.open && curF5 && !prevF5) {
             if (saveWorld(world, savePath)) std::cout << "Saved " << savePath << "\n";
@@ -532,11 +564,30 @@ int main()
             slider("fly", "move.fly", 2.0f, 30.0f);
             slider("jump", "move.jump", 2.0f, 12.0f);
             slider("tick", "tick.rate", 30.0f, 240.0f);
+            {
+                bool st = cvar.get("move.step", 1.0f) > 0.5f;
+                if (ImGui::Checkbox("auto-step", &st)) cvar.set("move.step", st ? 1.0f : 0.0f);
+                float sh = cvar.get("move.step_h", 1.0f);
+                if (ImGui::SliderFloat("step_h", &sh, 0.5f, 2.0f)) cvar.set("move.step_h", sh);
+            }
             ImGui::Checkbox("flash (F)", &flashOn);
             ImGui::Checkbox("lamps (L)", &followOn);
             ImGui::Checkbox("fly (V)", &player.fly);
             bool bhop = cvar.get("move.bhop", 0.0f) > 0.5f;
             if (ImGui::Checkbox("bhop on space", &bhop)) cvar.set("move.bhop", bhop ? 1.0f : 0.0f);
+            ImGui::Separator();
+            // пак текстур: default = texture/tiles, остальные texture/packs/* (наш или MC layout)
+            {
+                static int packIdx = 0;
+                if (ImGui::BeginCombo("pack", packNames[packIdx].c_str())) {
+                    for (size_t i = 0; i < packNames.size(); i++)
+                        if (ImGui::Selectable(packNames[i].c_str(), (int)i == packIdx)) {
+                            packIdx = (int)i;
+                            applyPack(packNames[i]);
+                        }
+                    ImGui::EndCombo();
+                }
+            }
             ImGui::Separator();
             ImGui::BeginChild("log", ImVec2(0, 200), true);
             for (auto& ln : console.lines) ImGui::TextUnformatted(ln.c_str());
@@ -545,7 +596,7 @@ int main()
             ImGui::EndChild();
             if (ImGui::InputText("cmd", console.inputBuf, sizeof(console.inputBuf),
                                  ImGuiInputTextFlags_EnterReturnsTrue)) {
-                cvar.exec(console.inputBuf);
+                runLine(console.inputBuf);
                 console.inputBuf[0] = 0;
                 ImGui::SetKeyboardFocusHere(-1);
             }

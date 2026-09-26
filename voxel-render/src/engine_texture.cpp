@@ -28,15 +28,22 @@ unsigned int loadTexture(const char* path) {
 
 unsigned int loadTileArray(const char* dir) {
     // tiles/grass_top,grass_side,dirt,stone.png по 16x16. Нет файла = маджента.
-    const char* names[4] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"};
+    // наш layout tiles/*.png либо ванильный MC: assets/minecraft/textures/block/*.png
+    const char* ours[4] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"};
+    const char* mc[4] = {"grass_block_top.png", "grass_block_side.png", "dirt.png", "stone.png"};
     const int T = 16;
     std::vector<unsigned char> all(T * T * 4 * 4);
     stbi_set_flip_vertically_on_load(true);
     for (int i = 0; i < 4; i++) {
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        char path[1024], mcpath[1024];
+        snprintf(path, sizeof(path), "%s/%s", dir, ours[i]);
+        snprintf(mcpath, sizeof(mcpath), "%s/assets/minecraft/textures/block/%s", dir, mc[i]);
         int w, h, ch;
-        unsigned char* d = stbi_load(path, &w, &h, &ch, 4);
+        unsigned char* d = nullptr;
+        FILE* probe = fopen(path, "rb");
+        if (probe) { fclose(probe); }
+        else { snprintf(path, sizeof(path), "%s", mcpath); }
+        d = stbi_load(path, &w, &h, &ch, 4);
         if (d && w == T && h == T) {
             memcpy(&all[i * T * T * 4], d, T * T * 4);
             std::cout << "Tile " << i << ": " << path << "\n";

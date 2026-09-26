@@ -107,9 +107,9 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     glm::vec3 t = pos;
     // Автошаг на 1 блок: триггер — подъём анимируется в stepT, не телепорт
     auto tryStep = [&](glm::vec3& tt) {
-        glm::vec3 up = tt; up.y += 1.0f;
-        if (onGround && stepT <= 0.0f && !collides(w, up, halfW, height)) {
-            stepT = stepDur; stepFromY = pos.y; stepToY = pos.y + 1.0f;
+        glm::vec3 up = tt; up.y += stepH;
+        if (stepOn && onGround && stepT <= 0.0f && !collides(w, up, halfW, height)) {
+            stepT = stepDur; stepFromY = pos.y; stepToY = pos.y + stepH;
             tt = up; tt.y = pos.y; // горизонталь сразу, вертикаль догонит анимацией
             return true;
         }
