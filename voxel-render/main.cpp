@@ -237,9 +237,9 @@ int main()
             lineShader.setMat4("view", view);
             lineShader.setVec3("outlineColor", 1.0f, 0.55f, 0.1f);
 
-            glm::vec3 mn = worldOffset + glm::vec3(wx, wy, wz);
+            glm::vec3 mn = worldOffset + glm::vec3(wx - 0.002f, wy - 0.002f, wz - 0.002f);
             glm::mat4 model = glm::translate(glm::mat4(1.0f), mn);
-            model = glm::scale(model, glm::vec3(1.0f)); // ровно по граням: LEQUAL держит линии на поверхностях
+            model = glm::scale(model, glm::vec3(1.004f)); // 0.002 наружу: без z-fight, кольцо у плато видно
             lineShader.setMat4("model", model);
 
             glBindVertexArray(lineVAO);
