@@ -240,11 +240,8 @@ int main()
         bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
         if (hasHit) {
             if (curL && !prevL) {
-                if (wy == 0) { /* bedrock-пол не ломается, иначе дыра в невидимый солид */ }
-                else {
-                world.setBlock(wx, wy, wz, 0);
+                world.setBlock(wx, wy, wz, 0); // дно тоже роется: под миром пустота, упадёшь — респаун
                 touchEdit(wx, wz);
-                }
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
@@ -291,9 +288,9 @@ int main()
         lightingShader.setVec2("fogRange", 50.0f, 170.0f);
 
         lightingShader.setVec3("dirLight.direction", -sunVec);
-        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.06f, 0.08f, 0.14f), glm::vec3(0.05f), dayF));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.03f), glm::vec3(0.4f), dayF));
-        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.5f), dayF));
+        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.28f), dayF));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.05f), glm::vec3(1.15f), dayF));
+        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), dayF));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
         glm::vec3 pp = player.pos;
