@@ -140,6 +140,9 @@ void main()
     vec3 norm    = normalize(Normal);
     vec3 viewDir = normalize(viewPos - FragPos);
 
+    // фейковый воксельный шейдинг граней вместо атласа: верх 1.0, бока 0.8, низ 0.55
+    float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.55) : 0.8;
+
     // phase 1: directional (солнце)
     vec3 result = CalcDirLight(dirLight, norm, viewDir);
 
@@ -150,5 +153,5 @@ void main()
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
-    FragColor = vec4(result, 1.0);
+    FragColor = vec4(result * fshade, 1.0);
 }

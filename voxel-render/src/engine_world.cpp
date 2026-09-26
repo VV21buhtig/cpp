@@ -2,22 +2,6 @@
 #include <algorithm>
 #include <cmath>
 
-static const float kWF[6][6][8] = {
-    {{0,1,0, 0,0,-1, 0,1},{1,1,0, 0,0,-1, 1,1},{1,0,0, 0,0,-1, 1,0},
-     {1,0,0, 0,0,-1, 1,0},{0,0,0, 0,0,-1, 0,0},{0,1,0, 0,0,-1, 0,1}},
-    {{0,0,1, 0,0,1, 0,0},{1,0,1, 0,0,1, 1,0},{1,1,1, 0,0,1, 1,1},
-     {1,1,1, 0,0,1, 1,1},{0,1,1, 0,0,1, 0,1},{0,0,1, 0,0,1, 0,0}},
-    {{0,1,1, -1,0,0, 1,0},{0,1,0, -1,0,0, 1,1},{0,0,0, -1,0,0, 0,1},
-     {0,0,0, -1,0,0, 0,1},{0,0,1, -1,0,0, 0,0},{0,1,1, -1,0,0, 1,0}},
-    {{1,0,0, 1,0,0, 0,1},{1,1,0, 1,0,0, 1,1},{1,1,1, 1,0,0, 1,0},
-     {1,1,1, 1,0,0, 1,0},{1,0,1, 1,0,0, 0,0},{1,0,0, 1,0,0, 0,1}},
-    {{0,0,0, 0,-1,0, 0,1},{1,0,0, 0,-1,0, 1,1},{1,0,1, 0,-1,0, 1,0},
-     {1,0,1, 0,-1,0, 1,0},{0,0,1, 0,-1,0, 0,0},{0,0,0, 0,-1,0, 0,1}},
-    {{1,1,1, 0,1,0, 1,0},{1,1,0, 0,1,0, 1,1},{0,1,0, 0,1,0, 0,1},
-     {0,1,0, 0,1,0, 0,1},{0,1,1, 0,1,0, 0,0},{1,1,1, 0,1,0, 1,0}},
-};
-static const int kWN[6][3] = {{0,0,-1},{0,0,1},{-1,0,0},{1,0,0},{0,-1,0},{0,1,0}};
-
 World::World() {
     // Холмы: value-noise 2 октавы, deterministic. h=1..4, текстур пока 2 — мешим теми же.
     auto hash01 = [](int x, int z) -> float {
@@ -57,26 +41,64 @@ void World::setBlock(int wx, int y, int wz, unsigned char v) {
 }
 
 std::vector<float> World::buildChunk(int cx, int cz) const {
+    // Greedy: по каждой оси и направлению строим маску 16x16 на слайс и сливаем
+    // в прямоугольники. UV — в мировых координатах блоков (шов бесшовный, REPEAT).
     std::vector<float> out;
-    out.reserve(8192 * 8);
-    for (int z = 0; z < Chunk::SZ; z++)
-    for (int y = 0; y < Chunk::SY; y++)
-    for (int x = 0; x < Chunk::SX; x++) {
-        int wx = cx * Chunk::SX + x, wz = cz * Chunk::SZ + z;
-        if (getBlock(wx, y, wz) == 0) continue;
-        for (int f = 0; f < 6; f++) {
-            if (getBlock(wx + kWN[f][0], y + kWN[f][1], wz + kWN[f][2]) != 0) continue;
-            for (int v = 0; v < 6; v++) {
-                out.push_back(kWF[f][v][0] + x);
-                out.push_back(kWF[f][v][1] + y);
-                out.push_back(kWF[f][v][2] + z);
-                out.push_back(kWF[f][v][3]);
-                out.push_back(kWF[f][v][4]);
-                out.push_back(kWF[f][v][5]);
-                float tile = (f == 5) ? 1.0f : 0.0f; // top=container2, бока/низ=container
-                out.push_back((tile + kWF[f][v][6]) * 0.5f);
-                out.push_back(kWF[f][v][7]);
-            }
+    out.reserve(4096 * 8);
+    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v) {
+        out.push_back(x); out.push_back(y); out.push_back(z);
+        out.push_back(nx); out.push_back(ny); out.push_back(nz);
+        out.push_back(u); out.push_back(v);
+    };
+    const int S = Chunk::SX;
+    int wx0 = cx * S, wz0 = cz * S;
+    // dir: 0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z
+    for (int d = 0; d < 6; d++) {
+        int axis = d / 2;       // 0=x 1=y 2=z
+        int sign = (d % 2 == 0) ? 1 : -1;
+        for (int s = 0; s < S; s++) {
+            bool mask[16][16] = {};
+            for (int v = 0; v < S; v++)
+                for (int u = 0; u < S; u++) {
+                    int bx, by, bz, ox = 0, oy = 0, oz = 0;
+                    if (axis == 0)      { bx = wx0 + s; by = v; bz = wz0 + u; ox = sign; }
+                    else if (axis == 1) { bx = wx0 + u; by = s; bz = wz0 + v; oy = sign; }
+                    else                { bx = wx0 + u; by = v; bz = wz0 + s; oz = sign; }
+                    mask[v][u] = getBlock(bx, by, bz) != 0 && getBlock(bx + ox, by + oy, bz + oz) == 0;
+                }
+            bool done[16][16] = {};
+            for (int v = 0; v < S; v++)
+                for (int u = 0; u < S; u++) {
+                    if (!mask[v][u] || done[v][u]) continue;
+                    int w = 1;
+                    while (u + w < S && mask[v][u + w] && !done[v][u + w]) w++;
+                    int h = 1;
+                    bool grow = true;
+                    while (v + h < S && grow) {
+                        for (int k = 0; k < w; k++)
+                            if (!mask[v + h][u + k] || done[v + h][u + k]) { grow = false; break; }
+                        if (grow) h++;
+                    }
+                    for (int dv = 0; dv < h; dv++)
+                        for (int du = 0; du < w; du++) done[v + dv][u + du] = true;
+                    float N[3] = {0, 0, 0};
+                    N[axis] = (float)sign;
+                    // P00=(u,v) P10=(u+w,v) P11=(u+w,v+h) P01=(u,v+h); UV мировые
+                    auto vert = [&](int du, int dv) {
+                        float x, y, z, uu, vv;
+                        if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)dv; z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)dv; }
+                        else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
+                        else                { x = (float)(u + du); y = (float)dv; z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)dv; }
+                        pushV(x, y, z, N[0], N[1], N[2], uu, vv);
+                    };
+                    if (sign > 0) {
+                        if (axis == 2) { vert(0,0); vert(w,0); vert(w,h); vert(0,0); vert(w,h); vert(0,h); }
+                        else           { vert(0,0); vert(w,h); vert(w,0); vert(0,0); vert(0,h); vert(w,h); }
+                    } else {
+                        if (axis == 2) { vert(0,0); vert(w,h); vert(w,0); vert(0,0); vert(0,h); vert(w,h); }
+                        else           { vert(0,0); vert(w,0); vert(w,h); vert(0,0); vert(w,h); vert(0,h); }
+                    }
+                }
         }
     }
     return out;
