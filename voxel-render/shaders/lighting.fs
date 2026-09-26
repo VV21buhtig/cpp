@@ -186,6 +186,8 @@ void main()
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
     vec3 shaded = result * fshade * aoC;
+    // ядовитость дня: +30% насыщенности
+    shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, 1.3);
     if (debugShadow > 0.5) {
         float sh = ShadowCalculation(FragPosLightSpace, norm);
         FragColor = vec4(vec3(1.0 - sh), 1.0);
