@@ -63,14 +63,20 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
             vel.x += (wish.x - vel.x) * k;
             vel.z += (wish.z - vel.z) * k;
         } else {
+            // скилловый стрейф как в Quake: разгон только если проекция скорости
+            // на wish меньше wishSpeed. Держать W в стену — кепка 4.3, прирост
+            // только дугой с мышью.
             float wl = sqrt(wish.x * wish.x + wish.z * wish.z);
             if (wl > 1e-4f) {
-                float ax = 30.0f * dt;
-                vel.x += wish.x / wl * ax;
-                vel.z += wish.z / wl * ax;
-                float nhs = sqrt(vel.x * vel.x + vel.z * vel.z);
-                const float MAXA = 10.0f;
-                if (nhs > MAXA) { vel.x *= MAXA / nhs; vel.z *= MAXA / nhs; }
+                float nx = wish.x / wl, nz = wish.z / wl;
+                float cur = vel.x * nx + vel.z * nz;
+                float add = speed - cur;
+                if (add > 0.0f) {
+                    float a = 60.0f * dt;
+                    if (a > add) a = add;
+                    vel.x += nx * a;
+                    vel.z += nz * a;
+                }
             }
             float drag = 1.0f - 0.1f * dt;
             if (drag < 0.0f) drag = 0.0f;

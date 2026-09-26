@@ -67,6 +67,11 @@ int main()
 
     Shader lightingShader("shaders/lighting.vs", "shaders/lighting.fs");
     Shader lineShader("shaders/line.vs", "shaders/outline.fs");
+    Shader crosshairShader("shaders/crosshair.vs", "shaders/crosshair.fs");
+    unsigned int triVAO = 0;
+    glGenVertexArrays(1, &triVAO);
+    glBindVertexArray(triVAO);
+    glBindVertexArray(0);
 
     glm::vec3 pointLightPositions[] = {
         glm::vec3(24.0f, 6.0f, 26.0f),
@@ -293,12 +298,27 @@ int main()
             glDepthFunc(GL_LESS);
         }
 
+        // прицел поверх всего
+        {
+            int ww, hh;
+            glfwGetFramebufferSize(window, &ww, &hh);
+            glDisable(GL_DEPTH_TEST);
+            crosshairShader.use();
+            crosshairShader.setVec2("res", (float)ww, (float)hh);
+            crosshairShader.setFloat("t", now);
+            glBindVertexArray(triVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            glEnable(GL_DEPTH_TEST);
+        }
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
     glDeleteVertexArrays(1, &lineVAO);
     glDeleteBuffers(1, &lineVBO);
+    glDeleteVertexArrays(1, &triVAO);
     for (int cz = 0; cz < World::CZ; cz++)
         for (int cx = 0; cx < World::CX; cx++)
             meshes[cx][cz].destroy();
