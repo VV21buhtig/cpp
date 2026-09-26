@@ -4,3 +4,8 @@
 # Guilt-free замена: Luanti minetest_game (CC-BY-SA 3.0):
 #   mods/default/textures/{default_grass,default_grass_side,default_dirt,default_stone}.png
 # переименуй в имена выше. Если тайла нет — движок подставит мадженту.
+
+# Attribution
+# water.png, lava.png: first frames of Luanti minetest_game
+# default_water_source_animated.png / default_lava_source_animated.png,
+# CC-BY-SA 3.0 (luanti-org/minetest_game). Credit in CREDITS below.

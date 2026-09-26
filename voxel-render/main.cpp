@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
@@ -180,6 +181,7 @@ int main()
     std::vector<std::string> shaderPacks = {"default"};
     for (auto& d : listDirs("shaders/packs")) shaderPacks.push_back(d);
 
+    mkdir("worlds", 0755); // сейвы должны куда-то писаться (CWD=build/)
     // ================= MENU =================
     std::string playPath;   // worlds/<name>.bin
     int playCX = 16, playCZ = 16, playSeed = 1337;
@@ -379,16 +381,24 @@ int main()
     player.spawn(*world, WB / 2, WB / 2);
 
     std::vector<ChunkMesh> meshes(NCX * NCZ);
+    std::vector<ChunkMesh> waterMeshes(NCX * NCZ);
+    std::vector<ChunkMesh> lavaMeshes(NCX * NCZ);
     std::vector<char> meshLoaded(NCX * NCZ, 0);
     auto midx = [&](int cx, int cz) { return cz * NCX + cx; };
     auto rebuild = [&](int cx, int cz) {
         if (cx < 0 || cx >= NCX || cz < 0 || cz >= NCZ) return;
         meshes[midx(cx, cz)].upload(world->buildChunk(cx, cz));
+        std::vector<float> wv, lv;
+        world->buildFluids(cx, cz, wv, lv);
+        waterMeshes[midx(cx, cz)].upload(wv);
+        lavaMeshes[midx(cx, cz)].upload(lv);
         meshLoaded[midx(cx, cz)] = 1;
     };
     auto unload = [&](int cx, int cz) {
         if (cx < 0 || cx >= NCX || cz < 0 || cz >= NCZ) return;
         meshes[midx(cx, cz)].destroy();
+        waterMeshes[midx(cx, cz)].destroy();
+        lavaMeshes[midx(cx, cz)].destroy();
         meshLoaded[midx(cx, cz)] = 0;
     };
     auto rebuildAll = [&]() {
@@ -655,7 +665,8 @@ int main()
                 bool inPlayer = (px + 1 > player.pos.x - player.halfW && px < player.pos.x + player.halfW &&
                                  py + 1 > player.pos.y && py < player.pos.y + player.height &&
                                  pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
-                if (world->getBlock(px, py, pz) == 0 && !inPlayer) {
+                // ставить можно в воздух и во флюид (замена воды/лавы блоком)
+                if (!World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
                     world->setBlock(px, py, pz, (unsigned char)placeId);
                     touchEdit(px, pz);
                 }
@@ -733,6 +744,7 @@ int main()
 
         lightingShader.setMat4("projection", projection);
         lightingShader.setMat4("view", view);
+        lightingShader.setFloat("alphaU", 1.0f);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, diffuseMap);
@@ -747,7 +759,22 @@ int main()
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), off);
                 lightingShader.setMat4("model", model);
                 meshes[mi].draw();
+                lavaMeshes[mi].draw();
             }
+
+        // PASS 1b: вода прозрачная (без записи глубины, после opaque)
+        glDepthMask(GL_FALSE);
+        lightingShader.setFloat("alphaU", 0.75f);
+        for (int cz = 0; cz < NCZ; cz++)
+            for (int cx = 0; cx < NCX; cx++) {
+                int mi = cz * NCX + cx;
+                if (!meshLoaded[mi] || !chunkVisible(cx, cz)) continue;
+                glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
+                lightingShader.setMat4("model", glm::translate(glm::mat4(1.0f), off));
+                waterMeshes[mi].draw();
+            }
+        glDepthMask(GL_TRUE);
+        lightingShader.setFloat("alphaU", 1.0f);
 
         // PASS 2: подсветка рёбер честным depth
         if (hasHit) {
@@ -868,6 +895,9 @@ int main()
     glDeleteVertexArrays(1, &lineVAO);
     glDeleteBuffers(1, &lineVBO);
     glDeleteVertexArrays(1, &triVAO);
+    for (auto& m : meshes) m.destroy();
+    for (auto& m : waterMeshes) m.destroy();
+    for (auto& m : lavaMeshes) m.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
     ImGui_ImplOpenGL3_Shutdown();

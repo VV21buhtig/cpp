@@ -29,12 +29,12 @@ unsigned int loadTexture(const char* path) {
 unsigned int loadTileArray(const char* dir) {
     // tiles/grass_top,grass_side,dirt,stone.png по 16x16. Нет файла = маджента.
     // наш layout tiles/*.png либо ванильный MC: assets/minecraft/textures/block/*.png
-    const char* ours[4] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"};
-    const char* mc[4] = {"grass_block_top.png", "grass_block_side.png", "dirt.png", "stone.png"};
-    const int T = 16;
-    std::vector<unsigned char> all(T * T * 4 * 4);
+    const char* ours[6] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png", "water.png", "lava.png"};
+    const char* mc[6] = {"grass_block_top.png", "grass_block_side.png", "dirt.png", "stone.png", "", ""};
+    const int T = 16, NL = 6;
+    std::vector<unsigned char> all(T * T * 4 * NL);
     stbi_set_flip_vertically_on_load(true);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NL; i++) {
         char path[1024], mcpath[1024];
         snprintf(path, sizeof(path), "%s/%s", dir, ours[i]);
         snprintf(mcpath, sizeof(mcpath), "%s/assets/minecraft/textures/block/%s", dir, mc[i]);
@@ -69,7 +69,7 @@ unsigned int loadTileArray(const char* dir) {
         all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 189 / 255);
         all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 89 / 255);
     }
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, T, T, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, all.data());
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, T, T, NL, 0, GL_RGBA, GL_UNSIGNED_BYTE, all.data());
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);

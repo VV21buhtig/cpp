@@ -32,6 +32,8 @@ struct World {
     void setBlock(int wx, int y, int wz, unsigned char v);
     // меш одного чанка с учётом соседних чанков (без швов)
     std::vector<float> buildChunk(int cx, int cz) const;
+    // флюиды отдельно: waterVerts (tile 4) + lavaVerts (tile 5), только грани к воздуху
+    void buildFluids(int cx, int cz, std::vector<float>& water, std::vector<float>& lava) const;
     // пик DDA по всем вокселям. Возвращает t или -1; +норма грани для place.
     float pick(glm::vec3 o, glm::vec3 d, float maxDist,
                int& wx, int& wy, int& wz, glm::vec3& normal) const;
