@@ -5,6 +5,7 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 in float Tile;
+in float AO;
 in vec4 FragPosLightSpace;
 
 // ========== MATERIAL ==========
@@ -171,6 +172,8 @@ void main()
 
     // фейковый воксельный шейдинг граней вместо атласа: верх 1.0, бока 0.8, низ 0.55
     float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.55) : 0.8;
+    // вершинное AO: 3 полный свет, 0 щель
+    float aoC = AO < 0.5 ? 0.45 : (AO < 1.5 ? 0.65 : (AO < 2.5 ? 0.82 : 1.0));
 
     // phase 1: directional (солнце)
     vec3 result = CalcDirLight(dirLight, norm, viewDir);
@@ -182,7 +185,7 @@ void main()
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
-    vec3 shaded = result * fshade;
+    vec3 shaded = result * fshade * aoC;
     if (debugShadow > 0.5) {
         float sh = ShadowCalculation(FragPosLightSpace, norm);
         FragColor = vec4(vec3(1.0 - sh), 1.0);

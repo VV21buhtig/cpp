@@ -1,6 +1,7 @@
 #include "engine/world.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 World::World(int s) : seed(s) {
     // Холмы: value-noise 2 октавы + сид. h=1..4.
@@ -41,14 +42,14 @@ void World::setBlock(int wx, int y, int wz, unsigned char v) {
 }
 
 std::vector<float> World::buildChunk(int cx, int cz) const {
-    // Greedy: по каждой оси и направлению строим маску 16x16 на слайс и сливаем
-    // в прямоугольники. UV — в мировых координатах блоков (шов бесшовный, REPEAT).
+    // Greedy + вершинное AO (0fps): маска хранит id, слияние равных,
+    // углы семплят соседей, триангуляция с flip по AO. UV мировые (REPEAT).
     std::vector<float> out;
-    out.reserve(4096 * 9);
-    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile) {
+    out.reserve(4096 * 10);
+    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile, float ao) {
         out.push_back(x); out.push_back(y); out.push_back(z);
         out.push_back(nx); out.push_back(ny); out.push_back(nz);
-        out.push_back(u); out.push_back(v); out.push_back(tile);
+        out.push_back(u); out.push_back(v); out.push_back(tile); out.push_back(ao);
     };
     auto tileFor = [](unsigned char id, int axis, int sign) -> float {
         if (id == 1) return (axis == 1) ? (sign > 0 ? 0.0f : 2.0f) : 1.0f; // grass: top/side/bottom(dirt)
@@ -57,7 +58,8 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     };
     const int S = Chunk::SX;
     int wx0 = cx * S, wz0 = cz * S;
-    // dir: 0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z
+    // corner AO: 3 клетки снаружи грани (статья 0fps). A/B — касательные, o — наружу.
+    auto occ = [&](int x, int y, int z) -> int { return getBlock(x, y, z) ? 1 : 0; };
     for (int d = 0; d < 6; d++) {
         int axis = d / 2;       // 0=x 1=y 2=z
         int sign = (d % 2 == 0) ? 1 : -1;
@@ -90,22 +92,45 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                         for (int du = 0; du < w; du++) done[v + dv][u + du] = true;
                     float N[3] = {0, 0, 0};
                     N[axis] = (float)sign;
-                    // P00=(u,v) P10=(u+w,v) P11=(u+w,v+h) P01=(u,v+h); UV мировые
                     float tile = tileFor(id, axis, sign);
-                    auto vert = [&](int du, int dv) {
+                    // AO четырёх углов; a0/b0: клетка снаружи прямоугольника
+                    auto cornerAO = [&](int du, int dv) -> float {
+                        int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
+                        int o = (sign > 0) ? 0 : -1;
+                        int gx, gy, gz, ax, ay, az, bx, by, bz, nx, ny, nz;
+                        if (axis == 0)      { gx = wx0 + s + (sign > 0 ? 1 : 0); gy = v + dv; gz = wz0 + u + du;
+                                              ax = 0; ay = 0; az = 1; bx = 0; by = 1; bz = 0; nx = 1; ny = 0; nz = 0; }
+                        else if (axis == 1) { gx = wx0 + u + du; gy = s + (sign > 0 ? 1 : 0); gz = wz0 + v + dv;
+                                              ax = 1; ay = 0; az = 0; bx = 0; by = 0; bz = 1; nx = 0; ny = 1; nz = 0; }
+                        else                { gx = wx0 + u + du; gy = v + dv; gz = wz0 + s + (sign > 0 ? 1 : 0);
+                                              ax = 1; ay = 0; az = 0; bx = 0; by = 1; bz = 0; nx = 0; ny = 0; nz = 1; }
+                        int s1 = occ(gx + nx*o + ax*a0, gy + ny*o + ay*a0, gz + nz*o + az*a0);
+                        int s2 = occ(gx + nx*o + bx*b0, gy + ny*o + by*b0, gz + nz*o + bz*b0);
+                        int cc = occ(gx + nx*o + ax*a0 + bx*b0, gy + ny*o + ay*a0 + by*b0, gz + nz*o + az*a0 + bz*b0);
+                        return (s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + cc));
+                    };
+                    float a00 = cornerAO(0, 0), a10 = cornerAO(w, 0);
+                    float a11 = cornerAO(w, h), a01 = cornerAO(0, h);
+                    auto vert = [&](int du, int dv, float ao) {
                         float x, y, z, uu, vv;
                         if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
                         else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
                         else                { x = (float)(u + du); y = (float)(v + dv); z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)(v + dv); }
-                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile);
+                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile, ao);
                     };
-                    if (sign > 0) {
-                        if (axis == 2) { vert(0,0); vert(w,0); vert(w,h); vert(0,0); vert(w,h); vert(0,h); }
-                        else           { vert(0,0); vert(w,h); vert(w,0); vert(0,0); vert(0,h); vert(w,h); }
+                    // id угла: 0:(0,0) 1:(w,0) 2:(w,h) 3:(0,h); flip по правилу 0fps
+                    bool flip = (a00 + a11 > a01 + a10);
+                    struct C { int du, dv; float ao; };
+                    C c[4] = {{0,0,a00},{w,0,a10},{w,h,a11},{0,h,a01}};
+                    int tri[6];
+                    if (axis == 2) {
+                        if (sign > 0) { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
+                        else          { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
                     } else {
-                        if (axis == 2) { vert(0,0); vert(w,h); vert(w,0); vert(0,0); vert(0,h); vert(w,h); }
-                        else           { vert(0,0); vert(w,0); vert(w,h); vert(0,0); vert(w,h); vert(0,h); }
+                        if (sign > 0) { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
+                        else          { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
                     }
+                    for (int k = 0; k < 6; k++) vert(c[tri[k]].du, c[tri[k]].dv, c[tri[k]].ao);
                 }
         }
     }
