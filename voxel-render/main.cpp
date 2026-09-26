@@ -350,7 +350,10 @@ int main()
         lightingShader.use();
         lightingShader.setFloat("material.shininess", 32.0f);
         lightingShader.setVec3("viewPos", camera.Position);
-        lightingShader.setVec3("fogColor", horizonColor);
+        // туман в линейном (до гаммы): инверсия чтобы сойтись с небом без гаммы
+        glm::vec3 fogLin(
+            pow(horizonColor.x, 2.2f), pow(horizonColor.y, 2.2f), pow(horizonColor.z, 2.2f));
+        lightingShader.setVec3("fogColor", fogLin);
         lightingShader.setVec2("fogRange", 50.0f, 170.0f);
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
@@ -358,11 +361,11 @@ int main()
         lightingShader.setFloat("debugShadow", dbgShadow ? 1.0f : 0.0f);
 
         float duskF = glm::clamp(1.0f - glm::abs(sunVec.y) / 0.25f, 0.0f, 1.0f) * twi; // тёплые сумерки
-        glm::vec3 ambDay = glm::mix(glm::vec3(0.05f, 0.06f, 0.11f), glm::vec3(0.24f), dayF);
+        glm::vec3 ambDay = glm::mix(glm::vec3(0.03f, 0.035f, 0.07f), glm::vec3(0.20f), dayF);
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.02f), glm::vec3(1.3f), sunI));
-        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.3f), sunI));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), glm::vec3(1.1f), sunI));
+        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.01f), glm::vec3(0.3f), sunI));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
         glm::vec3 pp = player.pos;

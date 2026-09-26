@@ -190,5 +190,6 @@ void main()
     }
     float fd = length(viewPos - FragPos);
     float ff = clamp((fd - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
-    FragColor = vec4(mix(shaded, fogColor, ff), 1.0);
+    vec3 col = mix(shaded, fogColor, ff);
+    FragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0); // гамма (гл.34): без неё линейный свет тёмный
 }
