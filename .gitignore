@@ -1,0 +1,15 @@
+# Large PDF book (44M) - не пушим в git, держи локально
+book_pdf.pdf
+*.pdf
+
+# Build artifacts - генерируются через cmake/make
+voxel-render/build/
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.a
+*.out
+*.so
