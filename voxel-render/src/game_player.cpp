@@ -30,6 +30,10 @@ void Player::spawn(const World& w, int wx, int wz) {
 
 void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
                     bool jump, bool down) {
+    // фронт пробела считаем всегда (и для fly), тратим буфер только в walk
+    if (jump && !prevJumpHeld) jumpBuf = 0.15f;
+    prevJumpHeld = jump;
+    if (jumpBuf > 0.0f) jumpBuf -= dt;
     glm::vec3 fwd(cos(yaw), 0.0f, sin(yaw));
     glm::vec3 right(-fwd.z, 0.0f, fwd.x);
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
@@ -58,7 +62,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     { // вес + бхоп: земля цепкая (быстрых слабо тормозит), воздух — стрейф с набором
         float hs = sqrt(vel.x * vel.x + vel.z * vel.z);
         if (onGround) {
-            float acc = (hs > speed + 0.5f) ? 1.2f : 14.0f;
+            float acc = (hs > speed + 0.5f) ? 2.5f : 14.0f;
             float k = 1.0f - expf(-acc * dt);
             vel.x += (wish.x - vel.x) * k;
             vel.z += (wish.z - vel.z) * k;
@@ -72,7 +76,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
                 float cur = vel.x * nx + vel.z * nz;
                 float add = speed - cur;
                 if (add > 0.0f) {
-                    float a = 60.0f * dt;
+                    float a = 30.0f * dt;
                     if (a > add) a = add;
                     vel.x += nx * a;
                     vel.z += nz * a;
@@ -92,7 +96,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     }
     vel.y -= g * dt;
     if (vel.y < -30.0f) vel.y = -30.0f;
-    if (onGround && jump) { vel.y = 7.5f; onGround = false; }
+    if (onGround && jumpBuf > 0.0f) { vel.y = 7.5f; onGround = false; jumpBuf = 0.0f; }
 
     glm::vec3 np = pos + vel * dt;
     glm::vec3 t = pos;

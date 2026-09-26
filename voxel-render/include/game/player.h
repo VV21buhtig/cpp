@@ -14,6 +14,9 @@ struct Player {
     float halfW = 0.3f, height = 1.8f, eye = 1.62f;
     // плавный автошаг: подъём stepFromY -> stepToY за stepDur
     float stepT = 0.0f, stepDur = 0.12f, stepFromY = 0.0f, stepToY = 0.0f;
+    // прыжок только по нажатию (зажатый пробел не бхопит): edge + буфер 0.15с
+    bool prevJumpHeld = false;
+    float jumpBuf = 0.0f;
 
     void spawn(const World& w, int wx, int wz);
     // dt уже клампнут. keys: fwd/strafe в плоскости XZ, yaw-радианы, jump, down

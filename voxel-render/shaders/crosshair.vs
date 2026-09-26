@@ -1,3 +1,6 @@
 #version 450 core
-layout (location = 0) in vec3 aPos;
-void main() { gl_Position = vec4(aPos, 1.0); }
+// фулскрин-треугольник без VBO: позиции из gl_VertexID
+void main() {
+    vec2 v = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    gl_Position = vec4(v * 2.0 - 1.0, 0.0, 1.0);
+}
