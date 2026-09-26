@@ -153,7 +153,8 @@ int main()
         bool jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         bool down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         player.update(deltaTime, world, mv, glm::radians(camera.Yaw), jump, down);
-        camera.Position = player.pos + glm::vec3(0.0f, player.eye, 0.0f);
+        // player живёт в координатах мира (0..48), рендер сдвинут на worldOffset
+        camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eye, 0.0f);
 
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
