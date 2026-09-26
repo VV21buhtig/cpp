@@ -114,6 +114,7 @@ int main()
     mesh.init();
 
     // Engine: один тестовый чанк 16x16 (пол + столбик). Отдельный VAO/VBO, кубы не трогаем.
+    const glm::vec3 chunkOffset(-8.0f, -3.0f, -8.0f);
     Chunk chunk;
     for (int z = 0; z < 16; z++)
         for (int x = 0; x < 16; x++)
@@ -146,9 +147,25 @@ int main()
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.5f, 50.0f);
         glm::mat4 view = camera.GetViewMatrix();
 
-        // ---- PICK ----
+        // ---- PICK: кубы + воксели чанка, ближе — тот и подсвечиваем ----
         int selectedCube = pickCube(camera.Position, camera.Front,
                                     cubePositions, NR_CUBES, 50.0f);
+        int cbx = -1, cby = -1, cbz = -1;
+        float chunkT = pickChunkBlock(camera.Position, camera.Front, chunk, chunkOffset,
+                                      50.0f, cbx, cby, cbz);
+        // t куба для сравнения (пересчёт дешёвый, 10 штук)
+        bool chunkWins = false;
+        if (cbx >= 0) {
+            if (selectedCube < 0) chunkWins = true;
+            else {
+                glm::mat4 cm = cubeModelMatrix(cubePositions[selectedCube], selectedCube);
+                glm::mat4 inv = glm::inverse(cm);
+                float cubeT = rayAABBLocal(glm::vec3(inv * glm::vec4(camera.Position, 1.0f)),
+                                           glm::vec3(inv * glm::vec4(camera.Front, 0.0f)));
+                if (cubeT < 0.0f || chunkT < cubeT) chunkWins = true;
+            }
+        }
+        if (chunkWins) selectedCube = -1; // куб не подсвечиваем, светим воксель
 
         // =====================================================
         //  PASS 1: непрозрачные (пишут в stencil)
@@ -206,7 +223,7 @@ int main()
         // чанк: тот же lightingShader, model=сдвиг под ногами (пишет в stencil как opaque)
         {
             glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, glm::vec3(-8.0f, -3.0f, -8.0f));
+            model = glm::translate(model, chunkOffset);
             lightingShader.setMat4("model", model);
             chunkMesh.draw();
         }
@@ -228,7 +245,7 @@ int main()
         // =====================================================
         //  PASS 2: OUTLINE — только выбранного куба
         // =====================================================
-        if (selectedCube >= 0) {
+        if (selectedCube >= 0 || chunkWins) {
             glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
             glStencilMask(0x00);
             glDisable(GL_DEPTH_TEST);
@@ -237,8 +254,15 @@ int main()
             outlineShader.setMat4("projection", projection);
             outlineShader.setMat4("view", view);
 
-            glm::mat4 model = cubeModelMatrix(cubePositions[selectedCube], selectedCube);
-            model = glm::scale(model, glm::vec3(1.05f));
+            glm::mat4 model;
+            if (chunkWins) {
+                glm::vec3 center = chunkOffset + glm::vec3(cbx + 0.5f, cby + 0.5f, cbz + 0.5f);
+                model = glm::translate(glm::mat4(1.0f), center);
+                model = glm::scale(model, glm::vec3(1.05f));
+            } else {
+                model = cubeModelMatrix(cubePositions[selectedCube], selectedCube);
+                model = glm::scale(model, glm::vec3(1.05f));
+            }
             outlineShader.setMat4("model", model);
 
             mesh.bindCube();
