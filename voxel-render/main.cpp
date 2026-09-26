@@ -31,7 +31,7 @@ float deltaTime = 0.0f, lastFrame = 0.0f;
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 static void keyCb(GLFWwindow*, int key, int, int action, int) {
     if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
-    if (key == GLFW_KEY_F1) {
+    if (key == GLFW_KEY_F1 || key == GLFW_KEY_GRAVE_ACCENT) {
         console.open = !console.open;
         console.clearInput();
         std::cout << (console.open ? "console OPEN — печатай\n" : "console closed\n");
@@ -220,11 +220,11 @@ int main()
     // Консоль света: крутишь из терминала (окно отдаёт фокус терминалу), save в gfx.cfg
     CVarSys cvar;
     cvar.reg("sun.i", 1.0f);     // прямой солнечный свет
-    cvar.reg("sun.amb", 1.0f);   // ambient всего
-    cvar.reg("sun.sat", 1.3f);   // насыщенность дня
-    cvar.reg("sun.gamma", 2.2f); // гамма террейна
+    cvar.reg("sun.amb", 3.0f);   // ambient всего
+    cvar.reg("sun.sat", 1.8f);   // насыщенность дня
+    cvar.reg("sun.gamma", 1.2f); // гамма террейна
     cvar.reg("time.speed", 600.0f); // длина суток, 0 = стоп
-    cvar.reg("fog.near", 90.0f);
+    cvar.reg("fog.near", 0.0f);
     cvar.reg("fog.far", 260.0f);
     cvar.load("gfx.cfg");
     gCvar = &cvar;
