@@ -31,7 +31,12 @@ float deltaTime = 0.0f, lastFrame = 0.0f;
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 static void keyCb(GLFWwindow*, int key, int, int action, int) {
     if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
-    if (key == GLFW_KEY_F1) { console.open = !console.open; console.clearInput(); return; }
+    if (key == GLFW_KEY_F1) {
+        console.open = !console.open;
+        console.clearInput();
+        std::cout << (console.open ? "console OPEN — печатай\n" : "console closed\n");
+        return;
+    }
     if (!console.open) return;
     if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
         if (gCvar) gCvar->exec(console.input);

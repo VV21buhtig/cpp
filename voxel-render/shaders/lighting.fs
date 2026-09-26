@@ -84,7 +84,10 @@ float ShadowCalculation(vec4 posLightSpace, vec3 normal)
             float closest = texture(shadowMap, proj.xy + vec2(x, y) * texel).r;
             shadow += (proj.z - bias > closest) ? 1.0 : 0.0;
         }
-    return (shadow / 9.0) * shadowStrength;
+    shadow /= 9.0;
+    // край shadow-бокса (±70): гасим к нулю чтобы не было видимой границы
+    shadow *= 1.0 - smoothstep(55.0, 70.0, length(viewPos - FragPos));
+    return shadow * shadowStrength;
 }
 
 vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
