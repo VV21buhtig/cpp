@@ -352,6 +352,7 @@ int main()
             glClear(GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);
+            glCullFace(GL_FRONT); // в карту — задние грани: убивает self-acne и мерцание
             for (int cz = 0; cz < World::CZ; cz++)
                 for (int cx = 0; cx < World::CX; cx++) {
                     if (!meshLoaded[cx][cz] || !chunkVisible(cx, cz)) continue;
@@ -360,6 +361,7 @@ int main()
                     meshes[cx][cz].draw();
                 }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glCullFace(GL_BACK); // вернуть для основного прохода
         }
         int fww, fhh;
         glfwGetFramebufferSize(window, &fww, &fhh);

@@ -76,7 +76,7 @@ float ShadowCalculation(vec4 posLightSpace, vec3 normal)
     proj = proj * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 0.0;
-    float bias = max(0.004 * (1.0 - max(dot(normal, sunDirW), 0.0)), 0.0008);
+    float bias = max(0.004 * (1.0 - max(dot(normal, sunDirW), 0.0)), 0.0015);
     float shadow = 0.0;
     vec2 texel = 1.0 / textureSize(shadowMap, 0);
     for (int x = -1; x <= 1; x++)
