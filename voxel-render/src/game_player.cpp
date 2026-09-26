@@ -33,7 +33,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     glm::vec3 fwd(cos(yaw), 0.0f, sin(yaw));
     glm::vec3 right(-fwd.z, 0.0f, fwd.x);
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
-    float speed = fly ? 8.0f : 4.5f;
+    float speed = fly ? 8.0f : 4.3f;
     glm::vec3 wish = (fwd * move.x + right * move.y) * speed;
 
     if (fly) {
@@ -58,10 +58,19 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
 
     glm::vec3 np = pos + vel * dt;
     glm::vec3 t = pos;
+    // Автошаг на 1 блок (как MC auto-jump): упёрся и на земле — пробуем встать выше
     t.x = np.x;
-    if (collides(w, t, halfW, height)) { t.x = pos.x; vel.x = 0; }
+    if (collides(w, t, halfW, height)) {
+        glm::vec3 up = t; up.y += 1.0f;
+        if (onGround && !collides(w, up, halfW, height)) t = up;
+        else { t.x = pos.x; vel.x = 0; }
+    }
     t.z = np.z;
-    if (collides(w, t, halfW, height)) { t.z = pos.z; vel.z = 0; }
+    if (collides(w, t, halfW, height)) {
+        glm::vec3 up = t; up.y += 1.0f;
+        if (onGround && !collides(w, up, halfW, height)) t = up;
+        else { t.z = pos.z; vel.z = 0; }
+    }
     t.y = np.y;
     if (collides(w, t, halfW, height)) {
         if (vel.y <= 0) { // приземление: ставим ровно на блок
