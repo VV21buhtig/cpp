@@ -11,6 +11,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 #include <iostream>
 #include "shader.h"
@@ -68,6 +69,7 @@ int main()
     Shader lightingShader("shaders/lighting.vs", "shaders/lighting.fs");
     Shader lineShader("shaders/line.vs", "shaders/outline.fs");
     Shader crosshairShader("shaders/crosshair.vs", "shaders/crosshair.fs");
+    Shader skyShader("shaders/sky.vs", "shaders/sky.fs");
     unsigned int triVAO = 0;
     glGenVertexArrays(1, &triVAO);
     glBindVertexArray(triVAO);
@@ -198,6 +200,34 @@ int main()
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
 
+        // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
+        float sunA = now * 6.2831853f / 240.0f;
+        glm::vec3 sunVec = glm::normalize(glm::vec3(cos(sunA), sin(sunA), 0.35f));
+        float dayF = glm::smoothstep(-0.08f, 0.25f, sunVec.y);
+        float nightF = 1.0f - dayF;
+        glm::vec3 topColor = glm::mix(glm::vec3(0.008f, 0.015f, 0.05f), glm::vec3(0.30f, 0.55f, 0.92f), dayF);
+        glm::vec3 horizonColor = glm::mix(glm::vec3(0.04f, 0.06f, 0.11f), glm::vec3(0.74f, 0.83f, 0.93f), dayF);
+
+        // небо первым (без глубины)
+        {
+            int ww, hh;
+            glfwGetFramebufferSize(window, &ww, &hh);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            skyShader.use();
+            skyShader.setMat4("invVP", glm::inverse(projection * view));
+            skyShader.setVec3("topColor", topColor);
+            skyShader.setVec3("horizonColor", horizonColor);
+            skyShader.setVec3("sunDir", sunVec);
+            skyShader.setFloat("nightF", nightF);
+            skyShader.setVec2("res", (float)ww, (float)hh);
+            glBindVertexArray(triVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+        }
+
         // ---- PICK по миру DDA (луч в координатах чанков) ----
         glm::vec3 rayO = camera.Position - worldOffset;
         int wx = -1, wy = -1, wz = -1;
@@ -257,11 +287,13 @@ int main()
         lightingShader.use();
         lightingShader.setFloat("material.shininess", 32.0f);
         lightingShader.setVec3("viewPos", camera.Position);
+        lightingShader.setVec3("fogColor", horizonColor);
+        lightingShader.setVec2("fogRange", 50.0f, 170.0f);
 
-        lightingShader.setVec3("dirLight.direction", -0.2f, -1.0f, -0.3f);
-        lightingShader.setVec3("dirLight.ambient",   0.05f, 0.05f, 0.05f);
-        lightingShader.setVec3("dirLight.diffuse",   0.4f,  0.4f,  0.4f);
-        lightingShader.setVec3("dirLight.specular",  0.5f,  0.5f,  0.5f);
+        lightingShader.setVec3("dirLight.direction", -sunVec);
+        lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.06f, 0.08f, 0.14f), glm::vec3(0.05f), dayF));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.03f), glm::vec3(0.4f), dayF));
+        lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.02f), glm::vec3(0.5f), dayF));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
         glm::vec3 pp = player.pos;

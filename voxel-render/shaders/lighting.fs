@@ -53,6 +53,8 @@ uniform DirLight   dirLight;
 uniform PointLight pointLights[NR_POINT_LIGHTS];
 uniform SpotLight  spotLight;
 uniform vec3       viewPos;
+uniform vec3       fogColor;
+uniform vec2       fogRange; // near far
 
 // =========================================================
 //  Функции расчёта для каждого типа света
@@ -154,5 +156,8 @@ void main()
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
-    FragColor = vec4(result * fshade, 1.0);
+    vec3 shaded = result * fshade;
+    float fd = length(viewPos - FragPos);
+    float ff = clamp((fd - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
+    FragColor = vec4(mix(shaded, fogColor, ff), 1.0);
 }
