@@ -55,7 +55,12 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     }
 
     const float g = 22.0f;
-    vel.x = wish.x; vel.z = wish.z;
+    { // вес: на земле управление цепкое, в воздухе — ватное (инерция несёт)
+        float accel = onGround ? 14.0f : 2.5f;
+        float k = 1.0f - expf(-accel * dt);
+        vel.x += (wish.x - vel.x) * k;
+        vel.z += (wish.z - vel.z) * k;
+    }
     // страховка: если уже внутри солида (старый сейв, чужой блок) — вытолкнуть вверх
     if (collides(w, pos, halfW, height)) {
         for (int k = 1; k <= 3; k++) {
