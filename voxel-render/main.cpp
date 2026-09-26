@@ -67,7 +67,7 @@ int main()
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     Shader lightingShader("shaders/lighting.vs", "shaders/lighting.fs");
-    Shader outlineShader("shaders/lighting.vs", "shaders/outline.fs");
+    Shader lineShader("shaders/line.vs", "shaders/outline.fs");
 
     glm::vec3 pointLightPositions[] = {
         glm::vec3(24.0f, 6.0f, 26.0f),
@@ -92,9 +92,23 @@ int main()
         }
     std::cout << "World 3x3 verts: " << totalVerts << "\n";
 
-    // Outline-куб (CCW) — отдельный маленький VAO, чанковые не трогаем.
-    CubeMesh outlineCube;
-    outlineCube.init();
+    // Линии рёбер куба [0,1]^3 — подсветка поверх граней, depth ON (не режется stencil).
+    unsigned int lineVAO = 0, lineVBO = 0;
+    {
+        float e[] = {
+            0,0,0, 1,0,0, 1,0,0, 1,0,1, 1,0,1, 0,0,1, 0,0,1, 0,0,0,
+            0,1,0, 1,1,0, 1,1,0, 1,1,1, 1,1,1, 0,1,1, 0,1,1, 0,1,0,
+            0,0,0, 0,1,0, 1,0,0, 1,1,0, 1,0,1, 1,1,1, 0,0,1, 0,1,1,
+        };
+        glGenVertexArrays(1, &lineVAO);
+        glGenBuffers(1, &lineVBO);
+        glBindVertexArray(lineVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(e), e, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+    }
 
     unsigned int diffuseMap  = makeAtlas2("texture/container2.png", "texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
@@ -212,36 +226,35 @@ int main()
                 meshes[cx][cz].draw();
             }
 
-        // PASS 2: OUTLINE вокселя — жирный поверх
+        // PASS 2: подсветка рёбер — линии поверх граней, depth ON (видно на блоках, прячется за стеной)
         if (hasHit) {
-            glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
-            glStencilMask(0x00);
-            glDisable(GL_DEPTH_TEST);
-
-            outlineShader.use();
-            outlineShader.setMat4("projection", projection);
-            outlineShader.setMat4("view", view);
-            outlineShader.setVec3("outlineColor", 1.0f, 0.55f, 0.1f);
-
-            glm::vec3 center = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), center);
-            model = glm::scale(model, glm::vec3(1.1f));
-            outlineShader.setMat4("model", model);
-
-            outlineCube.bindCube();
-            glDrawArrays(GL_TRIANGLES, 0, 36);
-
             glEnable(GL_DEPTH_TEST);
-        }
+            glDepthFunc(GL_LEQUAL);
+            glLineWidth(3.0f);
 
-        glStencilMask(0xFF);
-        glStencilFunc(GL_ALWAYS, 1, 0xFF);
+            lineShader.use();
+            lineShader.setMat4("projection", projection);
+            lineShader.setMat4("view", view);
+            lineShader.setVec3("outlineColor", 1.0f, 0.55f, 0.1f);
+
+            glm::vec3 mn = worldOffset + glm::vec3(wx - 0.01f, wy - 0.01f, wz - 0.01f);
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), mn);
+            model = glm::scale(model, glm::vec3(1.02f));
+            lineShader.setMat4("model", model);
+
+            glBindVertexArray(lineVAO);
+            glDrawArrays(GL_LINES, 0, 24);
+            glBindVertexArray(0);
+            glLineWidth(1.0f);
+            glDepthFunc(GL_LESS);
+        }
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    outlineCube.destroy();
+    glDeleteVertexArrays(1, &lineVAO);
+    glDeleteBuffers(1, &lineVBO);
     for (int cz = 0; cz < World::CZ; cz++)
         for (int cx = 0; cx < World::CX; cx++)
             meshes[cx][cz].destroy();
