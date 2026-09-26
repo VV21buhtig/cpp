@@ -86,9 +86,9 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     // P00=(u,v) P10=(u+w,v) P11=(u+w,v+h) P01=(u,v+h); UV мировые
                     auto vert = [&](int du, int dv) {
                         float x, y, z, uu, vv;
-                        if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)dv; z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)dv; }
+                        if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
                         else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
-                        else                { x = (float)(u + du); y = (float)dv; z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)dv; }
+                        else                { x = (float)(u + du); y = (float)(v + dv); z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)(v + dv); }
                         pushV(x, y, z, N[0], N[1], N[2], uu, vv);
                     };
                     if (sign > 0) {
