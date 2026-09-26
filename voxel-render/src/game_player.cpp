@@ -62,7 +62,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     { // вес + бхоп: земля цепкая (быстрых слабо тормозит), воздух — стрейф с набором
         float hs = sqrt(vel.x * vel.x + vel.z * vel.z);
         if (onGround) {
-            float acc = (hs > speed + 0.5f) ? 2.5f : 14.0f;
+            float acc = (hs > speed + 0.5f) ? 3.5f : 14.0f;
             float k = 1.0f - expf(-acc * dt);
             vel.x += (wish.x - vel.x) * k;
             vel.z += (wish.z - vel.z) * k;
@@ -76,10 +76,14 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
                 float cur = vel.x * nx + vel.z * nz;
                 float add = speed - cur;
                 if (add > 0.0f) {
-                    float a = 30.0f * dt;
+                    float a = 12.0f * dt;
                     if (a > add) a = add;
                     vel.x += nx * a;
                     vel.z += nz * a;
+                    // кепка ~1.6x walk как в кс: выше только долгой идеальной дугой не уедешь
+                    float nhs = sqrt(vel.x * vel.x + vel.z * vel.z);
+                    const float MAXA = 7.0f;
+                    if (nhs > MAXA) { vel.x *= MAXA / nhs; vel.z *= MAXA / nhs; }
                 }
             }
             float drag = 1.0f - 0.1f * dt;
