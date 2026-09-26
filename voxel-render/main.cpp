@@ -4,6 +4,7 @@
 #include "engine/mesh.h"
 #include "engine/texture.h"
 #include "engine/chunk.h"
+#include "engine/world.h"
 #include "game/pick.h"
 
 #include <glm/glm.hpp>
@@ -11,11 +12,10 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <iostream>
-#include <map>
 #include "shader.h"
 #include "camera.h"
 
-Camera camera(glm::vec3(0.0f, 0.0f, 3.0f));
+Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 float lastX = 640.0f, lastY = 360.0f;
 bool  firstMouse = true;
 float deltaTime = 0.0f, lastFrame = 0.0f;
@@ -36,10 +36,6 @@ void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT,    deltaTime);
 }
 
-// Engine loadTexture -> engine/texture.h, Game pick -> game/pick.h
-
-// (moved to engine/game modules)
-
 int main()
 {
     if (!glfwInit()) { std::cerr << "GLFW fail\n"; return -1; }
@@ -59,9 +55,7 @@ int main()
     if (gladLoadGL(glfwGetProcAddress) == 0) { glfwTerminate(); return -1; }
     std::cout << "RENDERER: " << glGetString(GL_RENDERER) << "\n";
 
-    // =========================================================
-    //  DEPTH + STENCIL + BLEND (главы 22-24)
-    // =========================================================
+    // DEPTH + STENCIL + CULL + BLEND (главы 22-25). Порядок не менять.
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glEnable(GL_STENCIL_TEST);
@@ -72,59 +66,34 @@ int main()
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     Shader lightingShader("shaders/lighting.vs", "shaders/lighting.fs");
-    Shader lightCubeShader("shaders/lighting.vs", "shaders/light_cube.fs");
-    Shader alphaShader   ("shaders/lighting.vs", "shaders/alpha.fs");
-    Shader outlineShader ("shaders/lighting.vs", "shaders/outline.fs");
-
-    glm::vec3 cubePositions[] = {
-        glm::vec3( 0.0f,  0.0f,   0.0f),
-        glm::vec3( 2.0f,  5.0f, -15.0f),
-        glm::vec3(-1.5f, -2.2f,  -2.5f),
-        glm::vec3(-3.8f, -2.0f, -12.3f),
-        glm::vec3( 2.4f, -0.4f,  -3.5f),
-        glm::vec3(-1.7f,  3.0f,  -7.5f),
-        glm::vec3( 1.3f, -2.0f,  -2.5f),
-        glm::vec3( 1.5f,  2.0f,  -2.5f),
-        glm::vec3( 1.5f,  0.2f,  -1.5f),
-        glm::vec3(-1.3f,  1.0f,  -1.5f),
-    };
-    const int NR_CUBES = 10;
+    Shader outlineShader("shaders/lighting.vs", "shaders/outline.fs");
 
     glm::vec3 pointLightPositions[] = {
-        glm::vec3( 0.7f,  0.2f,   2.0f),
-        glm::vec3( 2.3f, -3.3f,  -4.0f),
-        glm::vec3(-4.0f,  2.0f, -12.0f),
-        glm::vec3( 0.0f,  0.0f,  -3.0f),
+        glm::vec3(24.0f, 6.0f, 26.0f),
+        glm::vec3(10.0f, 5.0f, 10.0f),
+        glm::vec3(38.0f, 6.0f, 38.0f),
+        glm::vec3(24.0f, 4.0f, 24.0f),
     };
 
-    glm::vec3 transparentPositions[] = {
-        glm::vec3( 0.5f,  0.5f,   1.5f),
-        glm::vec3( 1.0f,  1.0f,   0.5f),
-        glm::vec3( 0.0f,  0.0f,   2.5f),
-        glm::vec3(-1.0f,  0.5f,   1.0f),
-        glm::vec3( 0.5f, -0.5f,   0.5f),
+    // Чистая мапа: мир 3x3 чанка, пол y=0. Никаких висяков.
+    // Мировые координаты блоков 0..48, рендерим со сдвигом чтобы центр был в нуле.
+    const glm::vec3 worldOffset(-24.0f, 0.0f, -24.0f);
+    World world;
+    ChunkMesh meshes[World::CX][World::CZ];
+    auto rebuild = [&](int cx, int cz) {
+        meshes[cx][cz].upload(world.buildChunk(cx, cz));
     };
-    const int NR_TRANSPARENT = 5;
+    size_t totalVerts = 0;
+    for (int cz = 0; cz < World::CX; cz++)
+        for (int cx = 0; cx < World::CX; cx++) {
+            rebuild(cx, cz);
+            totalVerts += meshes[cx][cz].vertexCount;
+        }
+    std::cout << "World 3x3 verts: " << totalVerts << "\n";
 
-    // =========================================================
-    //  КУБ — массив из главы 15 (position + normal + uv)
-    // =========================================================
-    // Engine: вершины CCW + VBO/VAO живут в engine/mesh.h (порядок GL 1:1)
-    CubeMesh mesh;
-    mesh.init();
-
-    // Engine: один тестовый чанк 16x16 (пол + столбик). Отдельный VAO/VBO, кубы не трогаем.
-    const glm::vec3 chunkOffset(-8.0f, -3.0f, -8.0f);
-    Chunk chunk;
-    for (int z = 0; z < 16; z++)
-        for (int x = 0; x < 16; x++)
-            chunk.set(x, 0, z, 1);
-    chunk.set(8, 1, 8, 1);
-    chunk.set(8, 2, 8, 1);
-    chunk.set(8, 3, 8, 1);
-    ChunkMesh chunkMesh;
-    chunkMesh.upload(chunk.buildMesh());
-    std::cout << "Chunk verts: " << chunkMesh.vertexCount << "\n";
+    // Outline-куб (CCW) — отдельный маленький VAO, чанковые не трогаем.
+    CubeMesh outlineCube;
+    outlineCube.init();
 
     unsigned int diffuseMap  = loadTexture("texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
@@ -133,7 +102,9 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\n10 контейнеров, 5 прозрачных кубов, outline на наведённом.\n";
+    std::cout << "\nLMB сломать, RMB поставить, ESC выход.\n";
+
+    bool prevL = false, prevR = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -144,32 +115,51 @@ int main()
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.5f, 50.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 200.0f);
         glm::mat4 view = camera.GetViewMatrix();
 
-        // ---- PICK: кубы + воксели чанка, ближе — тот и подсвечиваем ----
-        int selectedCube = pickCube(camera.Position, camera.Front,
-                                    cubePositions, NR_CUBES, 50.0f);
-        int cbx = -1, cby = -1, cbz = -1;
-        float chunkT = pickChunkBlock(camera.Position, camera.Front, chunk, chunkOffset,
-                                      50.0f, cbx, cby, cbz);
-        // t куба для сравнения (пересчёт дешёвый, 10 штук)
-        bool chunkWins = false;
-        if (cbx >= 0) {
-            if (selectedCube < 0) chunkWins = true;
-            else {
-                glm::mat4 cm = cubeModelMatrix(cubePositions[selectedCube], selectedCube);
-                glm::mat4 inv = glm::inverse(cm);
-                float cubeT = rayAABBLocal(glm::vec3(inv * glm::vec4(camera.Position, 1.0f)),
-                                           glm::vec3(inv * glm::vec4(camera.Front, 0.0f)));
-                if (cubeT < 0.0f || chunkT < cubeT) chunkWins = true;
+        // ---- PICK по миру (луч в мировых координатах чанков) ----
+        glm::vec3 rayO = camera.Position - worldOffset;
+        int wx = -1, wy = -1, wz = -1;
+        glm::vec3 hitN(0.0f);
+        float hitT = world.pick(rayO, camera.Front, 100.0f, wx, wy, wz, hitN);
+        bool hasHit = (hitT > 0.0f);
+
+        // ---- BREAK / PLACE (по фронту нажатия) ----
+        bool curL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        if (hasHit) {
+            if (curL && !prevL) {
+                if (!(wx >= 0 && wx < 48 && wy == 0 && wz >= 0 && wz < 48 && wx % 16 == 0)) {
+                    // пол y=0 ломать можно, но не будем дырявить до пустоты? можно — разрешаем
+                }
+                world.setBlock(wx, wy, wz, 0);
+                int cx = wx / 16, cz = wz / 16;
+                rebuild(cx, cz);
+                // шов: если на границе чанка — пересобрать соседа
+                if (wx % 16 == 0 && cx > 0) rebuild(cx - 1, cz);
+                if (wx % 16 == 15 && cx < 2) rebuild(cx + 1, cz);
+                if (wz % 16 == 0 && cz > 0) rebuild(cx, cz - 1);
+                if (wz % 16 == 15 && cz < 2) rebuild(cx, cz + 1);
+            }
+            if (curR && !prevR) {
+                int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
+                if (world.getBlock(px, py, pz) == 0) {
+                    world.setBlock(px, py, pz, 1);
+                    int cx = px / 16, cz = pz / 16;
+                    if (cx >= 0 && cx < 3 && cz >= 0 && cz < 3) {
+                        rebuild(cx, cz);
+                        if (px % 16 == 0 && cx > 0) rebuild(cx - 1, cz);
+                        if (px % 16 == 15 && cx < 2) rebuild(cx + 1, cz);
+                        if (pz % 16 == 0 && cz > 0) rebuild(cx, cz - 1);
+                        if (pz % 16 == 15 && cz < 2) rebuild(cx, cz + 1);
+                    }
+                }
             }
         }
-        if (chunkWins) selectedCube = -1; // куб не подсвечиваем, светим воксель
+        prevL = curL; prevR = curR;
 
-        // =====================================================
-        //  PASS 1: непрозрачные (пишут в stencil)
-        // =====================================================
+        // PASS 1: opaque (пишут в stencil)
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         glStencilFunc(GL_ALWAYS, 1, 0xFF);
         glStencilMask(0xFF);
@@ -185,7 +175,7 @@ int main()
 
         for (int i = 0; i < 4; i++) {
             std::string b = "pointLights[" + std::to_string(i) + "].";
-            lightingShader.setVec3 (b + "position", pointLightPositions[i]);
+            lightingShader.setVec3 (b + "position", pointLightPositions[i] + worldOffset);
             lightingShader.setVec3 (b + "ambient",   0.05f, 0.05f, 0.05f);
             lightingShader.setVec3 (b + "diffuse",   0.8f,  0.8f,  0.8f);
             lightingShader.setVec3 (b + "specular",  1.0f,  1.0f,  1.0f);
@@ -213,39 +203,16 @@ int main()
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, specularMap);
 
-        mesh.bindCube();
-        for (int i = 0; i < NR_CUBES; i++) {
-            glm::mat4 model = cubeModelMatrix(cubePositions[i], i);
-            lightingShader.setMat4("model", model);
-            glDrawArrays(GL_TRIANGLES, 0, 36);
-        }
+        for (int cz = 0; cz < World::CZ; cz++)
+            for (int cx = 0; cx < World::CX; cx++) {
+                glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
+                glm::mat4 model = glm::translate(glm::mat4(1.0f), off);
+                lightingShader.setMat4("model", model);
+                meshes[cx][cz].draw();
+            }
 
-        // чанк: тот же lightingShader, model=сдвиг под ногами (пишет в stencil как opaque)
-        {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, chunkOffset);
-            lightingShader.setMat4("model", model);
-            chunkMesh.draw();
-        }
-
-        // лампы
-        glStencilMask(0x00);
-        lightCubeShader.use();
-        lightCubeShader.setMat4("projection", projection);
-        lightCubeShader.setMat4("view", view);
-        mesh.bindLight();
-        for (int i = 0; i < 4; i++) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, pointLightPositions[i]);
-            model = glm::scale(model, glm::vec3(0.2f));
-            lightCubeShader.setMat4("model", model);
-            glDrawArrays(GL_TRIANGLES, 0, 36);
-        }
-
-        // =====================================================
-        //  PASS 2: OUTLINE — только выбранного куба
-        // =====================================================
-        if (selectedCube >= 0 || chunkWins) {
+        // PASS 2: OUTLINE вокселя (потом сделаем жирнее/ярче)
+        if (hasHit) {
             glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
             glStencilMask(0x00);
             glDisable(GL_DEPTH_TEST);
@@ -254,18 +221,12 @@ int main()
             outlineShader.setMat4("projection", projection);
             outlineShader.setMat4("view", view);
 
-            glm::mat4 model;
-            if (chunkWins) {
-                glm::vec3 center = chunkOffset + glm::vec3(cbx + 0.5f, cby + 0.5f, cbz + 0.5f);
-                model = glm::translate(glm::mat4(1.0f), center);
-                model = glm::scale(model, glm::vec3(1.05f));
-            } else {
-                model = cubeModelMatrix(cubePositions[selectedCube], selectedCube);
-                model = glm::scale(model, glm::vec3(1.05f));
-            }
+            glm::vec3 center = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), center);
+            model = glm::scale(model, glm::vec3(1.05f));
             outlineShader.setMat4("model", model);
 
-            mesh.bindCube();
+            outlineCube.bindCube();
             glDrawArrays(GL_TRIANGLES, 0, 36);
 
             glEnable(GL_DEPTH_TEST);
@@ -274,37 +235,14 @@ int main()
         glStencilMask(0xFF);
         glStencilFunc(GL_ALWAYS, 1, 0xFF);
 
-        // =====================================================
-        //  PASS 3: прозрачные кубы
-        // =====================================================
-        std::map<float, glm::vec3> sorted;
-        for (int i = 0; i < NR_TRANSPARENT; i++) {
-            float d = glm::length(camera.Position - transparentPositions[i]);
-            sorted[d] = transparentPositions[i];
-        }
-
-        alphaShader.use();
-        alphaShader.setMat4("projection", projection);
-        alphaShader.setMat4("view", view);
-        alphaShader.setVec3("color", 0.4f, 0.7f, 0.9f);
-        alphaShader.setFloat("alpha", 0.35f);
-
-        glDepthMask(GL_FALSE);
-        mesh.bindCube();
-        for (auto it = sorted.rbegin(); it != sorted.rend(); ++it) {
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, it->second);
-            alphaShader.setMat4("model", model);
-            glDrawArrays(GL_TRIANGLES, 0, 36);
-        }
-        glDepthMask(GL_TRUE);
-
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    mesh.destroy();
-    chunkMesh.destroy();
+    outlineCube.destroy();
+    for (int cz = 0; cz < World::CZ; cz++)
+        for (int cx = 0; cx < World::CX; cx++)
+            meshes[cx][cz].destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
     glfwDestroyWindow(window);

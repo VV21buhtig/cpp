@@ -29,6 +29,7 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_texture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_chunk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_world.cpp
 )
 target_include_directories(engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
