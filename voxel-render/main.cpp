@@ -96,7 +96,7 @@ int main()
     CubeMesh outlineCube;
     outlineCube.init();
 
-    unsigned int diffuseMap  = makeAtlas2("texture/container.png", "texture/container2.png");
+    unsigned int diffuseMap  = makeAtlas2("texture/container2.png", "texture/container2.png");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
 
     lightingShader.use();

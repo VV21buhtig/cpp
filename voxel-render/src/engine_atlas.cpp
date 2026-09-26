@@ -43,6 +43,12 @@ unsigned int makeAtlas2(const char* pathA, const char* pathB) {
     resizeRGBA(dA, wA, hA, tA, T, T);
     resizeRGBA(dB, w2, h2, tB, T, T);
     stbi_image_free(dA); stbi_image_free(dB);
+    // tile0 (бока/низ) затемняем x0.8 чтобы отличать от верха без мусорных картинок
+    for (size_t i = 0; i < tA.size(); i += 4) {
+        tA[i] = (unsigned char)(tA[i] * 0.8f);
+        tA[i + 1] = (unsigned char)(tA[i + 1] * 0.8f);
+        tA[i + 2] = (unsigned char)(tA[i + 2] * 0.8f);
+    }
     std::vector<unsigned char> atlas(T * T * 2 * 4);
     for (int y = 0; y < T; y++) {
         memcpy(&atlas[(y * T * 2) * 4], &tA[(y * T) * 4], T * 4);
