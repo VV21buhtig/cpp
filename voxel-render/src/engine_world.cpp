@@ -6,10 +6,20 @@
 void World::init(int ncx, int ncz, int s) {
     cx_ = ncx; cz_ = ncz; seed_ = s;
     chunks.assign(ncx * ncz, Chunk());
-    // Холмы: value-noise 2 октавы + сид. h=1..4.
-    auto hash01 = [s](int x, int z) -> float {
+    // Рельеф как в новом MC: 2D-октавы (континенты/холмы/горы-маска) + 3D-карв пещер.
+    // SEA=20. Горы до ~44. ids: 1 grass 2 dirt 3 stone 6 water 7 lava.
+    const int SEA = 20;
+    auto hash2 = [s](int x, int z) -> float {
         int h = (x + s * 131) * 374761393 + (z + s * 57) * 668265263;
         h = (h ^ (h >> 13)) * 1274126177;
+        h = h ^ (h >> 16);
+        return (float)(h & 0xffff) / 65535.0f;
+    };
+    auto hash3 = [s](int x, int y, int z) -> float {
+        unsigned int h = (unsigned int)(x + s * 131) * 374761393u
+                       + (unsigned int)(y + s * 733) * 2246822519u
+                       + (unsigned int)(z + s * 57) * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
         h = h ^ (h >> 16);
         return (float)(h & 0xffff) / 65535.0f;
     };
@@ -17,17 +27,65 @@ void World::init(int ncx, int ncz, int s) {
     auto noise2 = [&](float fx, float fz) {
         int x0 = (int)floor(fx), z0 = (int)floor(fz);
         float tx = smooth(fx - x0), tz = smooth(fz - z0);
-        float a = hash01(x0, z0), b = hash01(x0 + 1, z0);
-        float c = hash01(x0, z0 + 1), d = hash01(x0 + 1, z0 + 1);
+        float a = hash2(x0, z0), b = hash2(x0 + 1, z0);
+        float c = hash2(x0, z0 + 1), d = hash2(x0 + 1, z0 + 1);
         return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
     };
-    for (int wz = 0; wz < ncz * Chunk::SZ; wz++)
-        for (int wx = 0; wx < ncx * Chunk::SX; wx++) {
-            float n = 0.65f * noise2(wx / 9.0f, wz / 9.0f)
-                    + 0.35f * noise2(wx / 4.0f + 13.7f, wz / 4.0f + 7.3f);
-            int h = 1 + (int)(n * 3.0f); // 1..4
-            for (int y = 0; y <= h && y < Chunk::SY; y++)
-                setBlock(wx, y, wz, y == h ? 1 : (y >= h - 2 ? 2 : 3)); // grass/dirt/stone
+    auto noise3 = [&](float fx, float fy, float fz) {
+        int x0 = (int)floor(fx), y0 = (int)floor(fy), z0 = (int)floor(fz);
+        float tx = smooth(fx - x0), ty = smooth(fy - y0), tz = smooth(fz - z0);
+        float c000 = hash3(x0,y0,z0), c100 = hash3(x0+1,y0,z0);
+        float c010 = hash3(x0,y0+1,z0), c110 = hash3(x0+1,y0+1,z0);
+        float c001 = hash3(x0,y0,z0+1), c101 = hash3(x0+1,y0,z0+1);
+        float c011 = hash3(x0,y0+1,z0+1), c111 = hash3(x0+1,y0+1,z0+1);
+        float x00 = c000+(c100-c000)*tx, x10 = c010+(c110-c010)*tx;
+        float x01 = c001+(c101-c001)*tx, x11 = c011+(c111-c011)*tx;
+        float y0v = x00+(x10-x00)*ty, y1v = x01+(x11-x01)*ty;
+        return y0v+(y1v-y0v)*tz;
+    };
+    int W = ncx * Chunk::SX, D = ncz * Chunk::SZ;
+    // 1. высота: континенты + холмы + горы по маске
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++) {
+            float cont = noise2(wx / 48.0f, wz / 48.0f);                    // континенты
+            float hills = 0.6f * noise2(wx / 11.0f, wz / 11.0f)
+                        + 0.4f * noise2(wx / 5.0f + 13.7f, wz / 5.0f + 7.3f);
+            float mraw = (noise2(wx / 31.0f + 71.0f, wz / 31.0f + 3.0f) - 0.55f) / 0.45f;
+            if (mraw < 0.0f) mraw = 0.0f; if (mraw > 1.0f) mraw = 1.0f;
+            float mount = smooth(mraw); // маска гор 0..1
+            float h = 8.0f + cont * 10.0f + hills * 6.0f + mount * mount * 26.0f;
+            int hi = (int)h;
+            if (hi >= Chunk::SY - 1) hi = Chunk::SY - 2;
+            for (int y = 0; y <= hi; y++) setBlock(wx, y, wz, 3); // пока камень
+            // 2. спагетти-пещеры: тонкая зона |n-0.5| (края шума), только ниже поверхности-1
+            for (int y = 1; y < hi - 1 && y < Chunk::SY; y++) {
+                float n = 0.55f * noise3(wx / 9.0f, y / 7.0f, wz / 9.0f)
+                        + 0.45f * noise3(wx / 23.0f + 5.0f, y / 17.0f, wz / 23.0f + 9.0f);
+                if (fabs(n - 0.5f) < 0.012f) setBlock(wx, y, wz, 0); // спагетти-тоннели
+            }
+        }
+    // 3. флюиды: море + озёра в низинах, лава на дне
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++)
+            for (int y = 0; y <= SEA && y < Chunk::SY; y++)
+                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 6); // вода
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++)
+            for (int y = 0; y <= 2; y++)
+                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 7); // лава на дне
+    // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++) {
+            int top = -1;
+            for (int y = Chunk::SY - 1; y >= 0; y--)
+                if (isSolid(getBlock(wx, y, wz))) { top = y; break; }
+            if (top < 0) continue;
+            for (int y = top; y >= 0 && y >= top - 3; y--) {
+                unsigned char cur = getBlock(wx, y, wz);
+                if (cur != 3) continue;
+                if (y == top) setBlock(wx, y, wz, top <= SEA ? 2 : 1);
+                else setBlock(wx, y, wz, 2);
+            }
         }
 }
 
@@ -64,27 +122,31 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     for (int d = 0; d < 6; d++) {
         int axis = d / 2;       // 0=x 1=y 2=z
         int sign = (d % 2 == 0) ? 1 : -1;
-        for (int s = 0; s < S; s++) {
-            unsigned char mask[16][16] = {};
-            for (int v = 0; v < S; v++)
-                for (int u = 0; u < S; u++) {
+        int ns = (axis == 1) ? Chunk::SY : S;
+        for (int s = 0; s < ns; s++) {
+            int NU = S, NV = (axis == 1) ? S : Chunk::SY;
+            unsigned char mask[64][16] = {};
+            for (int v = 0; v < NV; v++)
+                for (int u = 0; u < NU; u++) {
                     int bx, by, bz, ox = 0, oy = 0, oz = 0;
                     if (axis == 0)      { bx = wx0 + s; by = v; bz = wz0 + u; ox = sign; }
                     else if (axis == 1) { bx = wx0 + u; by = s; bz = wz0 + v; oy = sign; }
                     else                { bx = wx0 + u; by = v; bz = wz0 + s; oz = sign; }
                     unsigned char id = getBlock(bx, by, bz);
-                    mask[v][u] = (id != 0 && getBlock(bx + ox, by + oy, bz + oz) == 0) ? id : 0;
+                    unsigned char ob = getBlock(bx + ox, by + oy, bz + oz);
+                    // флюиды не мешутся; грань нужна если сосед не opaque (вода видна насквозь)
+                    mask[v][u] = (id != 0 && id < 6 && (ob == 0 || ob >= 6)) ? id : 0;
                 }
-            bool done[16][16] = {};
-            for (int v = 0; v < S; v++)
-                for (int u = 0; u < S; u++) {
+            bool done[64][16] = {};
+            for (int v = 0; v < NV; v++)
+                for (int u = 0; u < NU; u++) {
                     unsigned char id = mask[v][u];
                     if (!id || done[v][u]) continue;
                     int w = 1;
-                    while (u + w < S && mask[v][u + w] == id && !done[v][u + w]) w++;
+                    while (u + w < NU && mask[v][u + w] == id && !done[v][u + w]) w++;
                     int h = 1;
                     bool grow = true;
-                    while (v + h < S && grow) {
+                    while (v + h < NV && grow) {
                         for (int k = 0; k < w; k++)
                             if (mask[v + h][u + k] != id || done[v + h][u + k]) { grow = false; break; }
                         if (grow) h++;
@@ -153,7 +215,7 @@ float World::pick(glm::vec3 o, glm::vec3 d, float maxDist,
     float tmx = (fabs(d.x) < 1e-8f) ? INF : ((sx > 0 ? (x + 1 - o.x) : (o.x - x)) * tdx);
     float tmy = (fabs(d.y) < 1e-8f) ? INF : ((sy > 0 ? (y + 1 - o.y) : (o.y - y)) * tdy);
     float tmz = (fabs(d.z) < 1e-8f) ? INF : ((sz > 0 ? (z + 1 - o.z) : (o.z - z)) * tdz);
-    if (getBlock(x, y, z)) { wx = x; wy = y; wz = z; normal = glm::vec3(0.0f); return 0.0f; }
+    if (isSolid(getBlock(x, y, z))) { wx = x; wy = y; wz = z; normal = glm::vec3(0.0f); return 0.0f; }
     float t = 0.0f;
     glm::vec3 n(0.0f);
     while (t <= maxDist) {
@@ -161,7 +223,7 @@ float World::pick(glm::vec3 o, glm::vec3 d, float maxDist,
         else if (tmy < tmz)              { y += sy; t = tmy; tmy += tdy; n = glm::vec3(0, (float)-sy, 0); }
         else                             { z += sz; t = tmz; tmz += tdz; n = glm::vec3(0, 0, (float)-sz); }
         if (t > maxDist) break;
-        if (getBlock(x, y, z)) { wx = x; wy = y; wz = z; normal = n; return t; }
+        if (isSolid(getBlock(x, y, z))) { wx = x; wy = y; wz = z; normal = n; return t; }
     }
     return -1.0f;
 }

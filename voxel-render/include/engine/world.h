@@ -28,6 +28,7 @@ struct World {
         return wx >= 0 && wx < sizeX() && wz >= 0 && wz < sizeZ();
     }
     unsigned char getBlock(int wx, int y, int wz) const;
+    static bool isSolid(unsigned char id) { return id != 0 && id < 6; } // флюиды не твердые
     void setBlock(int wx, int y, int wz, unsigned char v);
     // меш одного чанка с учётом соседних чанков (без швов)
     std::vector<float> buildChunk(int cx, int cz) const;

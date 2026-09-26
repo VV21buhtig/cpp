@@ -5,7 +5,7 @@
 
 // Engine: один чанк 16x16x16. 0=air, 1=grass, 2=dirt, 3=stone. Мешим только видимые грани (CCW).
 struct Chunk {
-    static const int SX = 16, SY = 16, SZ = 16;
+    static const int SX = 16, SY = 64, SZ = 16;
     unsigned char blocks[SX * SY * SZ] = {};
 
     int idx(int x, int y, int z) const { return x + SX * (y + SY * z); }

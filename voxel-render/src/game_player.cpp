@@ -15,7 +15,7 @@ static bool collides(const World& w, glm::vec3 p, float hw, float h) {
     for (int xi = (int)floor(x0); xi <= (int)floor(x1); xi++)
         for (int yi = (int)floor(y0); yi <= (int)floor(y1); yi++)
             for (int zi = (int)floor(z0); zi <= (int)floor(z1); zi++)
-                if (w.getBlock(xi, yi, zi)) return true;
+                if (World::isSolid(w.getBlock(xi, yi, zi))) return true;
     (void)solidAt;
     return false;
 }
@@ -23,7 +23,7 @@ static bool collides(const World& w, glm::vec3 p, float hw, float h) {
 void Player::spawn(const World& w, int wx, int wz) {
     int h = 0;
     for (int y = Chunk::SY - 1; y >= 0; y--)
-        if (w.getBlock(wx, y, wz)) { h = y; break; }
+        if (World::isSolid(w.getBlock(wx, y, wz))) { h = y; break; }
     pos = glm::vec3(wx + 0.5f, h + 1.01f, wz + 0.5f);
     vel = glm::vec3(0.0f);
 }
@@ -102,6 +102,16 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     vel.y -= g * dt;
     if (vel.y < -30.0f) vel.y = -30.0f;
     if (onGround && jumpBuf > 0.0f) { vel.y = jumpVel; onGround = false; jumpBuf = 0.0f; }
+
+    // флюиды по клетке ног: 6 вода (тонем медленно, Space всплыть), 7 лава (смерть)
+    unsigned char feetB = w.getBlock((int)floor(pos.x), (int)floor(pos.y + 0.3f), (int)floor(pos.z));
+    if (feetB == 7) { spawn(w, w.sizeX() / 2, w.sizeZ() / 2); vel = glm::vec3(0.0f); return; }
+    bool inWater = (feetB == 6);
+    if (inWater) {
+        vel.y -= g * 0.25f * dt;
+        if (vel.y < -2.0f) vel.y = -2.0f;
+        if (jump) { vel.y = 4.0f; onGround = false; }
+    }
 
     glm::vec3 np = pos + vel * dt;
     glm::vec3 t = pos;
