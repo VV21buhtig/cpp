@@ -3,7 +3,7 @@
 
 #include <vector>
 
-// Engine: один чанк 16x16x16. 0=air, 1=solid. Мешим только видимые грани (CCW).
+// Engine: один чанк 16x16x16. 0=air, 1=grass, 2=dirt, 3=stone. Мешим только видимые грани (CCW).
 struct Chunk {
     static const int SX = 16, SY = 16, SZ = 16;
     unsigned char blocks[SX * SY * SZ] = {};
@@ -19,7 +19,7 @@ struct Chunk {
     void set(int x, int y, int z, unsigned char v) {
         if (inBounds(x, y, z)) blocks[idx(x, y, z)] = v;
     }
-    // строит interleaved pos3+norm3+uv2 только для exposed-граней
+    // строит interleaved pos3+norm3+uv2+tile1 только для exposed-граней
     std::vector<float> buildMesh() const;
 };
 

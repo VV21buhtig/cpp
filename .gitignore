@@ -2,6 +2,11 @@
 book_pdf.pdf
 *.pdf
 
+# Локальный текстурпак без свободной лицензии (Reijvi и т.п.) — в репо не едет.
+# Замена: кинь свои 16x16 PNG с теми же именами (или CC-BY-SA из Luanti).
+voxel-render/texture/tiles/*.png
+!voxel-render/texture/tiles/README.md
+
 # Build artifacts - генерируются через cmake/make
 voxel-render/build/
 build/

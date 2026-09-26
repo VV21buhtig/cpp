@@ -24,7 +24,7 @@ World::World(int s) : seed(s) {
                     + 0.35f * noise2(wx / 4.0f + 13.7f, wz / 4.0f + 7.3f);
             int h = 1 + (int)(n * 3.0f); // 1..4
             for (int y = 0; y <= h && y < Chunk::SY; y++)
-                setBlock(wx, y, wz, 1);
+                setBlock(wx, y, wz, y == h ? 1 : (y >= h - 2 ? 2 : 3)); // grass/dirt/stone
         }
 }
 
@@ -44,11 +44,16 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     // Greedy: по каждой оси и направлению строим маску 16x16 на слайс и сливаем
     // в прямоугольники. UV — в мировых координатах блоков (шов бесшовный, REPEAT).
     std::vector<float> out;
-    out.reserve(4096 * 8);
-    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v) {
+    out.reserve(4096 * 9);
+    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile) {
         out.push_back(x); out.push_back(y); out.push_back(z);
         out.push_back(nx); out.push_back(ny); out.push_back(nz);
-        out.push_back(u); out.push_back(v);
+        out.push_back(u); out.push_back(v); out.push_back(tile);
+    };
+    auto tileFor = [](unsigned char id, int axis, int sign) -> float {
+        if (id == 1) return (axis == 1) ? (sign > 0 ? 0.0f : 2.0f) : 1.0f; // grass: top/side/bottom(dirt)
+        if (id == 2) return 2.0f;
+        return 3.0f; // stone и всё остальное
     };
     const int S = Chunk::SX;
     int wx0 = cx * S, wz0 = cz * S;
@@ -57,26 +62,28 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
         int axis = d / 2;       // 0=x 1=y 2=z
         int sign = (d % 2 == 0) ? 1 : -1;
         for (int s = 0; s < S; s++) {
-            bool mask[16][16] = {};
+            unsigned char mask[16][16] = {};
             for (int v = 0; v < S; v++)
                 for (int u = 0; u < S; u++) {
                     int bx, by, bz, ox = 0, oy = 0, oz = 0;
                     if (axis == 0)      { bx = wx0 + s; by = v; bz = wz0 + u; ox = sign; }
                     else if (axis == 1) { bx = wx0 + u; by = s; bz = wz0 + v; oy = sign; }
                     else                { bx = wx0 + u; by = v; bz = wz0 + s; oz = sign; }
-                    mask[v][u] = getBlock(bx, by, bz) != 0 && getBlock(bx + ox, by + oy, bz + oz) == 0;
+                    unsigned char id = getBlock(bx, by, bz);
+                    mask[v][u] = (id != 0 && getBlock(bx + ox, by + oy, bz + oz) == 0) ? id : 0;
                 }
             bool done[16][16] = {};
             for (int v = 0; v < S; v++)
                 for (int u = 0; u < S; u++) {
-                    if (!mask[v][u] || done[v][u]) continue;
+                    unsigned char id = mask[v][u];
+                    if (!id || done[v][u]) continue;
                     int w = 1;
-                    while (u + w < S && mask[v][u + w] && !done[v][u + w]) w++;
+                    while (u + w < S && mask[v][u + w] == id && !done[v][u + w]) w++;
                     int h = 1;
                     bool grow = true;
                     while (v + h < S && grow) {
                         for (int k = 0; k < w; k++)
-                            if (!mask[v + h][u + k] || done[v + h][u + k]) { grow = false; break; }
+                            if (mask[v + h][u + k] != id || done[v + h][u + k]) { grow = false; break; }
                         if (grow) h++;
                     }
                     for (int dv = 0; dv < h; dv++)
@@ -84,12 +91,13 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     float N[3] = {0, 0, 0};
                     N[axis] = (float)sign;
                     // P00=(u,v) P10=(u+w,v) P11=(u+w,v+h) P01=(u,v+h); UV мировые
+                    float tile = tileFor(id, axis, sign);
                     auto vert = [&](int du, int dv) {
                         float x, y, z, uu, vv;
                         if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
                         else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
                         else                { x = (float)(u + du); y = (float)(v + dv); z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)(v + dv); }
-                        pushV(x, y, z, N[0], N[1], N[2], uu, vv);
+                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile);
                     };
                     if (sign > 0) {
                         if (axis == 2) { vert(0,0); vert(w,0); vert(w,h); vert(0,0); vert(w,h); vert(0,h); }

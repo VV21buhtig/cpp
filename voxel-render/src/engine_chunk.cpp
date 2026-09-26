@@ -43,8 +43,9 @@ std::vector<float> Chunk::buildMesh() const {
                 out.push_back(kFaces[f][v][4]);
                 out.push_back(kFaces[f][v][5]);
                 float tile = (f == 5) ? 1.0f : 0.0f; // top=container2, бока/низ=container
-                out.push_back((tile + kFaces[f][v][6]) * 0.5f);
+                out.push_back(kFaces[f][v][6]);
                 out.push_back(kFaces[f][v][7]);
+                out.push_back(0.0f); // legacy: tile0
             }
         }
     }
@@ -53,19 +54,21 @@ std::vector<float> Chunk::buildMesh() const {
 
 void ChunkMesh::upload(const std::vector<float>& data) {
     destroy();
-    vertexCount = (int)(data.size() / 8);
+    vertexCount = (int)(data.size() / 9);
     if (data.empty()) return;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, data.size() * sizeof(float), data.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3*sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3*sizeof(float)));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6*sizeof(float)));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6*sizeof(float)));
     glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(8*sizeof(float)));
+    glEnableVertexAttribArray(3);
     glBindVertexArray(0);
 }
 

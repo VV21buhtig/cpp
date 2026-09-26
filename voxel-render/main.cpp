@@ -142,7 +142,7 @@ int main()
         glBindVertexArray(0);
     }
 
-    unsigned int diffuseMap  = loadTexture("texture/container2.png");
+    unsigned int diffuseMap  = loadTileArray("texture/tiles");
     unsigned int specularMap = loadTexture("texture/container2_specular.png");
 
     lightingShader.use();
@@ -273,7 +273,7 @@ int main()
         lightingShader.setMat4("view", view);
 
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, diffuseMap);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, diffuseMap);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, specularMap);
 
