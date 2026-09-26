@@ -5,6 +5,7 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 in float Tile;
+in vec4 FragPosLightSpace;
 
 // ========== MATERIAL ==========
 struct Material {
@@ -55,10 +56,33 @@ uniform SpotLight  spotLight;
 uniform vec3       viewPos;
 uniform vec3       fogColor;
 uniform vec2       fogRange; // near far
+uniform sampler2D  shadowMap;
+uniform vec3       sunDirW; // направление НА солнце (мир)
+uniform float      shadowStrength; // 0 ночью
 
 // =========================================================
 //  Функции расчёта для каждого типа света
 // =========================================================
+// =========================================================
+//  Тень солнца: PCF 3x3 по depth-карте
+// =========================================================
+float ShadowCalculation(vec4 posLightSpace, vec3 normal)
+{
+    vec3 proj = posLightSpace.xyz / posLightSpace.w;
+    proj = proj * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
+        return 0.0;
+    float bias = max(0.05 * (1.0 - max(dot(normal, sunDirW), 0.0)), 0.005);
+    float shadow = 0.0;
+    vec2 texel = 1.0 / textureSize(shadowMap, 0);
+    for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++) {
+            float closest = texture(shadowMap, proj.xy + vec2(x, y) * texel).r;
+            shadow += (proj.z - bias > closest) ? 1.0 : 0.0;
+        }
+    return (shadow / 9.0) * shadowStrength;
+}
+
 vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
 {
     vec3 lightDir = normalize(-light.direction);
@@ -75,7 +99,8 @@ vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
     float spec       = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
     vec3  specular   = light.specular * spec * vec3(texture(material.specular, fract(TexCoords)));
 
-    return (ambient + diffuse + specular);
+    float shadow = ShadowCalculation(FragPosLightSpace, normal);
+    return (ambient + (1.0 - shadow) * (diffuse + specular));
 }
 
 vec3 CalcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir)

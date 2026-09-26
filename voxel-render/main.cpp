@@ -70,6 +70,27 @@ int main()
     Shader lineShader("shaders/line.vs", "shaders/outline.fs");
     Shader crosshairShader("shaders/crosshair.vs", "shaders/crosshair.fs");
     Shader skyShader("shaders/sky.vs", "shaders/sky.fs");
+    Shader depthShader("shaders/depth.vs", "shaders/depth.fs");
+
+    // Shadow map солнца 2048 (книга гл.35). Светит только dirLight.
+    const int SHADOW_RES = 2048;
+    unsigned int depthMapFBO = 0, depthMap = 0;
+    glGenFramebuffers(1, &depthMapFBO);
+    glGenTextures(1, &depthMap);
+    glBindTexture(GL_TEXTURE_2D, depthMap);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, SHADOW_RES, SHADOW_RES, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderCol[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderCol);
+    glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthMap, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     unsigned int triVAO = 0;
     glGenVertexArrays(1, &triVAO);
     glBindVertexArray(triVAO);
@@ -208,6 +229,34 @@ int main()
         glm::vec3 topColor = glm::mix(glm::vec3(0.008f, 0.015f, 0.05f), glm::vec3(0.30f, 0.55f, 0.92f), dayF);
         glm::vec3 horizonColor = glm::mix(glm::vec3(0.04f, 0.06f, 0.11f), glm::vec3(0.74f, 0.83f, 0.93f), dayF);
 
+        // ---- SHADOW PASS: сцена с точки зрения солнца (только днём) ----
+        glm::vec3 centerR = player.pos + worldOffset;
+        glm::mat4 lightSpace(1.0f);
+        bool sunUp = dayF > 0.01f;
+        if (sunUp) {
+            glm::mat4 lightProj = glm::ortho(-70.0f, 70.0f, -70.0f, 70.0f, 1.0f, 400.0f);
+            glm::mat4 lightView = glm::lookAt(centerR - sunVec * 200.0f, centerR, glm::vec3(0.0f, 1.0f, 0.0f));
+            lightSpace = lightProj * lightView;
+            depthShader.use();
+            depthShader.setMat4("lightSpaceMatrix", lightSpace);
+            glViewport(0, 0, SHADOW_RES, SHADOW_RES);
+            glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
+            glClear(GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            for (int cz = 0; cz < World::CZ; cz++)
+                for (int cx = 0; cx < World::CX; cx++) {
+                    if (!meshLoaded[cx][cz]) continue;
+                    glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
+                    depthShader.setMat4("model", glm::translate(glm::mat4(1.0f), off));
+                    meshes[cx][cz].draw();
+                }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+        int fww, fhh;
+        glfwGetFramebufferSize(window, &fww, &fhh);
+        glViewport(0, 0, fww, fhh);
+
         // небо первым (без глубины)
         {
             int ww, hh;
@@ -286,6 +335,9 @@ int main()
         lightingShader.setVec3("viewPos", camera.Position);
         lightingShader.setVec3("fogColor", horizonColor);
         lightingShader.setVec2("fogRange", 50.0f, 170.0f);
+        lightingShader.setInt("shadowMap", 2);
+        lightingShader.setVec3("sunDirW", sunVec);
+        lightingShader.setFloat("shadowStrength", dayF);
 
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(glm::vec3(0.10f, 0.12f, 0.20f), glm::vec3(0.28f), dayF));
@@ -327,6 +379,8 @@ int main()
         glBindTexture(GL_TEXTURE_2D_ARRAY, diffuseMap);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, specularMap);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, depthMap);
 
         for (int cz = 0; cz < World::CZ; cz++)
             for (int cx = 0; cx < World::CX; cx++) {
@@ -334,6 +388,7 @@ int main()
                 glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), off);
                 lightingShader.setMat4("model", model);
+                lightingShader.setMat4("lightSpaceMatrix", lightSpace);
                 meshes[cx][cz].draw();
             }
 
@@ -386,6 +441,8 @@ int main()
             meshes[cx][cz].destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
+    glDeleteTextures(1, &depthMap);
+    glDeleteFramebuffers(1, &depthMapFBO);
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
