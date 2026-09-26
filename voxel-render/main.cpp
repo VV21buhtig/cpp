@@ -355,7 +355,7 @@ int main()
         glm::vec3 fogLin(
             pow(horizonColor.x, 2.2f), pow(horizonColor.y, 2.2f), pow(horizonColor.z, 2.2f));
         lightingShader.setVec3("fogColor", fogLin);
-        lightingShader.setVec2("fogRange", 50.0f, 170.0f);
+        lightingShader.setVec2("fogRange", 90.0f, 260.0f);
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
         lightingShader.setFloat("shadowStrength", morn * glm::smoothstep(-0.02f, 0.15f, sunVec.y)); // тени мягко с рассвета
