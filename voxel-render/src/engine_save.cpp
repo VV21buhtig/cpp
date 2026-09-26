@@ -3,17 +3,23 @@
 #include <cstdio>
 
 bool saveWorld(const World& w, const char* path) {
-    FILE* f = fopen(path, "wb");
+    // Атомарно: пишем в tmp + rename, чтобы краш посреди записи не убил сейв.
+    // Файл ~37 КБ, запись только по F5 — SSD не заметит (TBW сотни ТБ).
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE* f = fopen(tmp, "wb");
     if (!f) return false;
     const char magic[4] = {'V', 'X', 'W', '1'};
-    fwrite(magic, 1, 4, f);
+    bool ok = true;
+    ok &= fwrite(magic, 1, 4, f) == 4;
     int dims[5] = {World::CX, World::CZ, Chunk::SX, Chunk::SY, Chunk::SZ};
-    fwrite(dims, sizeof(int), 5, f);
-    for (int cz = 0; cz < World::CZ; cz++)
-        for (int cx = 0; cx < World::CX; cx++)
-            fwrite(w.chunks[cx][cz].blocks, 1, sizeof(w.chunks[cx][cz].blocks), f);
-    fclose(f);
-    return true;
+    ok &= fwrite(dims, sizeof(int), 5, f) == 5;
+    for (int cz = 0; cz < World::CZ && ok; cz++)
+        for (int cx = 0; cx < World::CX && ok; cx++)
+            ok &= fwrite(w.chunks[cx][cz].blocks, 1, sizeof(w.chunks[cx][cz].blocks), f) == sizeof(w.chunks[cx][cz].blocks);
+    if (fclose(f) != 0) ok = false;
+    if (!ok) { remove(tmp); return false; }
+    return rename(tmp, path) == 0;
 }
 
 bool loadWorld(World& w, const char* path) {
