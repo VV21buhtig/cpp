@@ -93,8 +93,11 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     float N[3] = {0, 0, 0};
                     N[axis] = (float)sign;
                     float tile = tileFor(id, axis, sign);
-                    // AO четырёх углов; a0/b0: клетка снаружи прямоугольника
+                    // AO четырёх углов; a0/b0: клетка снаружи прямоугольника.
+                    // Топы идут плоскими (ao=3): иначе градиент через слитый 16-блочный
+                    // квад тащит темноту от дальних обрывов на открытое место полосами.
                     auto cornerAO = [&](int du, int dv) -> float {
+                        if (axis == 1) return 3.0f;
                         int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
                         int o = (sign > 0) ? 0 : -1;
                         int gx, gy, gz, ax, ay, az, bx, by, bz, nx, ny, nz;
