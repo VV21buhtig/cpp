@@ -157,6 +157,7 @@ int main()
     };
     auto touchEdit = [&](int wx, int wz) {
         int cx = wx / 16, cz = wz / 16;
+        if (cx < 0 || cx >= World::CX || cz < 0 || cz >= World::CZ) return; // наружу за границу
         if (meshLoaded[cx][cz]) rebuild(cx, cz);
         if (wx % 16 == 0 && cx > 0 && meshLoaded[cx-1][cz]) rebuild(cx - 1, cz);
         if (wx % 16 == 15 && cx < World::CX - 1 && meshLoaded[cx+1][cz]) rebuild(cx + 1, cz);
