@@ -19,6 +19,9 @@
 #include "shader.h"
 #include "camera.h"
 #include "game/console.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -30,22 +33,6 @@ bool  firstMouse = true;
 float deltaTime = 0.0f, lastFrame = 0.0f;
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
-static void keyCb(GLFWwindow*, int key, int, int action, int) {
-    if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
-    if (key == GLFW_KEY_F1 || key == GLFW_KEY_GRAVE_ACCENT) {
-        console.open = !console.open;
-        console.clearInput();
-        std::cout << (console.open ? "console OPEN — печатай\n" : "console closed\n");
-        return;
-    }
-    if (!console.open) return;
-    if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
-        if (gCvar) gCvar->exec(console.input);
-        console.clearInput();
-    } else if (key == GLFW_KEY_BACKSPACE) console.backspace();
-    else if (key == GLFW_KEY_ESCAPE) console.open = false;
-}
-static void charCb(GLFWwindow*, unsigned int cp) { if (console.open) console.onChar(cp); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     if (console.open) { firstMouse = true; return; }
     if (firstMouse) { lastX = (float)xpos; lastY = (float)ypos; firstMouse = false; }
@@ -75,8 +62,6 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
-    glfwSetKeyCallback(window, keyCb);
-    glfwSetCharCallback(window, charCb);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     if (gladLoadGL(glfwGetProcAddress) == 0) { glfwTerminate(); return -1; }
@@ -96,23 +81,18 @@ int main()
     Shader lineShader("shaders/line.vs", "shaders/outline.fs");
     Shader crosshairShader("shaders/crosshair.vs", "shaders/crosshair.fs");
     Shader skyShader("shaders/sky.vs", "shaders/sky.fs");
-    Shader uiShader("shaders/ui.vs", "shaders/ui.fs");
-    unsigned int uiVAO = 0, uiVBO = 0;
-    glGenVertexArrays(1, &uiVAO);
-    glGenBuffers(1, &uiVBO);
-    glBindVertexArray(uiVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 16, (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, 16, (void*)12);
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
+
 
 
     unsigned int triVAO = 0;
     glGenVertexArrays(1, &triVAO);
     glBindVertexArray(triVAO);
     glBindVertexArray(0);
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 450");
 
     // Ограниченный мир 16x16 чанков по сиду. Данные всегда в RAM, стримятся МЕШИ.
     const int W = World::CX * 16; // 256
@@ -224,6 +204,7 @@ int main()
     bool flashOn = true, followOn = true;
     int placeId = 1;
     bool prev1 = false, prev2 = false, prev3 = false;
+    bool prevF1 = false, prevGrave = false, prevEsc = false;
 
     while (!glfwWindowShouldClose(window))
     {
@@ -246,6 +227,21 @@ int main()
                 }
             }
         }
+
+        // --- F1/~ — консоль ImGui (курсор наружу/внутрь), ESC закрывает ---
+        bool f1 = glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS;
+        bool grv = glfwGetKey(window, GLFW_KEY_GRAVE_ACCENT) == GLFW_PRESS;
+        if ((f1 && !prevF1) || (grv && !prevGrave)) {
+            console.open = !console.open;
+            glfwSetInputMode(window, GLFW_CURSOR, console.open ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+            std::cout << (console.open ? "console OPEN\n" : "console closed\n");
+        }
+        prevF1 = f1; prevGrave = grv;
+        bool esc = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+        if (esc && !prevEsc && console.open) console.open = false,
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        prevEsc = esc;
 
         // --- PLAYER: V — fly/walk, F — фонарик, L — лампы, камера = глаза ---
         // консоль открыта: ввод глушим, фронты сбрасываем чтобы не выстрелило при закрытии
@@ -492,22 +488,51 @@ int main()
             glEnable(GL_DEPTH_TEST);
         }
 
-        // консоль поверх всего
+        // ImGui-консоль поверх всего
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
         if (console.open) {
-            int ww, hh;
-            glfwGetFramebufferSize(window, &ww, &hh);
-            std::vector<unsigned char> uib;
-            console.buildQuads(ww, uib);
-            glDisable(GL_DEPTH_TEST);
-            uiShader.use();
-            uiShader.setVec2("res", (float)ww, (float)hh);
-            glBindVertexArray(uiVAO);
-            glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
-            glBufferData(GL_ARRAY_BUFFER, uib.size(), uib.data(), GL_DYNAMIC_DRAW);
-            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(uib.size() / 16));
-            glBindVertexArray(0);
-            glEnable(GL_DEPTH_TEST);
+            ImGui::Begin("Console", &console.open);
+            auto slider = [&](const char* label, const char* name, float lo, float hi) {
+                float v = cvar.get(name);
+                if (ImGui::SliderFloat(label, &v, lo, hi)) cvar.set(name, v);
+            };
+            slider("sun.i", "sun.i", 0.0f, 4.0f);
+            slider("sun.amb", "sun.amb", 0.0f, 5.0f);
+            slider("sun.sat", "sun.sat", 0.0f, 2.5f);
+            slider("sun.gamma", "sun.gamma", 0.5f, 4.0f);
+            slider("fog.near", "fog.near", 0.0f, 200.0f);
+            slider("fog.far", "fog.far", 50.0f, 500.0f);
+            slider("time.speed", "time.speed", 0.0f, 1200.0f);
+            ImGui::Checkbox("flash (F)", &flashOn);
+            ImGui::Checkbox("lamps (L)", &followOn);
+            ImGui::Checkbox("fly (V)", &player.fly);
+            const char* blocks[3] = {"grass", "dirt", "stone"};
+            for (int i = 0; i < 3; i++) {
+                if (i) ImGui::SameLine();
+                bool sel = (placeId == i + 1);
+                if (ImGui::RadioButton(blocks[i], sel)) placeId = i + 1;
+            }
+            ImGui::Separator();
+            ImGui::BeginChild("log", ImVec2(0, 200), true);
+            for (auto& ln : console.lines) ImGui::TextUnformatted(ln.c_str());
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4)
+                ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
+            if (ImGui::InputText("cmd", console.inputBuf, sizeof(console.inputBuf),
+                                 ImGuiInputTextFlags_EnterReturnsTrue)) {
+                cvar.exec(console.inputBuf);
+                console.inputBuf[0] = 0;
+                ImGui::SetKeyboardFocusHere(-1);
+            }
+            if (ImGui::Button("save")) cvar.exec("save");
+            ImGui::SameLine();
+            if (ImGui::Button("load")) { cvar.exec("load"); rebuildAll(); }
+            ImGui::End();
         }
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -516,8 +541,9 @@ int main()
     glDeleteVertexArrays(1, &lineVAO);
     glDeleteBuffers(1, &lineVBO);
     glDeleteVertexArrays(1, &triVAO);
-    glDeleteVertexArrays(1, &uiVAO);
-    glDeleteBuffers(1, &uiVBO);
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     for (int cz = 0; cz < World::CZ; cz++)
         for (int cx = 0; cx < World::CX; cx++)
             meshes[cx][cz].destroy();

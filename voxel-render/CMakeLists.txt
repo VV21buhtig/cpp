@@ -24,6 +24,20 @@ target_include_directories(shader PUBLIC
 )
 target_link_libraries(shader PUBLIC glad)
 
+# --- Dear ImGui (вендор, MIT): консоль и крутилки света ---
+add_library(imgui STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_draw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_widgets.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_impl_glfw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui
+)
+target_link_libraries(imgui PUBLIC glfw)
+
 # --- Engine (mesh/texture) и Game (pick) — распил main.cpp, GL-порядок 1:1 ---
 add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_mesh.cpp
@@ -52,7 +66,7 @@ add_executable(voxel_render
     main.cpp
     src/stb_impl.cpp
 )
-target_link_libraries(voxel_render PRIVATE shader engine game glad glfw OpenGL::GL)
+target_link_libraries(voxel_render PRIVATE shader engine game imgui glad glfw OpenGL::GL)
 
 if (UNIX AND NOT APPLE)
     target_link_libraries(voxel_render PRIVATE dl)
