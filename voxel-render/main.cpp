@@ -7,6 +7,7 @@
 #include "engine/world.h"
 #include "engine/save.h"
 #include "engine/cvar.h"
+#include "engine/frustum.h"
 #include "game/player.h"
 
 #include <glm/glm.hpp>
@@ -311,6 +312,11 @@ int main()
 
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), 1280.0f/720.0f, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
+        Frustum frustum = Frustum::fromVP(projection * view);
+        auto chunkVisible = [&](int cx, int cz) {
+            glm::vec3 mn = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
+            return frustum.visible(mn, mn + glm::vec3(16.0f));
+        };
 
         // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
         // День 10 минут как в MC + старт утром (высота ~30°), а не на самой кромке.
@@ -348,7 +354,7 @@ int main()
             glDepthFunc(GL_LESS);
             for (int cz = 0; cz < World::CZ; cz++)
                 for (int cx = 0; cx < World::CX; cx++) {
-                    if (!meshLoaded[cx][cz]) continue;
+                    if (!meshLoaded[cx][cz] || !chunkVisible(cx, cz)) continue;
                     glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
                     depthShader.setMat4("model", glm::translate(glm::mat4(1.0f), off));
                     meshes[cx][cz].draw();
@@ -495,7 +501,7 @@ int main()
 
         for (int cz = 0; cz < World::CZ; cz++)
             for (int cx = 0; cx < World::CX; cx++) {
-                if (!meshLoaded[cx][cz]) continue;
+                if (!meshLoaded[cx][cz] || !chunkVisible(cx, cz)) continue;
                 glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), off);
                 lightingShader.setMat4("model", model);

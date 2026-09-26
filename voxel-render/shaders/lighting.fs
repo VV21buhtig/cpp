@@ -94,8 +94,11 @@ vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
 {
     vec3 lightDir = normalize(-light.direction);
 
-    // ambient
+    float shadow = ShadowCalculation(FragPosLightSpace, normal);
+
+    // ambient тоже давим тенью (иначе при ядерном ambient теней не видно)
     vec3 ambient = light.ambient * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
+    ambient *= 1.0 - 0.6 * shadow;
 
     // diffuse (wrap: скользящий свет не даёт черноты утром, Valve-style)
     float diff    = clamp((dot(normal, lightDir) + 0.4) / 1.4, 0.0, 1.0);
@@ -106,7 +109,6 @@ vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
     float spec       = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
     vec3  specular   = light.specular * spec * vec3(texture(material.specular, fract(TexCoords)));
 
-    float shadow = ShadowCalculation(FragPosLightSpace, normal);
     return (ambient + (1.0 - shadow) * (diffuse + specular));
 }
 
