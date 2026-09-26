@@ -132,7 +132,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         vel.y = 0;
         pos = t;
         onGround = stepT <= 0.0f;
-        if (t.y < -10.0f) { spawn(w, World::CX * 8, World::CZ * 8); return; }
+        if (t.y < -10.0f) { spawn(w, w.sizeX() / 2, w.sizeZ() / 2); return; }
         return;
     }
     t.y = np.y;
@@ -150,6 +150,6 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         onGround = false;
     }
     // провалился под мир — респаун
-    if (t.y < -10.0f) { spawn(w, World::CX * 8, World::CZ * 8); return; }
+    if (t.y < -10.0f) { spawn(w, w.sizeX() / 2, w.sizeZ() / 2); return; }
     pos = t;
 }

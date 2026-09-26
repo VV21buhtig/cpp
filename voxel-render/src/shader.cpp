@@ -1,8 +1,14 @@
 #include "shader.h"
 #include <glm/gtc/type_ptr.hpp>  // для glm::value_ptr
 
-Shader::Shader(const char* vertexPath, const char* fragmentPath)
+Shader::Shader(const char* vertexPath, const char* fragmentPath) : ID(0)
 {
+    load(vertexPath, fragmentPath);
+}
+
+void Shader::load(const char* vertexPath, const char* fragmentPath)
+{
+    if (ID != 0) { glDeleteProgram(ID); ID = 0; }
     // ---- 1. Читаем файлы ----
     std::string vertexCode;
     std::string fragmentCode;

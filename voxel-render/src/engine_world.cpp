@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstring>
 
-World::World(int s) : seed(s) {
+void World::init(int ncx, int ncz, int s) {
+    cx_ = ncx; cz_ = ncz; seed_ = s;
+    chunks.assign(ncx * ncz, Chunk());
     // Холмы: value-noise 2 октавы + сид. h=1..4.
     auto hash01 = [s](int x, int z) -> float {
         int h = (x + s * 131) * 374761393 + (z + s * 57) * 668265263;
@@ -19,8 +21,8 @@ World::World(int s) : seed(s) {
         float c = hash01(x0, z0 + 1), d = hash01(x0 + 1, z0 + 1);
         return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
     };
-    for (int wz = 0; wz < CZ * Chunk::SZ; wz++)
-        for (int wx = 0; wx < CX * Chunk::SX; wx++) {
+    for (int wz = 0; wz < ncz * Chunk::SZ; wz++)
+        for (int wx = 0; wx < ncx * Chunk::SX; wx++) {
             float n = 0.65f * noise2(wx / 9.0f, wz / 9.0f)
                     + 0.35f * noise2(wx / 4.0f + 13.7f, wz / 4.0f + 7.3f);
             int h = 1 + (int)(n * 3.0f); // 1..4
@@ -32,13 +34,12 @@ World::World(int s) : seed(s) {
 unsigned char World::getBlock(int wx, int y, int wz) const {
     if (y < 0 || y >= Chunk::SY) return 0; // под миром пустота (дно острова мешится и видно снизу)
     if (!inXZ(wx, wz)) return 0;
-    if (!inXZ(wx, wz)) return 0;
-    return chunks[wx / Chunk::SX][wz / Chunk::SZ].get(wx % Chunk::SX, y, wz % Chunk::SZ);
+    return at(wx / Chunk::SX, wz / Chunk::SZ).get(wx % Chunk::SX, y, wz % Chunk::SZ);
 }
 
 void World::setBlock(int wx, int y, int wz, unsigned char v) {
     if (y < 0 || y >= Chunk::SY || !inXZ(wx, wz)) return;
-    chunks[wx / Chunk::SX][wz / Chunk::SZ].set(wx % Chunk::SX, y, wz % Chunk::SZ, v);
+    at(wx / Chunk::SX, wz / Chunk::SZ).set(wx % Chunk::SX, y, wz % Chunk::SZ, v);
 }
 
 std::vector<float> World::buildChunk(int cx, int cz) const {

@@ -19,6 +19,9 @@ public:
 
     void use() const;
 
+    // Перекомпиляция на лету (хот-релоад шейдерпаков из меню). Старая программа удаляется.
+    void load(const char* vertexPath, const char* fragmentPath);
+
     // Устанавливают uniform по имени. Если uniform'а нет — glGetUniformLocation вернёт -1,
     // и glUniform* молча проигнорируется (не падает).
     void setBool (const std::string& name, bool value) const;

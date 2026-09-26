@@ -18,3 +18,7 @@ Makefile
 *.a
 *.out
 *.so
+
+# Миры сейвов — локальные данные
+voxel-render/worlds/*.bin
+!voxel-render/worlds/README.md
