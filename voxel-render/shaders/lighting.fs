@@ -61,6 +61,8 @@ uniform sampler2D  shadowMap;
 uniform vec3       sunDirW; // направление НА солнце (мир)
 uniform float      shadowStrength; // 0 ночью
 uniform float      debugShadow; // 1: показать тени ч/б (клавиша P)
+uniform float      satU; // насыщенность из консоли
+uniform float      gammaU; // гамма из консоли
 
 // =========================================================
 //  Функции расчёта для каждого типа света
@@ -186,8 +188,8 @@ void main()
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
     vec3 shaded = result * fshade * aoC;
-    // ядовитость дня: +30% насыщенности
-    shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, 1.3);
+    // ядовитость дня и гамма — из консоли (sun.sat/sun.gamma)
+    shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, satU);
     if (debugShadow > 0.5) {
         float sh = ShadowCalculation(FragPosLightSpace, norm);
         FragColor = vec4(vec3(1.0 - sh), 1.0);
@@ -196,5 +198,5 @@ void main()
     float fd = length(viewPos - FragPos);
     float ff = clamp((fd - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
     vec3 col = mix(shaded, fogColor, ff);
-    FragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0); // гамма (гл.34): без неё линейный свет тёмный
+    FragColor = vec4(pow(col, vec3(1.0 / gammaU)), 1.0); // гамма (гл.34): без неё линейный свет тёмный
 }

@@ -6,6 +6,7 @@
 #include "engine/chunk.h"
 #include "engine/world.h"
 #include "engine/save.h"
+#include "engine/cvar.h"
 #include "game/player.h"
 
 #include <glm/glm.hpp>
@@ -16,6 +17,8 @@
 #include <iostream>
 #include "shader.h"
 #include "camera.h"
+#include <unistd.h>
+#include <fcntl.h>
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 float lastX = 640.0f, lastY = 360.0f;
@@ -181,6 +184,20 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
+    // Консоль света: крутишь из терминала (окно отдаёт фокус терминалу), save в gfx.cfg
+    CVarSys cvar;
+    cvar.reg("sun.i", 1.0f);     // прямой солнечный свет
+    cvar.reg("sun.amb", 1.0f);   // ambient всего
+    cvar.reg("sun.sat", 1.3f);   // насыщенность дня
+    cvar.reg("sun.gamma", 2.2f); // гамма террейна
+    cvar.reg("time.speed", 600.0f); // длина суток, 0 = стоп
+    cvar.reg("fog.near", 90.0f);
+    cvar.reg("fog.far", 260.0f);
+    cvar.load("gfx.cfg");
+    std::cout << "console: set/get/list/save/load/help (stdin, Enter). Try: set sun.i 2\n";
+    fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    std::string conLine;
+
     std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), V fly/walk, F фонарик, L лампы, 1/2/3 блок, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
@@ -195,6 +212,21 @@ int main()
         deltaTime = now - lastFrame; lastFrame = now;
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         processInput(window);
+
+        // консоль: строки из stdin по Enter
+        {
+            char buf[1024];
+            ssize_t n = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+            if (n > 0) {
+                buf[n] = 0;
+                conLine += buf;
+                size_t p;
+                while ((p = conLine.find('\n')) != std::string::npos) {
+                    cvar.exec(conLine.substr(0, p));
+                    conLine.erase(0, p + 1);
+                }
+            }
+        }
 
         // --- PLAYER: V — fly/walk, F — фонарик, L — лампы, камера = глаза ---
         bool curV = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
@@ -233,8 +265,12 @@ int main()
         glm::mat4 view = camera.GetViewMatrix();
 
         // ---- DAY CYCLE: солнце крутится 240с, тянет свет/небо/туман ----
-        // День 10 минут как в MC + старт утром (высота ~30°), а не на самой кромке
-        float sunA = 0.56f + now * 6.2831853f / 600.0f;
+        // День 10 минут как в MC + старт утром (высота ~30°), а не на самой кромке.
+        // time.speed=0 стопает время; фаза живёт в tod.
+        static float tod = 0.56f;
+        float spd = cvar.get("time.speed", 600.0f);
+        if (spd > 0.0f) tod += deltaTime * 6.2831853f / spd;
+        float sunA = tod;
         glm::vec3 sunVec = glm::normalize(glm::vec3(cos(sunA), sin(sunA), 0.35f));
         // Тайминг как у людей: сумерки раньше прямого света (буфер ниже горизонта),
         // ambient тёплый ведёт, direct догоняет. Роблокс так и делает: cutoff y>-0.3.
@@ -355,7 +391,9 @@ int main()
         glm::vec3 fogLin(
             pow(horizonColor.x, 2.2f), pow(horizonColor.y, 2.2f), pow(horizonColor.z, 2.2f));
         lightingShader.setVec3("fogColor", fogLin);
-        lightingShader.setVec2("fogRange", 90.0f, 260.0f);
+        lightingShader.setVec2("fogRange", cvar.get("fog.near", 90.0f), cvar.get("fog.far", 260.0f));
+        lightingShader.setFloat("satU", cvar.get("sun.sat", 1.3f));
+        lightingShader.setFloat("gammaU", cvar.get("sun.gamma", 2.2f));
         lightingShader.setInt("shadowMap", 2);
         lightingShader.setVec3("sunDirW", sunVec);
         lightingShader.setFloat("shadowStrength", morn * glm::smoothstep(-0.02f, 0.15f, sunVec.y)); // тени мягко с рассвета
@@ -365,9 +403,10 @@ int main()
         glm::vec3 sunCol = glm::mix(glm::vec3(1.0f, 0.55f, 0.25f), glm::vec3(1.0f, 0.97f, 0.9f),
                                     glm::smoothstep(0.0f, 0.4f, sunVec.y)); // низкое = оранжевое
         glm::vec3 ambDay = glm::mix(glm::vec3(0.03f, 0.035f, 0.07f), glm::vec3(0.20f), dayF);
+        ambDay *= cvar.get("sun.amb", 1.0f);
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
-        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), sunCol * 1.7f, sunI));
+        lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), sunCol * (1.7f * cvar.get("sun.i", 1.0f)), sunI));
         lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.01f), sunCol * 0.3f, sunI));
 
         // лампы следуют за игроком (мир большой, статика у центра бесполезна)
