@@ -94,7 +94,7 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // в меню курсор свободный
 
     if (gladLoadGL(glfwGetProcAddress) == 0) { glfwTerminate(); return -1; }
     std::cout << "RENDERER: " << glGetString(GL_RENDERER) << "\n";
@@ -254,6 +254,8 @@ int main()
     }
     std::string shaderDir = (shaderPacks[menuShaderSel] == "default") ? "shaders"
                           : "shaders/packs/" + shaderPacks[menuShaderSel];
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // в игре захват
+    firstMouse = true;
     (void)0; // пак текстур выбирается в игре (комбо) либо из меню ниже
 
     // ================= GAME =================
