@@ -7,6 +7,7 @@
 #include "engine/chunk.h"
 #include "engine/world.h"
 #include "engine/save.h"
+#include "game/player.h"
 #include "game/pick.h"
 
 #include <glm/glm.hpp>
@@ -32,10 +33,7 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 void scroll_callback(GLFWwindow*, double, double y) { camera.ProcessMouseScroll((float)y); }
 void processInput(GLFWwindow* w) {
     if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
-    if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD,  deltaTime);
-    if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
-    if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT,     deltaTime);
-    if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT,    deltaTime);
+    // WASD — через Player::update, камера следует за игроком
 }
 
 int main()
@@ -84,6 +82,8 @@ int main()
     const char* savePath = "world.bin";
     if (loadWorld(world, savePath)) std::cout << "Loaded " << savePath << "\n";
     else std::cout << "New world (no " << savePath << ")\n";
+    Player player;
+    player.spawn(world, 24, 24);
     ChunkMesh meshes[World::CX][World::CZ];
     auto rebuild = [&](int cx, int cz) {
         meshes[cx][cz].upload(world.buildChunk(cx, cz));
@@ -126,15 +126,34 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\nLMB сломать, RMB поставить, F5 сейв, F9 загрузка, ESC выход.\n";
+    std::cout << "\nWASD ходить, Space прыжок/вверх, C вниз (fly), F fly/walk, LMB сломать, RMB поставить, F5 сейв, F9 загрузка.\n";
 
-    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
+    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false, prevF = false;
 
     while (!glfwWindowShouldClose(window))
     {
         float now = (float)glfwGetTime();
         deltaTime = now - lastFrame; lastFrame = now;
+        if (deltaTime > 0.05f) deltaTime = 0.05f;
         processInput(window);
+
+        // --- PLAYER (движок): F — fly/walk, камера = глаза ---
+        bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (curF && !prevF) {
+            player.fly = !player.fly;
+            player.vel = glm::vec3(0.0f);
+            std::cout << (player.fly ? "FLY\n" : "WALK\n");
+        }
+        prevF = curF;
+        glm::vec2 mv(0.0f);
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mv.y += 1.0f;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mv.y -= 1.0f;
+        bool jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        bool down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        player.update(deltaTime, world, mv, glm::radians(camera.Yaw), jump, down);
+        camera.Position = player.pos + glm::vec3(0.0f, player.eye, 0.0f);
 
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
