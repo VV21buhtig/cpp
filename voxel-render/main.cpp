@@ -226,9 +226,10 @@ int main()
                 meshes[cx][cz].draw();
             }
 
-        // PASS 2: подсветка рёбер — всегда поверх (x-ray), полный бокс даже у соседей
+        // PASS 2: подсветка рёбер — честный depth (прячется за стеной, стыки режет сосед)
         if (hasHit) {
-            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
             glLineWidth(3.0f);
 
             lineShader.use();
@@ -245,7 +246,7 @@ int main()
             glDrawArrays(GL_LINES, 0, 24);
             glBindVertexArray(0);
             glLineWidth(1.0f);
-            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
         }
 
         glfwSwapBuffers(window);
