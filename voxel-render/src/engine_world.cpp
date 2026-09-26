@@ -29,7 +29,7 @@ World::World() {
 }
 
 unsigned char World::getBlock(int wx, int y, int wz) const {
-    if (y < 0) return 1;
+    if (y < 0) return inXZ(wx, wz) ? 1 : 0; // под миром solid (дно не мешим), за миром пустота
     if (y >= Chunk::SY) return 0;
     if (!inXZ(wx, wz)) return 0;
     return chunks[wx / Chunk::SX][wz / Chunk::SZ].get(wx % Chunk::SX, y, wz % Chunk::SZ);
