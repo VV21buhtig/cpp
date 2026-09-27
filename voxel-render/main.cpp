@@ -102,7 +102,8 @@ static void MCLogo(ImDrawList* d, ImFont* f, float fsize, unsigned int tTop, uns
     ImVec2 T(x0 + u, cy), L(x0, cy + u * 0.5f), C(x0 + u, cy + u), R(x0 + 2 * u, cy + u * 0.5f);
     ImVec2 BL(x0, cy + u * 1.5f), BC(x0 + u, cy + 2 * u), BR(x0 + 2 * u, cy + u * 1.5f);
     d->AddImageQuad((ImTextureID)(intptr_t)tTop, T, R, C, L,
-                    ImVec2(0.5f, 1), ImVec2(1, 0.5f), ImVec2(0.5f, 0), ImVec2(0, 0.5f), IM_COL32_WHITE);
+                    ImVec2(0.5f, 1), ImVec2(1, 0.5f), ImVec2(0.5f, 0), ImVec2(0, 0.5f),
+                    IM_COL32(145, 189, 89, 255)); // grass_top ч/б — plains-tint #91BD59 как в атласе
     d->AddImageQuad((ImTextureID)(intptr_t)tSide, L, C, BC, BL,
                     ImVec2(0, 1), ImVec2(1, 1), ImVec2(1, 0), ImVec2(0, 0), IM_COL32(150, 150, 150, 255));
     d->AddImageQuad((ImTextureID)(intptr_t)tSide, C, R, BR, BC,
