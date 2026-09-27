@@ -43,16 +43,24 @@ static void MCTitle(ImDrawList* d, ImFont* f, float size, const char* txt, float
     ImVec2 ts = f->CalcTextSizeA(size, 10000.0f, 0, txt);
     MCShadowText(d, f, size, ImVec2((ww - ts.x) * 0.5f, y), IM_COL32(200, 200, 200, 255), txt);
 }
+static ImU32 MCBoost(ImU32 c, int b) {
+    if (b <= 0) return c;
+    int r = (c & 0xFF) + b; if (r > 255) r = 255;
+    int g = ((c >> 8) & 0xFF) + b; if (g > 255) g = 255;
+    int bl = ((c >> 16) & 0xFF) + b; if (bl > 255) bl = 255;
+    return IM_COL32(r, g, bl, 255);
+}
 // Кнопка в духе MC Beta: серая с градиентом, чёрная рамка, жёлтый текст при наведении.
-static bool MCButton(const char* id, const char* label, ImVec2 size, ImFont* f, float fsize, bool enabled = true) {
+// boost осветляет (кнопки паузы поверх затемнённого мира).
+static bool MCButton(const char* id, const char* label, ImVec2 size, ImFont* f, float fsize, bool enabled = true, int boost = 0) {
     ImGui::PushID(id);
     ImGui::InvisibleButton("##mc", size);
     bool clicked = enabled && ImGui::IsItemClicked();
     bool hov = enabled && ImGui::IsItemHovered();
     ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImDrawList* d = ImGui::GetWindowDrawList();
-    ImU32 cTop = !enabled ? IM_COL32(85, 85, 85, 255) : (hov ? IM_COL32(160, 168, 225, 255) : IM_COL32(150, 150, 150, 255));
-    ImU32 cBot = !enabled ? IM_COL32(65, 65, 65, 255) : (hov ? IM_COL32(110, 118, 175, 255) : IM_COL32(105, 105, 105, 255));
+    ImU32 cTop = MCBoost(!enabled ? IM_COL32(85, 85, 85, 255) : (hov ? IM_COL32(160, 168, 225, 255) : IM_COL32(150, 150, 150, 255)), boost);
+    ImU32 cBot = MCBoost(!enabled ? IM_COL32(65, 65, 65, 255) : (hov ? IM_COL32(110, 118, 175, 255) : IM_COL32(105, 105, 105, 255)), boost);
     d->AddRectFilledMultiColor(a, b, cTop, cTop, cBot, cBot);
     d->AddRect(a, b, IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
     d->AddLine(ImVec2(a.x + 2, a.y + 2), ImVec2(b.x - 2, a.y + 2), IM_COL32(255, 255, 255, 70));
@@ -1130,17 +1138,17 @@ title_screen:
                 MCTitle(pd, fontUI, pfs + 4.0f, "Game menu", (float)pww, (float)phh * 0.18f);
                 float py = (float)phh * 0.18f + 64.0f;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
-                if (MCButton("p_back", "Back to Game", ImVec2(pbw, pbh), fontUI, pfs)) {
+                if (MCButton("p_back", "Back to Game", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
                     audio.playUI(); gPaused = false; pauseOpt = false;
                     glfwSetInputMode(window, GLFW_CURSOR, console.open ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                     firstMouse = true;
                 }
                 py += pbh + pgap;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
-                if (MCButton("p_opt", "Options...", ImVec2(pbw, pbh), fontUI, pfs)) { audio.playUI(); pauseOpt = true; }
+                if (MCButton("p_opt", "Options...", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) { audio.playUI(); pauseOpt = true; }
                 py += pbh + pgap;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
-                if (MCButton("p_quit", "Save and Quit to Title", ImVec2(pbw, pbh), fontUI, pfs)) {
+                if (MCButton("p_quit", "Save and Quit to Title", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
                     audio.playUI();
                     if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
                     else std::cout << "Save FAILED\n";
@@ -1164,7 +1172,7 @@ title_screen:
                 MCPopSliderStyle();
                 py += 52.0f;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
-                if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
+                if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
             }
             if (fontUI) ImGui::PopFont();
             ImGui::End();
@@ -1263,12 +1271,13 @@ title_screen:
     for (auto& m : lavaMeshes) m.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
-    glDeleteTextures(1, &texDirt);
-    glDeleteTextures(1, &texGTop);
-    glDeleteTextures(1, &texGSide);
     world.reset();
     gPaused = false;
     if (toTitle && !glfwWindowShouldClose(window)) goto title_screen;
+    // Меню-текстуры живут пока возможен возврат в титул — только полный выход.
+    glDeleteTextures(1, &texDirt);
+    glDeleteTextures(1, &texGTop);
+    glDeleteTextures(1, &texGSide);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
