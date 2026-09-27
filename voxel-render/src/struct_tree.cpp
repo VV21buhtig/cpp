@@ -1,8 +1,10 @@
 #include "engine/struct/tree.h"
+#include "engine/struct/config.h"
+#include <cstdlib>
 #include "engine/struct/place.h"
 #include "engine/world.h"
 
-void stampTrees(World& w, const PlacementConfig& cfg) {
+void stampTrees(World& w, const TreeConfig& cfg) {
     int W = w.sizeX(), D = w.sizeZ();
     int rcx = (W + 15) / 16, rcz = (D + 15) / 16; // регионов по сетке чанков
     int nrcx = (rcx + cfg.spacing - 1) / cfg.spacing;
@@ -24,7 +26,7 @@ void stampTrees(World& w, const PlacementConfig& cfg) {
             for (int y = Chunk::SY - 1; y >= 0; y--)
                 if (World::isSolid(w.getBlock(tx, y, tz))) { top = y; break; }
             if (top < 0 || w.getBlock(tx, top, tz) != 1) continue;
-            int th = 4 + (int)(cellRand(w.seed_, cfg.salt + 4, rx, rz) * 3); // 4..6
+            int th = cfg.trunkBase + (int)(cellRand(w.seed_, cfg.salt + 4, rx, rz) * (cfg.trunkRand + 1));
             if (top + th + 2 >= Chunk::SY) continue;
             // просвет под крону: колонна должна быть воздухом
             bool clear = true;
@@ -39,7 +41,7 @@ void stampTrees(World& w, const PlacementConfig& cfg) {
                 for (int dx = -2; dx <= 2; dx++)
                     for (int dz = -2; dz <= 2; dz++) {
                         if (abs(dx) == 2 && abs(dz) == 2 &&
-                            cellRand(w.seed_, cfg.salt + 10 + ly, tx + dx * 3 + dz, tz + dz * 5 - dx) < 0.6f)
+                            cellRand(w.seed_, cfg.salt + 10 + ly, tx + dx * 3 + dz, tz + dz * 5 - dx) < cfg.holeChance)
                             continue; // угол выкушен
                         if (w.getBlock(tx + dx, y, tz + dz) == 0) w.setBlock(tx + dx, y, tz + dz, 4);
                     }

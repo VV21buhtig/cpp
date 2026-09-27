@@ -5,7 +5,8 @@
 
 struct World;
 
-// Дуб MC-стиль: прямой ствол 4-6 (id 5) + blob-крона (id 4), только на траве.
-void stampTrees(World& w, const PlacementConfig& cfg);
+// Дуб MC-стиль: ствол base+rand (id 5) + blob-крона (id 4), только на траве.
+struct TreeConfig;
+void stampTrees(World& w, const TreeConfig& cfg);
 
 #endif

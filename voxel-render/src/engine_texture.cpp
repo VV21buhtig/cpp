@@ -69,6 +69,12 @@ unsigned int loadTileArray(const char* dir) {
         all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 189 / 255);
         all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 89 / 255);
     }
+    // tile 6 (листва) тоже ч/б под колормапу — foliage plains #77AB2F
+    for (int p = 6 * T * T; p < 7 * T * T; p++) {
+        all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 119 / 255);
+        all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 171 / 255);
+        all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 47 / 255);
+    }
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, T, T, NL, 0, GL_RGBA, GL_UNSIGNED_BYTE, all.data());
     glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
