@@ -62,15 +62,23 @@ void audioGC() {
             gTrackUsed[i] = false;
         }
 }
+static int gSteals = 0, gFails = 0;
 void fire(Buf& b, glm::vec3 at, float vol, float rate, float maxDist, bool spatial) {
     if (!g_init || !b.valid) return;
     audioGC();
     int slot = -1;
     for (int i = 0; i < MAXTRACK; i++)
         if (!gTrackUsed[i]) { slot = i; break; }
-    if (slot < 0) return; // переполн — дропаем
+    if (slot < 0) { // переполн — крадём самый старый слот
+        static int rr = 0;
+        slot = rr; rr = (rr + 1) % MAXTRACK;
+        ma_sound_uninit(&gTrack[slot]);
+        gSteals++;
+        printf("audio: steal slot (total %d)\n", gSteals);
+    }
     ma_uint32 flags = spatial ? 0 : MA_SOUND_FLAG_NO_SPATIALIZATION;
-    if (ma_sound_init_from_data_source(&g_eng, &b.rb, flags, nullptr, &gTrack[slot]) != MA_SUCCESS) return;
+    ma_result r = ma_sound_init_from_data_source(&g_eng, &b.rb, flags, nullptr, &gTrack[slot]);
+    if (r != MA_SUCCESS) { gFails++; printf("audio: sound init failed %d (total %d)\n", (int)r, gFails); return; }
     gTrackUsed[slot] = true;
     if (spatial) {
         ma_sound_set_position(&gTrack[slot], at.x, at.y, at.z);
@@ -80,7 +88,13 @@ void fire(Buf& b, glm::vec3 at, float vol, float rate, float maxDist, bool spati
     }
     ma_sound_set_pitch(&gTrack[slot], rate);
     ma_sound_set_volume(&gTrack[slot], vol);
-    ma_sound_start(&gTrack[slot]);
+    r = ma_sound_start(&gTrack[slot]);
+    if (r != MA_SUCCESS) {
+        gFails++;
+        printf("audio: sound start failed %d (total %d)\n", (int)r, gFails);
+        ma_sound_uninit(&gTrack[slot]);
+        gTrackUsed[slot] = false;
+    }
 }
 void startLoop(Buf& b, ma_sound& s, bool& flag, float vol) {
     if (!g_init || !b.valid || flag) return;
@@ -128,6 +142,12 @@ bool AudioSys::init() {
     loadAll();
     g_init = true;
     ok = true;
+    {
+        FILE* probe = fopen("sounds/dig.wav", "rb");
+        if (!probe) probe = fopen("sounds/dig.ogg", "rb");
+        if (probe) fclose(probe);
+        else printf("audio: WARNING sounds/ not found (CWD=%s?) — rebuild copies it\n", ".");
+    }
     return true;
 }
 void AudioSys::shutdown() {
