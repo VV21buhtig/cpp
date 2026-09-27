@@ -85,3 +85,30 @@ unsigned int loadTileArray(const char* dir) {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     return tex;
 }
+
+void setTileArrayFilter(unsigned int tex, int mode) {
+    // Математика: Nearest=1 тексел; Bilinear=2x2 lerp в одном мипе;
+    // Trilinear=2 мипа x bilinear + lerp по lod; Aniso=N выборок вдоль следа
+    // (лечит мыло на скользящих углах — главный кейс воксельного террейна).
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    if (mode < 0) mode = 0;
+    if (mode > 3) mode = 3;
+    if (mode >= 3) {
+        float mx = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &mx);
+        if (mx >= 2.0f) {
+            float a = mx < 8.0f ? mx : 8.0f;
+            glTexParameterf(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_ANISOTROPY, a);
+        } else mode = 2; // нет EXT — откат на трилиней
+    }
+    if (mode <= 0) {
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    } else if (mode == 1) {
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    } else {
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+}

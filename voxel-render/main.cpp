@@ -196,8 +196,6 @@ static std::vector<std::string> listWorlds() {    std::vector<std::string> out;
     return out;
 }
 
-static const int VIEW_R = 4; // радиус мешей вокруг чанка игрока
-
 int main()
 {
     if (!glfwInit()) { std::cerr << "GLFW fail\n"; return -1; }
@@ -249,9 +247,31 @@ int main()
     cvar.reg("move.step", 1.0f);
     cvar.reg("move.step_h", 1.0f);
     cvar.reg("tick.rate", 120.0f);
+    cvar.reg("vid.w", 1280.0f);
+    cvar.reg("vid.h", 720.0f);
+    cvar.reg("vid.fullscreen", 0.0f);
+    cvar.reg("vid.vsync", 1.0f);
+    cvar.reg("view.dist", 4.0f);
+    cvar.reg("gfx.filter", 0.0f);
     cvar.reg("snd.vol", 0.8f);
     cvar.reg("snd.on", 1.0f);
     cvar.load("gfx.cfg");
+    // ---- video: размер/фулскрин/vsync из cvar, применяется живо ----
+    auto applyVideo = [&]() {
+        int vw = (int)cvar.get("vid.w", 1280.0f);
+        int vh = (int)cvar.get("vid.h", 720.0f);
+        if (vw < 640) vw = 640; if (vh < 360) vh = 360;
+        if (vw > 3840) vw = 3840; if (vh > 2160) vh = 2160;
+        if (cvar.get("vid.fullscreen", 0.0f) > 0.5f) {
+            GLFWmonitor* mon = glfwGetPrimaryMonitor();
+            const GLFWvidmode* vm = glfwGetVideoMode(mon);
+            glfwSetWindowMonitor(window, mon, 0, 0, vm->width, vm->height, vm->refreshRate);
+        } else {
+            glfwSetWindowMonitor(window, nullptr, 100, 100, vw, vh, GLFW_DONT_CARE);
+        }
+        glfwSwapInterval(cvar.get("vid.vsync", 1.0f) > 0.5f ? 1 : 0);
+    };
+    applyVideo();
     cvar.onPrint = [](const std::string& s) { console.print(s); };
     console.print("console F1. try: set sun.i 2");
     std::cout << "console: F1 in game, or stdin+Enter. Try: set sun.i 2\n";
@@ -445,6 +465,47 @@ title_screen:
             if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
             MCPopSliderStyle();
             fy += 52.0f;
+            // --- video: дистанция/фильтрация/vsync/разрешение/фулскрин, всё живо ---
+            static const int dists[] = {2, 4, 6, 8, 12};
+            int vd = (int)cvar.get("view.dist", 4.0f);
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_dist", ("Render Distance: " + std::to_string(vd)).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI();
+                int ni = 0;
+                for (int i = 0; i < 5; i++) if (dists[i] == vd) ni = (i + 1) % 5;
+                cvar.set("view.dist", (float)dists[ni]);
+            }
+            fy += bh + gap;
+            static const char* fnames[] = {"Nearest", "Bilinear", "Trilinear", "Aniso 8x"};
+            int fm = (int)cvar.get("gfx.filter", 0.0f); if (fm < 0) fm = 0; if (fm > 3) fm = 3;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_filter", ("Filtering: " + std::string(fnames[fm])).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI(); cvar.set("gfx.filter", (float)((fm + 1) % 4));
+            }
+            fy += bh + gap;
+            bool vs = cvar.get("vid.vsync", 1.0f) > 0.5f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_vsync", (std::string("VSync: ") + (vs ? "ON" : "OFF")).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI(); cvar.set("vid.vsync", vs ? 0.0f : 1.0f); applyVideo();
+            }
+            fy += bh + gap;
+            int vw = (int)cvar.get("vid.w", 1280.0f), vh = (int)cvar.get("vid.h", 720.0f);
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_res", ("Resolution: " + std::to_string(vw) + "x" + std::to_string(vh)).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI();
+                static const int presets[][2] = {{960, 540}, {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
+                int ni = 0;
+                for (int i = 0; i < 5; i++) if (presets[i][0] == vw && presets[i][1] == vh) ni = (i + 1) % 5;
+                cvar.set("vid.w", (float)presets[ni][0]); cvar.set("vid.h", (float)presets[ni][1]);
+                applyVideo();
+            }
+            fy += bh + gap;
+            bool fsm = cvar.get("vid.fullscreen", 0.0f) > 0.5f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_fs", (std::string("Fullscreen: ") + (fsm ? "ON" : "OFF")).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI(); cvar.set("vid.fullscreen", fsm ? 0.0f : 1.0f); applyVideo();
+            }
+            fy += bh + gap;
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("o_packs", "Texture Packs...", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_PACKS; }
             fy += bh + gap;
@@ -613,16 +674,18 @@ title_screen:
             for (int cx = 0; cx < NCX; cx++)
                 rebuild(cx, cz);
     };
-    int curPCX = -1, curPCZ = -1;
+    int curPCX = -1, curPCZ = -1, curVR = -1;
     auto ensureAround = [&]() {
+        int vr = (int)cvar.get("view.dist", 4.0f); // render distance, чанки O(R^2)
+        if (vr < 2) vr = 2; if (vr > 12) vr = 12;
         int pcx = (int)player.pos.x / 16, pcz = (int)player.pos.z / 16;
-        if (pcx == curPCX && pcz == curPCZ) return;
-        curPCX = pcx; curPCZ = pcz;
+        if (pcx == curPCX && pcz == curPCZ && vr == curVR) return;
+        curPCX = pcx; curPCZ = pcz; curVR = vr;
         size_t nv = 0;
         for (int cz = 0; cz < NCZ; cz++)
             for (int cx = 0; cx < NCX; cx++) {
                 int dd = std::max(abs(cx - pcx), abs(cz - pcz));
-                if (dd <= VIEW_R) { if (!meshLoaded[midx(cx, cz)]) rebuild(cx, cz); nv += meshes[midx(cx, cz)].vertexCount; }
+                if (dd <= vr) { if (!meshLoaded[midx(cx, cz)]) rebuild(cx, cz); nv += meshes[midx(cx, cz)].vertexCount; }
                 else if (meshLoaded[midx(cx, cz)]) unload(cx, cz);
             }
         std::cout << "stream chunk " << pcx << "," << pcz << " verts " << nv << "\n";
@@ -660,6 +723,7 @@ title_screen:
     int packIdx = menuPackIdx;
     if (packIdx < 0 || packIdx >= (int)packNames.size()) packIdx = 0;
     unsigned int diffuseMap  = loadTileArray(packDir.c_str());
+    setTileArrayFilter(diffuseMap, (int)cvar.get("gfx.filter", 0.0f));
     auto applyPack = [&](const std::string& pn) {
         for (size_t i = 0; i < packNames.size(); i++)
             if (packNames[i] == pn) packIdx = (int)i;
@@ -670,6 +734,7 @@ title_screen:
         unsigned int nt = loadTileArray(nd.c_str());
         glDeleteTextures(1, &diffuseMap);
         diffuseMap = nt;
+        setTileArrayFilter(diffuseMap, (int)cvar.get("gfx.filter", 0.0f));
         packDir = nd;
         audio.setSoundDir(nd + "/sounds");
         audio.reload();
@@ -705,6 +770,7 @@ title_screen:
     int placeId = B_GRASS;
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
+    int lastFilter = -1; // смена gfx.filter из консоли применяется живо
     glm::vec3 pointLightPositions[4];
 
     while (!glfwWindowShouldClose(window) && !toTitle)
@@ -813,6 +879,10 @@ title_screen:
         down = sneakNow; // C убран: вниз на шифте
         }
         audio.setMaster(cvar.get("snd.vol", 0.8f) * (cvar.get("snd.on", 1.0f) > 0.5f ? 1.0f : 0.0f));
+        {
+            int fm = (int)cvar.get("gfx.filter", 0.0f);
+            if (fm != lastFilter) { setTileArrayFilter(diffuseMap, fm); lastFilter = fm; }
+        }
         audio.listener(camera.Position, camera.Front);
         static float stepAcc = 0.0f;
         {
@@ -892,7 +962,10 @@ title_screen:
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(cvar.get("cam.fov", 70.0f)), 1280.0f/720.0f, 0.1f, 600.0f);
+        int vbw, vbh;
+        glfwGetFramebufferSize(window, &vbw, &vbh);
+        if (vbh <= 0) vbh = 1;
+        glm::mat4 projection = glm::perspective(glm::radians(cvar.get("cam.fov", 70.0f)), (float)vbw / (float)vbh, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
         Frustum frustum = Frustum::fromVP(projection * view);
         auto chunkVisible = [&](int cx, int cz) {
