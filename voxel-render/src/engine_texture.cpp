@@ -29,9 +29,9 @@ unsigned int loadTexture(const char* path) {
 unsigned int loadTileArray(const char* dir) {
     // tiles/grass_top,grass_side,dirt,stone.png по 16x16. Нет файла = маджента.
     // наш layout tiles/*.png либо ванильный MC: assets/minecraft/textures/block/*.png
-    const char* ours[6] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png", "water.png", "lava.png"};
-    const char* mc[6] = {"grass_block_top.png", "grass_block_side.png", "dirt.png", "stone.png", "", ""};
-    const int T = 16, NL = 6;
+    const char* ours[9] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png", "water.png", "lava.png", "leaves.png", "log_side.png", "log_top.png"};
+    const char* mc[9] = {"grass_block_top.png", "grass_block_side.png", "dirt.png", "stone.png", "", "", "oak_leaves.png", "oak_log.png", "oak_log_top.png"};
+    const int T = 16, NL = 9;
     std::vector<unsigned char> all(T * T * 4 * NL);
     stbi_set_flip_vertically_on_load(true);
     for (int i = 0; i < NL; i++) {

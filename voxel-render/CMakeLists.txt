@@ -45,6 +45,9 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_world.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_save.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_cvar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_tree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_mine.cpp
 )
 target_include_directories(engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -70,6 +73,11 @@ if (UNIX AND NOT APPLE)
     target_link_libraries(voxel_render PRIVATE dl)
 endif()
 
+add_custom_command(TARGET voxel_render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/structures.cfg
+        $<TARGET_FILE_DIR:voxel_render>/structures.cfg
+)
 # --- Копируем shaders/ и texture/ рядом с бинарником после сборки ---
 add_custom_command(TARGET voxel_render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

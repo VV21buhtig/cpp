@@ -1,4 +1,9 @@
 #include "engine/world.h"
+#include "engine/struct/config.h"
+#include "engine/struct/tree.h"
+#include "engine/struct/mine.h"
+
+void loadStructConfigs(StructConfigs& c) { c.load("structures.cfg"); }
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -87,6 +92,13 @@ void World::init(int ncx, int ncz, int s) {
                 else setBlock(wx, y, wz, 2);
             }
         }
+    // 5. структуры: конфиг + штампы (мир целиком в RAM — границ нет)
+    {
+        StructConfigs sc;
+        loadStructConfigs(sc);
+        stampTrees(*this, sc.tree);
+        stampMines(*this, sc.mine);
+    }
 }
 
 unsigned char World::getBlock(int wx, int y, int wz) const {
@@ -113,6 +125,8 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     auto tileFor = [](unsigned char id, int axis, int sign) -> float {
         if (id == 1) return (axis == 1) ? (sign > 0 ? 0.0f : 2.0f) : 1.0f; // grass: top/side/bottom(dirt)
         if (id == 2) return 2.0f;
+        if (id == 4) return 6.0f;
+        if (id == 5) return (axis == 1) ? 8.0f : 7.0f; // log top/side
         return 3.0f; // stone и всё остальное
     };
     const int S = Chunk::SX;
