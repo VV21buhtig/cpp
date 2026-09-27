@@ -607,7 +607,7 @@ int main()
         Frustum frustum = Frustum::fromVP(projection * view);
         auto chunkVisible = [&](int cx, int cz) {
             glm::vec3 mn = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
-            return frustum.visible(mn, mn + glm::vec3(16.0f));
+            return frustum.visible(mn, mn + glm::vec3(16.0f, (float)Chunk::SY, 16.0f));
         };
 
         // ---- DAY CYCLE ----
