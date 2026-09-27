@@ -825,6 +825,11 @@ int main()
             slider("fog.near", "fog.near", 0.0f, 200.0f);
             slider("fog.far", "fog.far", 50.0f, 500.0f);
             slider("time.speed", "time.speed", 0.0f, 1200.0f);
+            {
+                float dayT = tod / 6.2831853f;
+                dayT -= floor(dayT);
+                if (ImGui::SliderFloat("time of day", &dayT, 0.0f, 1.0f)) tod = dayT * 6.2831853f;
+            }
             slider("cam.fov", "cam.fov", 30.0f, 110.0f);
             slider("walk", "move.walk", 1.0f, 12.0f);
             slider("fly", "move.fly", 2.0f, 30.0f);

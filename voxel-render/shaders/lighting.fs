@@ -155,8 +155,8 @@ void main()
     vec4 tileTexA = texture(material.diffuse, vec3(TexCoords, Tile));
     if (Tile > 5.5 && Tile < 6.5 && tileTexA.a < 0.5) discard; // листва с дырками
     vec3 tileTex = vec3(tileTexA);
-    // лава светится сама (tile 5)
-    if (Tile > 4.5) {
+    // лава светится сама (tile 5). Было Tile > 4.5 — светились и листва/бревно!
+    if (Tile > 4.5 && Tile < 5.5) {
         float fd0 = length(viewPos - FragPos);
         float ff0 = clamp((fd0 - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
         vec3 lc = mix(tileTex * 1.8, fogColor, ff0);
