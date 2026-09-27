@@ -668,6 +668,22 @@ int main()
         camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eye, 0.0f);
         ensureAround();
 
+        // тики флюидов: вода каждый 2-й, лава каждый 8-й; перестройка грязных чанков
+        {
+            static float fluidAcc = 0.0f;
+            static int fluidTick = 0;
+            fluidAcc += deltaTime;
+            if (fluidAcc >= 0.25f && world->fluidsDirty()) {
+                fluidAcc = 0.0f;
+                fluidTick++;
+                std::vector<int> dirty;
+                int n = world->tickFluids(fluidTick % 4 == 0);
+                world->takeFluidDirty(dirty);
+                for (int id : dirty) rebuild(id % NCX, id / NCX);
+                if (n > 0) std::cout << "fluid tick: " << n << " changes\n";
+            }
+        }
+
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -906,7 +922,7 @@ int main()
             }
             slider("cam.fov", "cam.fov", 30.0f, 110.0f);
             slider("walk", "move.walk", 1.0f, 12.0f);
-            slider("fly", "move.fly", 2.0f, 30.0f);
+            slider("fly speed", "move.fly", 2.0f, 30.0f);
             slider("jump", "move.jump", 2.0f, 12.0f);
             slider("tick", "tick.rate", 30.0f, 240.0f);
             {
@@ -917,7 +933,7 @@ int main()
             }
             ImGui::Checkbox("flash (F)", &flashOn);
             ImGui::Checkbox("lamps (L)", &followOn);
-            ImGui::Checkbox("fly", &player.fly);
+            ImGui::Checkbox("fly mode", &player.fly);
             bool bhop = cvar.get("move.bhop", 0.0f) > 0.5f;
             if (ImGui::Checkbox("bhop on space", &bhop)) cvar.set("move.bhop", bhop ? 1.0f : 0.0f);
             ImGui::Separator();

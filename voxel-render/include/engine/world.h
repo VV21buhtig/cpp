@@ -4,6 +4,7 @@
 #include "engine/chunk.h"
 #include <glm/glm.hpp>
 #include <vector>
+// vector уже ок
 
 // Engine: ограниченный мир nx*nz чанков по сиду (граница = пустота).
 // Данные всех чанков всегда в RAM, стримятся только МЕШИ вокруг игрока.
@@ -11,6 +12,7 @@
 struct World {
     int cx_ = 0, cz_ = 0, seed_ = 1337;
     std::vector<Chunk> chunks;
+    std::vector<char> flowDirty_;
 
     World() {}
     World(int ncx, int ncz, int s) { init(ncx, ncz, s); }
@@ -29,6 +31,14 @@ struct World {
     }
     unsigned char getBlock(int wx, int y, int wz) const;
     static bool isSolid(unsigned char id) { return id != 0 && id < 6; } // флюиды не твердые
+    static bool isFluid(unsigned char id) { return id == 6 || id == 7; }
+    unsigned char getFlow(int wx, int y, int wz) const;
+    void setFlow(int wx, int y, int wz, unsigned char v);
+    // тик флюидов по грязным чанкам; lavaTick каждый 4-й. Возвращает число изменений.
+    int tickFluids(bool lavaTick);
+    void markFluidDirty(int cx, int cz);
+    bool fluidsDirty() const;
+    void takeFluidDirty(std::vector<int>& out); // забрать+погасить флаги (для перестройки)
     void setBlock(int wx, int y, int wz, unsigned char v);
     // меш одного чанка с учётом соседних чанков (без швов)
     std::vector<float> buildChunk(int cx, int cz) const;

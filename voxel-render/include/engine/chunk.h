@@ -7,6 +7,7 @@
 struct Chunk {
     static const int SX = 16, SY = 64, SZ = 16;
     unsigned char blocks[SX * SY * SZ] = {};
+    unsigned char flow[SX * SY * SZ] = {}; // 0 нет, 1..8 уровень (8 источник)
 
     int idx(int x, int y, int z) const { return x + SX * (y + SY * z); }
     bool inBounds(int x, int y, int z) const {

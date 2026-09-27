@@ -11,6 +11,7 @@ void loadStructConfigs(StructConfigs& c) { c.load("structures.cfg"); }
 void World::init(int ncx, int ncz, int s) {
     cx_ = ncx; cz_ = ncz; seed_ = s;
     chunks.assign(ncx * ncz, Chunk());
+    flowDirty_.assign(ncx * ncz, 0);
     // Рельеф как в новом MC: 2D-октавы (континенты/холмы/горы-маска) + 3D-карв пещер.
     // SEA=20. Горы до ~44. ids: 1 grass 2 dirt 3 stone 6 water 7 lava.
     const int SEA = 20;
@@ -73,11 +74,11 @@ void World::init(int ncx, int ncz, int s) {
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= 2; y++)
-                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 7); // лава на дне
+                if (getBlock(wx, y, wz) == 0) { setBlock(wx, y, wz, 7); setFlow(wx, y, wz, 8); } // лава на дне
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= SEA && y < Chunk::SY; y++)
-                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 6); // вода
+                if (getBlock(wx, y, wz) == 0) { setBlock(wx, y, wz, 6); setFlow(wx, y, wz, 8); } // вода
     // 3b. руды в камне по глубине (детерминированно)
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
@@ -105,6 +106,7 @@ void World::init(int ncx, int ncz, int s) {
                 else setBlock(wx, y, wz, 2);
             }
         }
+    for (auto& d : flowDirty_) d = 0; // сгенерированное стабильно
     // 5. структуры: конфиг + штампы (мир целиком в RAM — границ нет)
     {
         StructConfigs sc;
@@ -123,6 +125,86 @@ unsigned char World::getBlock(int wx, int y, int wz) const {
 void World::setBlock(int wx, int y, int wz, unsigned char v) {
     if (y < 0 || y >= Chunk::SY || !inXZ(wx, wz)) return;
     at(wx / Chunk::SX, wz / Chunk::SZ).set(wx % Chunk::SX, y, wz % Chunk::SZ, v);
+    markFluidDirty(wx / Chunk::SX, wz / Chunk::SZ);
+}
+
+unsigned char World::getFlow(int wx, int y, int wz) const {
+    if (y < 0 || y >= Chunk::SY || !inXZ(wx, wz)) return 0;
+    const Chunk& c = at(wx / Chunk::SX, wz / Chunk::SZ);
+    return c.flow[c.idx(wx % Chunk::SX, y, wz % Chunk::SZ)];
+}
+
+void World::setFlow(int wx, int y, int wz, unsigned char v) {
+    if (y < 0 || y >= Chunk::SY || !inXZ(wx, wz)) return;
+    Chunk& c = at(wx / Chunk::SX, wz / Chunk::SZ);
+    c.flow[c.idx(wx % Chunk::SX, y, wz % Chunk::SZ)] = v;
+}
+
+void World::markFluidDirty(int cx, int cz) {
+    if (flowDirty_.empty()) return;
+    for (int dz = -1; dz <= 1; dz++)
+        for (int dx = -1; dx <= 1; dx++) {
+            int x = cx + dx, z = cz + dz;
+            if (x >= 0 && z >= 0 && x < cx_ && z < cz_) flowDirty_[z * cx_ + x] = 1;
+        }
+}
+
+bool World::fluidsDirty() const {
+    for (char d : flowDirty_) if (d) return true;
+    return false;
+}
+
+void World::takeFluidDirty(std::vector<int>& out) {
+    out.clear();
+    for (size_t i = 0; i < flowDirty_.size(); i++)
+        if (flowDirty_[i]) { out.push_back((int)i); flowDirty_[i] = 0; }
+}
+
+// Тик: вода каждый, лава каждый 4-й. Вниз = 8, вбок = level-1 (мин 1, макс 8 от источника).
+int World::tickFluids(bool lavaTick) {
+    int changed = 0;
+    const int W = sizeX(), D = sizeZ();
+    for (int cz = 0; cz < cz_; cz++)
+        for (int cx = 0; cx < cx_; cx++) {
+            if (!flowDirty_[cz * cx_ + cx]) continue;
+            flowDirty_[cz * cx_ + cx] = 0; // съели флаг; новые пометки переживут
+            for (int z = cz * 16; z < (cz + 1) * 16 && z < D; z++)
+                for (int x = cx * 16; x < (cx + 1) * 16 && x < W; x++)
+                    for (int y = 0; y < Chunk::SY; y++) {
+                        unsigned char id = getBlock(x, y, z);
+                        if (!isFluid(id)) continue;
+                        if (id == 7 && !lavaTick) continue;
+                        unsigned char L = getFlow(x, y, z);
+                        if (L == 0) L = 8;
+                        // вниз
+                        if (y > 0 && getBlock(x, y - 1, z) == 0) {
+                            setBlock(x, y - 1, z, id);
+                            setFlow(x, y - 1, z, 8);
+                            markFluidDirty(x / 16, z / 16);
+                            changed++;
+                            continue;
+                        }
+                        if (L <= 1) continue;
+                        // вбок
+                        const int o[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+                        for (auto& d : o) {
+                            int nx = x + d[0], nz = z + d[1];
+                            if (nx < 0 || nz < 0 || nx >= W || nz >= D) continue;
+                            if (getBlock(nx, y, nz) != 0) continue;
+                            unsigned char nl = (unsigned char)(L - 1);
+                            if (nl == 0) continue;
+                            unsigned char have = getBlock(nx, y, nz) == id ? getFlow(nx, y, nz) : 0;
+                            if (nl > have) {
+                                setBlock(nx, y, nz, id);
+                                setFlow(nx, y, nz, nl);
+                                markFluidDirty(nx / 16, nz / 16);
+                                if (++changed > 6000) { cz = cz_; break; } // остаток следующим тиком
+                            }
+                        }
+                    }
+            // флаг НЕ гасим в конце: пометки за тик переживают для rebuild
+        }
+    return changed;
 }
 
 std::vector<float> World::buildChunk(int cx, int cz) const {
@@ -278,18 +360,21 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
     static const int NB[6][3] = {{0,0,-1},{0,0,1},{-1,0,0},{1,0,0},{0,-1,0},{0,1,0}};
     water.clear(); lava.clear();
     for (int z = 0; z < 16; z++)
-    for (int y = 0; y < 64; y++)
+    for (int y = 0; y < Chunk::SY; y++)
     for (int x = 0; x < 16; x++) {
         int wx = cx * 16 + x, wz = cz * 16 + z;
         unsigned char id = getBlock(wx, y, wz);
         if (id != 6 && id != 7) continue;
         float tile = (id == 6) ? 4.0f : 5.0f;
+        float lvl = (float)getFlow(wx, y, wz) / 8.0f; // поверхность по уровню
+        if (lvl <= 0.0f) lvl = 1.0f;
         std::vector<float>& out = (id == 6) ? water : lava;
         for (int f = 0; f < 6; f++) {
             if (getBlock(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]) != 0) continue;
             for (int v = 0; v < 6; v++) {
-                float px = F[f][v][0] + x, py = F[f][v][1] + y, pz = F[f][v][2] + z;
-                if (id == 6 && F[f][v][4] > 0.9f) py -= 0.125f; // поверхность воды ниже
+                float px = F[f][v][0] + x, pz = F[f][v][2] + z;
+                float py = (F[f][v][1] > 0.5f) ? (float)y + lvl : (float)y + F[f][v][1];
+                out.push_back(px); out.push_back(py); out.push_back(pz);
                 out.push_back(px); out.push_back(py); out.push_back(pz);
                 out.push_back(F[f][v][3]); out.push_back(F[f][v][4]); out.push_back(F[f][v][5]);
                 out.push_back(F[f][v][6]); out.push_back(F[f][v][7]);
