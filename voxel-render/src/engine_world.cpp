@@ -69,15 +69,15 @@ void World::init(int ncx, int ncz, int s) {
                 if (fabs(n - 0.5f) < 0.012f) setBlock(wx, y, wz, 0); // спагетти-тоннели
             }
         }
-    // 3. флюиды: море + озёра в низинах, лава на дне
-    for (int wz = 0; wz < D; wz++)
-        for (int wx = 0; wx < W; wx++)
-            for (int y = 0; y <= SEA && y < Chunk::SY; y++)
-                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 6); // вода
+    // 3. флюиды: сначала лава на дне (иначе вода займёт низ), потом море
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= 2; y++)
                 if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 7); // лава на дне
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++)
+            for (int y = 0; y <= SEA && y < Chunk::SY; y++)
+                if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 6); // вода
     // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++) {
@@ -148,8 +148,11 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     else                { bx = wx0 + u; by = v; bz = wz0 + s; oz = sign; }
                     unsigned char id = getBlock(bx, by, bz);
                     unsigned char ob = getBlock(bx + ox, by + oy, bz + oz);
-                    // флюиды не мешутся; грань нужна если сосед не opaque (вода видна насквозь)
-                    mask[v][u] = (id != 0 && id < 6 && (ob == 0 || ob >= 6)) ? id : 0;
+                    // флюиды не мешутся; грань нужна если сосед не opaque (вода видна насквозь).
+                    // листва с дырками (cutout) соседей НЕ закрывает: иначе сквозь дыры
+                    // видно полые внутренности (ствол без граней). Лист-лист давим как раньше.
+                    bool oOpaque = ob != 0 && ob < 6 && !(ob == 4 && id != 4);
+                    mask[v][u] = (id != 0 && id < 6 && !oOpaque) ? id : 0;
                 }
             bool done[64][16] = {};
             for (int v = 0; v < NV; v++)
