@@ -586,7 +586,7 @@ int main()
         player.autoJump = cvar.get("move.bhop", 0.0f) > 0.5f;
         }
         bool jump = false, down = false;
-        static double lastSpaceTap = -1.0;
+        static bool prevSpace = false;
         bool sneakNow = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                         glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
         player.sneak = sneakNow && !console.open;
@@ -598,16 +598,12 @@ int main()
         bool spaceNow = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         bool ctrlNow = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
                        glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
-        static bool prevSpace = false, prevCtrl = false;
-        if (spaceNow && !prevSpace) { // фронт пробела
-            if (ctrlNow || (now - lastSpaceTap < 0.35)) { // ctrl+space или дабл-тап = полёт
-                player.fly = !player.fly;
-                player.vel = glm::vec3(0.0f);
-                std::cout << (player.fly ? "FLY\n" : "WALK\n");
-            }
-            lastSpaceTap = now;
+        if (spaceNow && !prevSpace && ctrlNow) { // только Ctrl+Space — дабл-тап убран
+            player.fly = !player.fly;
+            player.vel = glm::vec3(0.0f);
+            std::cout << (player.fly ? "FLY\n" : "WALK\n");
         }
-        prevSpace = spaceNow; prevCtrl = ctrlNow;
+        prevSpace = spaceNow;
         jump = spaceNow;
         down = sneakNow; // C убран: вниз на шифте
         }
