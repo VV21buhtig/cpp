@@ -95,3 +95,8 @@ add_custom_command(TARGET voxel_render POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/texture
         $<TARGET_FILE_DIR:voxel_render>/texture
 )
+add_custom_command(TARGET voxel_render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/fonts
+        $<TARGET_FILE_DIR:voxel_render>/fonts
+)

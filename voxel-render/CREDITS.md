@@ -10,3 +10,5 @@
 - sounds/*.wav: converted from "InventivetalentDev minecraft-assets 1.16.5"
   (clearer vanilla-style SFX: dig/step/splash/click). License of that pack is
   unclear — local use; replace with CC0 if publishing (see OGA "100 CC0 SFX").
+- fonts/Monocraft.ttf: Monocraft by Idrees Hassan, SIL OFL 1.1 (see fonts/OFL.txt),
+  https://github.com/IdreesInc/Monocraft
