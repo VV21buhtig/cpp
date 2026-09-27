@@ -19,11 +19,9 @@ struct Chunk {
     void set(int x, int y, int z, unsigned char v) {
         if (inBounds(x, y, z)) blocks[idx(x, y, z)] = v;
     }
-    // строит interleaved pos3+norm3+uv2+tile1 только для exposed-граней
-    std::vector<float> buildMesh() const;
 };
 
-// Engine: динамический VAO/VBO чанка. Отдельно от CubeMesh чтобы не трогать буферы кубов.
+// Engine: динамический VAO/VBO чанка (формат pos3+norm3+uv2+tile1+ao1).
 class ChunkMesh {
 public:
     unsigned int VAO = 0, VBO = 0;

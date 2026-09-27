@@ -1,7 +1,6 @@
 // Glad 2 — инклуд <glad/gl.h>, и он ДО GLFW
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
-#include "engine/mesh.h"
 #include "engine/texture.h"
 #include "engine/chunk.h"
 #include "engine/world.h"
@@ -600,7 +599,7 @@ int main()
         ensureAround();
 
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glm::mat4 projection = glm::perspective(glm::radians(cvar.get("cam.fov", 70.0f)), 1280.0f/720.0f, 0.1f, 600.0f);
         glm::mat4 view = camera.GetViewMatrix();
@@ -692,10 +691,6 @@ int main()
         prevF5 = curF5; prevF9 = curF9;
 
         // PASS 1: opaque. Только загруженные видимые меши.
-        glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-        glStencilFunc(GL_ALWAYS, 1, 0xFF);
-        glStencilMask(0xFF);
-
         lightingShader.use();
         lightingShader.setFloat("material.shininess", 32.0f);
         lightingShader.setVec3("viewPos", camera.Position);

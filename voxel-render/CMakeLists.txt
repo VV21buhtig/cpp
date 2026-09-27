@@ -40,7 +40,6 @@ target_link_libraries(imgui PUBLIC glfw)
 
 # --- Engine (mesh/texture) и Game (pick) — распил main.cpp, GL-порядок 1:1 ---
 add_library(engine STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_texture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_chunk.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_world.cpp
@@ -53,7 +52,6 @@ target_include_directories(engine PUBLIC
 target_link_libraries(engine PUBLIC glad glfw OpenGL::GL)
 
 add_library(game STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/game_pick.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game_player.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game_console.cpp
 )
