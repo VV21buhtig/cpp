@@ -1,7 +1,10 @@
 #include "engine/chunk.h"
 #include <glad/gl.h>
+#include <cstdio>
 
 void ChunkMesh::upload(const std::vector<float>& data) {
+    // формат pos3+norm3+uv2+tile1+ao1 = 10: чужой страйд = взрыв спайков (было)
+    if (data.size() % 10 != 0) { printf("MESH STRIDE BUG: %zu floats\n", data.size()); return; }
     destroy();
     vertexCount = (int)(data.size() / 10);
     if (data.empty()) return;

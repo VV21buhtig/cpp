@@ -375,7 +375,6 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
                 float px = F[f][v][0] + x, pz = F[f][v][2] + z;
                 float py = (F[f][v][1] > 0.5f) ? (float)y + lvl : (float)y + F[f][v][1];
                 out.push_back(px); out.push_back(py); out.push_back(pz);
-                out.push_back(px); out.push_back(py); out.push_back(pz);
                 out.push_back(F[f][v][3]); out.push_back(F[f][v][4]); out.push_back(F[f][v][5]);
                 out.push_back(F[f][v][6]); out.push_back(F[f][v][7]);
                 out.push_back(tile); out.push_back(3.0f);
