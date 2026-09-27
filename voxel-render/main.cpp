@@ -7,6 +7,7 @@
 #include "engine/save.h"
 #include "engine/cvar.h"
 #include "engine/frustum.h"
+#include "engine/audio.h"
 #include "game/player.h"
 #include "game/console.h"
 #include "imgui.h"
@@ -166,6 +167,8 @@ int main()
     cvar.reg("move.step", 1.0f);
     cvar.reg("move.step_h", 1.0f);
     cvar.reg("tick.rate", 120.0f);
+    cvar.reg("snd.vol", 0.8f);
+    cvar.reg("snd.on", 1.0f);
     cvar.load("gfx.cfg");
     cvar.onPrint = [](const std::string& s) { console.print(s); };
     console.print("console F1. try: set sun.i 2");
@@ -181,6 +184,11 @@ int main()
     for (auto& d : listDirs("shaders/packs")) shaderPacks.push_back(d);
 
     mkdir("worlds", 0755); // сейвы должны куда-то писаться (CWD=build/)
+    AudioSys audio;
+    if (!audio.init()) std::cout << "audio: no device, muted\n";
+    audio.setMaster(cvar.get("snd.vol", 0.8f));
+    audio.wind(true);
+
     // ================= MENU =================
     std::string playPath;   // worlds/<name>.bin
     int playCX = 16, playCZ = 16, playSeed = 1337;
@@ -215,7 +223,7 @@ int main()
         ImGui::Text("Worlds:");
         for (size_t i = 0; i < worlds.size(); i++)
             if (ImGui::Selectable(worlds[i].c_str(), (int)i == menuWorldSel)) menuWorldSel = (int)i;
-        if (!worlds.empty() && ImGui::Button("Play")) {
+        if (!worlds.empty() && ImGui::Button("Play")) { audio.playUI();
             playPath = "worlds/" + worlds[menuWorldSel] + ".bin";
             playNew = false;
         }
@@ -322,7 +330,8 @@ int main()
         glfwSwapBuffers(window);
     }
     if (wantQuit || playPath.empty()) {
-        ImGui_ImplOpenGL3_Shutdown();
+        audio.shutdown();
+    ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
         glfwDestroyWindow(window);
@@ -583,6 +592,25 @@ int main()
         jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
         }
+        audio.setMaster(cvar.get("snd.vol", 0.8f) * (cvar.get("snd.on", 1.0f) > 0.5f ? 1.0f : 0.0f));
+        audio.listener(camera.Position, camera.Front);
+        static float stepAcc = 0.0f;
+        {
+            float hs = sqrt(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
+            if (!player.fly && player.onGround && hs > 1.0f) {
+                stepAcc += hs * deltaTime;
+                if (stepAcc > 2.2f) { stepAcc = 0.0f; audio.playStep(player.pos + worldOffset); }
+            } else stepAcc = 0.0f;
+        }
+        // всплеск при входе в воду
+        {
+            static bool wasWet = false;
+            unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
+            bool wet = (fb == 6);
+            if (wet && !wasWet) audio.playSplash(player.pos + worldOffset);
+            if (fb == 7 && !wasWet) audio.playThunk(player.pos + worldOffset);
+            wasWet = wet || fb == 7;
+        }
         float rate = cvar.get("tick.rate", 120.0f);
         if (rate < 30.0f) rate = 30.0f;
         if (rate > 240.0f) rate = 240.0f;
@@ -657,6 +685,7 @@ int main()
         if (hasHit && !console.open) {
             if (curL && !prevL) {
                 world->setBlock(wx, wy, wz, 0);
+                audio.playBreak(worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f));
                 touchEdit(wx, wz);
             }
             if (curR && !prevR) {
@@ -667,6 +696,7 @@ int main()
                 // ставить можно в воздух и во флюид (замена воды/лавы блоком)
                 if (!World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
                     world->setBlock(px, py, pz, (unsigned char)placeId);
+                    audio.playPlace(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f));
                     touchEdit(px, pz);
                 }
             }

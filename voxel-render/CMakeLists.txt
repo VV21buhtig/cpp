@@ -45,6 +45,7 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_world.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_save.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_cvar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/audio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_tree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_mine.cpp
@@ -52,7 +53,7 @@ add_library(engine STATIC
 target_include_directories(engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(engine PUBLIC glad glfw OpenGL::GL)
+target_link_libraries(engine PUBLIC glad glfw OpenGL::GL pthread dl m)
 
 add_library(game STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/game_player.cpp
