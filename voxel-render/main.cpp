@@ -65,6 +65,15 @@ static bool MCButton(const char* id, const char* label, ImVec2 size, ImFont* f, 
     ImGui::PopID();
     return clicked;
 }
+// Слайдеры без «читерской» синевы: тёмный трек, серый ползунок.
+static void MCPushSliderStyle() {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f, 0.04f, 0.04f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.10f, 0.10f, 0.10f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.10f, 0.10f, 0.10f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.78f, 0.78f, 0.78f, 1.0f));
+}
+static void MCPopSliderStyle() { ImGui::PopStyleColor(5); }
 // Фон: тайленная земля + затемнение.
 static void MCDirtBG(unsigned int tex, int ww, int hh) {
     ImDrawList* d = ImGui::GetBackgroundDrawList();
@@ -417,6 +426,7 @@ title_screen:
         } else if (scr == M_OPTIONS) {
             MCTitle(md, fontUI, fs + 4.0f, "Options...", (float)ww, 24.0f);
             float fx = cx, fy = 84.0f;
+            MCPushSliderStyle();
             float v = cvar.get("cam.fov", 70.0f);
             ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
             if (ImGui::SliderFloat("FOV", &v, 30.0f, 110.0f)) cvar.set("cam.fov", v);
@@ -428,6 +438,7 @@ title_screen:
             v = cvar.get("fog.far", 260.0f);
             ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
             if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
+            MCPopSliderStyle();
             fy += 52.0f;
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("o_packs", "Texture Packs...", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_PACKS; }
@@ -509,9 +520,6 @@ title_screen:
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
-    glDeleteTextures(1, &texDirt);
-    glDeleteTextures(1, &texGTop);
-    glDeleteTextures(1, &texGSide);
     if (wantQuit || playPath.empty()) {
         audio.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
@@ -1106,14 +1114,13 @@ title_screen:
         if (gPaused) {
             int pww, phh;
             glfwGetFramebufferSize(window, &pww, &phh);
-            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)pww, (float)phh), IM_COL32(0, 0, 0, 150));
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(ImVec2((float)pww, (float)phh));
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0.6f));
             ImGui::Begin("pause", nullptr,
                          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+                         ImGuiWindowFlags_NoScrollWithMouse);
             if (fontUI) ImGui::PushFont(fontUI);
             ImDrawList* pd = ImGui::GetWindowDrawList();
             const float pbw = 400.0f, pbh = 36.0f, pgap = 8.0f;
@@ -1142,6 +1149,7 @@ title_screen:
             } else {
                 MCTitle(pd, fontUI, pfs + 4.0f, "Options...", (float)pww, (float)phh * 0.18f);
                 float py = (float)phh * 0.18f + 64.0f;
+                MCPushSliderStyle();
                 float v = cvar.get("cam.fov", 70.0f);
                 ImGui::SetCursorPos(ImVec2(pcx, py)); ImGui::SetNextItemWidth(pbw);
                 if (ImGui::SliderFloat("FOV", &v, 30.0f, 110.0f)) cvar.set("cam.fov", v);
@@ -1153,6 +1161,7 @@ title_screen:
                 v = cvar.get("fog.far", 260.0f);
                 ImGui::SetCursorPos(ImVec2(pcx, py)); ImGui::SetNextItemWidth(pbw);
                 if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
+                MCPopSliderStyle();
                 py += 52.0f;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
                 if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
@@ -1254,6 +1263,9 @@ title_screen:
     for (auto& m : lavaMeshes) m.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
+    glDeleteTextures(1, &texDirt);
+    glDeleteTextures(1, &texGTop);
+    glDeleteTextures(1, &texGSide);
     world.reset();
     gPaused = false;
     if (toTitle && !glfwWindowShouldClose(window)) goto title_screen;
