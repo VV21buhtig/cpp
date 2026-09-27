@@ -38,7 +38,7 @@ bool loadWav(Voice& v, const char* path) {
     return true;
 }
 
-Voice gBreak, gBreakWood, gBreakStone, gPlace, gStepG1, gStepG2, gStepStone, gStepWet, gSplash, gSwim, gUI, gAmbient, gLavaLoop, gUnderLoop;
+Voice gBreak, gBreakWood, gBreakLeaves, gBreakStone, gPlace, gStepG1, gStepG2, gStepStone, gStepWet, gSplash, gSwim, gUI, gAmbient, gLavaLoop, gUnderLoop;
 ma_sound gAmbSnd, gLavaSnd, gUnderSnd;
 bool gAmbOn = false, gLavaOn = false, gUnderOn = false;
 
@@ -94,6 +94,7 @@ void play(Voice& v, glm::vec3 at, float vol, float rate, float maxDist, bool spa
 static void loadAll() {
     makeVoice(gBreak, "dig");
     makeVoice(gBreakWood, "dig_wood");
+    makeVoice(gBreakLeaves, "dig_leaves");
     makeVoice(gBreakStone, "dig_stone");
     makeVoice(gPlace, "place");
     makeVoice(gStepG1, "step_grass1");
@@ -130,7 +131,7 @@ void AudioSys::shutdown() {
     if (gAmbOn) { ma_sound_uninit(&gAmbSnd); gAmbOn = false; }
     if (gLavaOn) { ma_sound_uninit(&gLavaSnd); gLavaOn = false; }
     if (gUnderOn) { ma_sound_uninit(&gUnderSnd); gUnderOn = false; }
-    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
+    for (Voice* v : {&gBreak, &gBreakWood, &gBreakLeaves, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
         dropVoice(*v);
     ma_engine_uninit(&g_eng);
     g_init = false;
@@ -146,7 +147,7 @@ void AudioSys::reload() {
     if (gAmbOn) { ma_sound_uninit(&gAmbSnd); gAmbOn = false; }
     if (gLavaOn) { ma_sound_uninit(&gLavaSnd); gLavaOn = false; }
     if (gUnderOn) { ma_sound_uninit(&gUnderSnd); gUnderOn = false; }
-    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
+    for (Voice* v : {&gBreak, &gBreakWood, &gBreakLeaves, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
         dropVoice(*v);
     loadAll();
     if (gAmbOn) wind(true);
@@ -159,23 +160,25 @@ void AudioSys::listener(glm::vec3 pos, glm::vec3 front) {
 int AudioSys::voices() {
     if (!g_init) return -1;
     int n = 0;
-    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gUI})
+    for (Voice* v : {&gBreak, &gBreakWood, &gBreakLeaves, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gUI})
         if (v->has && ma_sound_is_playing(&v->snd)) n++;
     return n;
 }
 void AudioSys::playBreak(glm::vec3 at) { play(gBreak, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true); }
 void AudioSys::playBreakWood(glm::vec3 at) { play(gBreakWood, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true); }
-// слом/ставка по типу блока: дерево, камень/руда, остальное земля
+// слом/ставка по типу блока: бревно=дерево, листва=трава, камень/руда=камень, остальное земля
 static void breakById(glm::vec3 at, int id) {
     Voice* dst = &gBreak;
-    if (id == 5 || id == 4) dst = &gBreakWood;
+    if (id == 5) dst = &gBreakWood;
+    else if (id == 4) dst = &gBreakLeaves;
     else if (id == 3 || (id >= 9 && id <= 12)) dst = &gBreakStone;
     play(*dst, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true);
 }
 void AudioSys::playBreakId(glm::vec3 at, int id) { breakById(at, id); }
 void AudioSys::playPlaceId(glm::vec3 at, int id) {
     Voice* dst = &gPlace;
-    if (id == 5 || id == 4) dst = &gBreakWood;
+    if (id == 5) dst = &gBreakWood;
+    else if (id == 4) dst = &gBreakLeaves;
     else if (id == 3 || (id >= 9 && id <= 12)) dst = &gBreakStone;
     else if (id == 1 || id == 2) dst = &gBreak;
     play(*dst, at, 0.7f, 1.1f, 48.0f, true);
