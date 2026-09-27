@@ -472,6 +472,8 @@ int main()
         glDeleteTextures(1, &diffuseMap);
         diffuseMap = nt;
         packDir = nd;
+        audio.setSoundDir(nd + "/sounds");
+        audio.reload();
         console.print("pack: " + nd + "\n");
     };
     if (packNames[packIdx] != "default") applyPack(packNames[packIdx]);
@@ -607,19 +609,7 @@ int main()
                 }
             } else stepAcc = 0.0f;
         }
-        {
-            unsigned char fb0 = world->getBlock((int)player.pos.x, (int)player.pos.y, (int)player.pos.z);
-            bool nearWater = fb0 == 6;
-            if (!nearWater)
-                for (int r = 1; r <= 3 && !nearWater; r++)
-                    for (int a = -r; a <= r && !nearWater; a++)
-                        for (int b = -r; b <= r && !nearWater; b++)
-                            if (world->getBlock((int)player.pos.x + a, (int)player.pos.y, (int)player.pos.z + b) == 6 ||
-                                world->getBlock((int)player.pos.x + a, (int)player.pos.y - 1, (int)player.pos.z + b) == 6)
-                                nearWater = true;
-            audio.waterAt(camera.Position, nearWater ? 1.0f : 0.0f, deltaTime);
-        }
-        // всплеск при входе в воду
+        // всплеск при входе в воду (шуршания-лупа больше нет — только всплеск)
         {
             static bool wasWet = false;
             unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
