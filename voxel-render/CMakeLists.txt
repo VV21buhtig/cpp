@@ -79,6 +79,11 @@ add_custom_command(TARGET voxel_render POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/structures.cfg
         $<TARGET_FILE_DIR:voxel_render>/structures.cfg
 )
+add_custom_command(TARGET voxel_render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/sounds
+        $<TARGET_FILE_DIR:voxel_render>/sounds
+)
 # --- Копируем shaders/ и texture/ рядом с бинарником после сборки ---
 add_custom_command(TARGET voxel_render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

@@ -599,8 +599,25 @@ int main()
             float hs = sqrt(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
             if (!player.fly && player.onGround && hs > 1.0f) {
                 stepAcc += hs * deltaTime;
-                if (stepAcc > 2.2f) { stepAcc = 0.0f; audio.playStep(player.pos + worldOffset); }
+                if (stepAcc > 2.2f) {
+                    stepAcc = 0.0f;
+                    unsigned char gb = world->getBlock((int)player.pos.x, (int)player.pos.y - 1, (int)player.pos.z);
+                    int surf = (gb == 3 || (gb >= 9 && gb <= 12)) ? 1 : 0;
+                    audio.playStep(player.pos + worldOffset, surf);
+                }
             } else stepAcc = 0.0f;
+        }
+        {
+            unsigned char fb0 = world->getBlock((int)player.pos.x, (int)player.pos.y, (int)player.pos.z);
+            bool nearWater = fb0 == 6;
+            if (!nearWater)
+                for (int r = 1; r <= 3 && !nearWater; r++)
+                    for (int a = -r; a <= r && !nearWater; a++)
+                        for (int b = -r; b <= r && !nearWater; b++)
+                            if (world->getBlock((int)player.pos.x + a, (int)player.pos.y, (int)player.pos.z + b) == 6 ||
+                                world->getBlock((int)player.pos.x + a, (int)player.pos.y - 1, (int)player.pos.z + b) == 6)
+                                nearWater = true;
+            audio.waterAt(camera.Position, nearWater ? 1.0f : 0.0f, deltaTime);
         }
         // всплеск при входе в воду
         {
@@ -684,8 +701,11 @@ int main()
         // ---- BREAK / PLACE ----
         if (hasHit && !console.open) {
             if (curL && !prevL) {
+                unsigned char broken = world->getBlock(wx, wy, wz);
                 world->setBlock(wx, wy, wz, 0);
-                audio.playBreak(worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f));
+                glm::vec3 bp = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
+                if (broken == 5 || broken == 4) audio.playBreakWood(bp);
+                else audio.playBreak(bp);
                 touchEdit(wx, wz);
             }
             if (curR && !prevR) {
