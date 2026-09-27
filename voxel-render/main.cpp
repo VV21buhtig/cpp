@@ -31,6 +31,73 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cfloat>
+
+// ---- MC-style меню: тень текста, кнопки, фон, логотип ----
+static void MCShadowText(ImDrawList* d, ImFont* f, float size, ImVec2 p, ImU32 col, const char* txt) {
+    d->AddText(f, size, ImVec2(p.x + 2, p.y + 2), IM_COL32(63, 63, 63, 255), txt);
+    d->AddText(f, size, p, col, txt);
+}
+static void MCTitle(ImDrawList* d, ImFont* f, float size, const char* txt, float ww, float y) {
+    if (!f) return;
+    ImVec2 ts = f->CalcTextSizeA(size, 10000.0f, 0, txt);
+    MCShadowText(d, f, size, ImVec2((ww - ts.x) * 0.5f, y), IM_COL32(200, 200, 200, 255), txt);
+}
+// Кнопка в духе MC Beta: серая с градиентом, чёрная рамка, жёлтый текст при наведении.
+static bool MCButton(const char* id, const char* label, ImVec2 size, ImFont* f, float fsize, bool enabled = true) {
+    ImGui::PushID(id);
+    ImGui::InvisibleButton("##mc", size);
+    bool clicked = enabled && ImGui::IsItemClicked();
+    bool hov = enabled && ImGui::IsItemHovered();
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImDrawList* d = ImGui::GetWindowDrawList();
+    ImU32 cTop = !enabled ? IM_COL32(85, 85, 85, 255) : (hov ? IM_COL32(160, 168, 225, 255) : IM_COL32(150, 150, 150, 255));
+    ImU32 cBot = !enabled ? IM_COL32(65, 65, 65, 255) : (hov ? IM_COL32(110, 118, 175, 255) : IM_COL32(105, 105, 105, 255));
+    d->AddRectFilledMultiColor(a, b, cTop, cTop, cBot, cBot);
+    d->AddRect(a, b, IM_COL32(0, 0, 0, 255), 0.0f, 0, 2.0f);
+    d->AddLine(ImVec2(a.x + 2, a.y + 2), ImVec2(b.x - 2, a.y + 2), IM_COL32(255, 255, 255, 70));
+    if (f) {
+        ImVec2 ts = f->CalcTextSizeA(fsize, 10000.0f, 0, label);
+        ImVec2 tp(a.x + (size.x - ts.x) * 0.5f, a.y + (size.y - ts.y) * 0.5f);
+        ImU32 tc = !enabled ? IM_COL32(160, 160, 160, 255) : (hov ? IM_COL32(255, 255, 160, 255) : IM_COL32(255, 255, 255, 255));
+        MCShadowText(d, f, fsize, tp, tc, label);
+    }
+    ImGui::PopID();
+    return clicked;
+}
+// Фон: тайленная земля + затемнение.
+static void MCDirtBG(unsigned int tex, int ww, int hh) {
+    ImDrawList* d = ImGui::GetBackgroundDrawList();
+    const float T = 64.0f;
+    for (float y = 0; y < (float)hh; y += T)
+        for (float x = 0; x < (float)ww; x += T)
+            d->AddImage((ImTextureID)(intptr_t)tex, ImVec2(x, y), ImVec2(x + T, y + T));
+    d->AddRectFilled(ImVec2(0, 0), ImVec2((float)ww, (float)hh), IM_COL32(0, 0, 0, 140));
+}
+// Логотип: изометрический куб травы + RENDOR.
+static void MCLogo(ImDrawList* d, ImFont* f, float fsize, unsigned int tTop, unsigned int tSide, ImVec2 origin, float width) {
+    const char* txt = "RENDOR";
+    ImVec2 ts = f->CalcTextSizeA(fsize, 10000.0f, 0, txt);
+    float u = fsize * 0.72f;
+    float gap = 24.0f;
+    float x0 = origin.x + (width - (u * 2 + gap + ts.x)) * 0.5f;
+    float cy = origin.y;
+    ImVec2 T(x0 + u, cy), L(x0, cy + u * 0.5f), C(x0 + u, cy + u), R(x0 + 2 * u, cy + u * 0.5f);
+    ImVec2 BL(x0, cy + u * 1.5f), BC(x0 + u, cy + 2 * u), BR(x0 + 2 * u, cy + u * 1.5f);
+    d->AddImageQuad((ImTextureID)(intptr_t)tTop, T, R, C, L,
+                    ImVec2(0.5f, 1), ImVec2(1, 0.5f), ImVec2(0.5f, 0), ImVec2(0, 0.5f), IM_COL32_WHITE);
+    d->AddImageQuad((ImTextureID)(intptr_t)tSide, L, C, BC, BL,
+                    ImVec2(0, 1), ImVec2(1, 1), ImVec2(1, 0), ImVec2(0, 0), IM_COL32(150, 150, 150, 255));
+    d->AddImageQuad((ImTextureID)(intptr_t)tSide, C, R, BR, BC,
+                    ImVec2(0, 1), ImVec2(1, 1), ImVec2(1, 0), ImVec2(0, 0), IM_COL32(205, 205, 205, 255));
+    ImVec2 tp(x0 + u * 2 + gap, cy + u - ts.y * 0.5f);
+    ImU32 out = IM_COL32(40, 40, 40, 255);
+    d->AddText(f, fsize, ImVec2(tp.x - 3, tp.y), out, txt);
+    d->AddText(f, fsize, ImVec2(tp.x + 3, tp.y), out, txt);
+    d->AddText(f, fsize, ImVec2(tp.x, tp.y - 3), out, txt);
+    d->AddText(f, fsize, ImVec2(tp.x, tp.y + 3), out, txt);
+    MCShadowText(d, f, fsize, tp, IM_COL32(255, 255, 255, 255), txt);
+}
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
@@ -124,7 +191,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Voxel", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "Rendor", nullptr, nullptr);
     if (!window) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -188,7 +255,9 @@ int main()
     if (!audio.init()) std::cout << "audio: no device, muted\n";
     audio.setMaster(cvar.get("snd.vol", 0.8f));
 
-    // ================= MENU =================
+    // ================= MENU (MC-style) =================
+    enum MenuScr { M_MAIN, M_SINGLE, M_CREATE, M_OPTIONS, M_PACKS };
+    MenuScr scr = M_MAIN;
     std::string playPath;   // worlds/<name>.bin
     int playCX = 16, playCZ = 16, playSeed = 1337;
     bool playNew = false, wantQuit = false;
@@ -196,88 +265,178 @@ int main()
     int newSizeIdx = 1; // 0:8 1:16 2:24
     int newSeed = 1337;
     int menuWorldSel = 0, menuShaderSel = 0, menuPackIdx = 0;
+    bool delArm = false; // удаление мира: первое нажатие ставит на взвод
     const int sizes[3] = {8, 16, 24};
+    const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
+
+    // Шрифт меню (Monocraft, OFL) + текстуры меню. CWD=build/, fonts/ копируется пост-билдом.
+    ImFont* fontUI = nullptr, *fontLogo = nullptr;
+    {
+        ImGuiIO& mio = ImGui::GetIO();
+        fontUI = mio.Fonts->AddFontFromFileTTF("fonts/Monocraft.ttf", 20.0f, nullptr, mio.Fonts->GetGlyphRangesCyrillic());
+        fontLogo = mio.Fonts->AddFontFromFileTTF("fonts/Monocraft.ttf", 64.0f, nullptr, mio.Fonts->GetGlyphRangesCyrillic());
+        if (!fontUI) {
+            mio.Fonts->AddFontDefault();
+            std::cout << "menu: fonts/Monocraft.ttf missing, fallback\n";
+        }
+    }
+    unsigned int texDirt = loadTexture("texture/tiles/dirt.png");
+    unsigned int texGTop = loadTexture("texture/tiles/grass_top.png");
+    unsigned int texGSide = loadTexture("texture/tiles/grass_side.png");
+    for (unsigned int t : {texDirt, texGTop, texGSide}) {
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
     while (!wantQuit && playPath.empty()) {
         glfwPollEvents();
         if (glfwWindowShouldClose(window)) { wantQuit = true; break; }
         int ww, hh;
         glfwGetFramebufferSize(window, &ww, &hh);
         glViewport(0, 0, ww, hh);
-        glClearColor(0.05f, 0.06f, 0.08f, 1.0f);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        MCDirtBG(texDirt, ww, hh);
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2((float)ww, (float)hh));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
         ImGui::Begin("menu", nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-        ImGui::SetCursorPos(ImVec2(((float)ww - 520.0f) / 2.0f, 20.0f));
-        ImGui::BeginChild("center", ImVec2(520.0f, (float)hh - 40.0f), false);
-        ImGui::Text("VOXEL");
-        ImGui::Separator();
-        std::vector<std::string> worlds = listWorlds();
-        if (menuWorldSel >= (int)worlds.size()) menuWorldSel = 0;
-        ImGui::Text("Worlds:");
-        for (size_t i = 0; i < worlds.size(); i++)
-            if (ImGui::Selectable(worlds[i].c_str(), (int)i == menuWorldSel)) menuWorldSel = (int)i;
-        if (!worlds.empty() && ImGui::Button("Play")) { audio.playUI();
-            playPath = "worlds/" + worlds[menuWorldSel] + ".bin";
-            playNew = false;
-        }
-        ImGui::SameLine();
-        if (!worlds.empty() && ImGui::Button("Delete") && menuWorldSel < (int)worlds.size()) {
-            remove(("worlds/" + worlds[menuWorldSel] + ".bin").c_str());
-            menuWorldSel = 0;
-        }
-        // legacy import
-        {
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+        if (fontUI) ImGui::PushFont(fontUI);
+        ImDrawList* md = ImGui::GetWindowDrawList();
+        const float bw = 400.0f, bh = 36.0f, gap = 8.0f;
+        const float fs = fontUI ? 20.0f : 13.0f;
+        const float cx = ((float)ww - bw) * 0.5f;
+
+        if (scr == M_MAIN) {
+            MCLogo(md, fontLogo ? fontLogo : ImGui::GetFont(), fontLogo ? 64.0f : 40.0f,
+                   texGTop, texGSide, ImVec2(0, (float)hh * 0.10f), (float)ww);
+            float y = (float)hh * 0.10f + 2 * (fontLogo ? 64.0f : 40.0f) * 0.72f + 48.0f;
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("m_single", "Singleplayer", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_SINGLE; delArm = false; }
+            y += bh + gap;
+            float bw2 = (bw - gap) * 0.5f;
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("m_opt", "Options...", ImVec2(bw2, bh), fontUI, fs)) { audio.playUI(); scr = M_OPTIONS; }
+            ImGui::SetCursorPos(ImVec2(cx + bw2 + gap, y));
+            if (MCButton("m_quit", "Quit Game", ImVec2(bw2, bh), fontUI, fs)) { wantQuit = true; }
+        } else if (scr == M_SINGLE) {
+            MCTitle(md, fontUI, fs + 4.0f, "Select World", (float)ww, 24.0f);
+            std::vector<std::string> worlds = listWorlds();
+            if (menuWorldSel >= (int)worlds.size()) { menuWorldSel = 0; delArm = false; }
+            float listW = (float)ww < 660.0f ? (float)ww - 40.0f : 620.0f;
+            float listH = (float)hh * 0.42f;
+            ImGui::SetCursorPos(ImVec2(((float)ww - listW) * 0.5f, 64.0f));
+            ImGui::BeginChild("worlds", ImVec2(listW, listH), true);
+            for (size_t i = 0; i < worlds.size(); i++)
+                if (ImGui::Selectable(worlds[i].c_str(), (int)i == menuWorldSel)) { menuWorldSel = (int)i; delArm = false; }
+            ImGui::EndChild();
+            float y = 64.0f + listH + 16.0f;
+            bool has = !worlds.empty();
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("s_play", "Play Selected World", ImVec2(bw, bh), fontUI, fs, has)) {
+                audio.playUI();
+                playPath = "worlds/" + worlds[menuWorldSel] + ".bin";
+                playNew = false;
+            }
+            y += bh + gap;
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("s_create", "Create New World", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_CREATE; }
+            y += bh + gap;
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("s_del", delArm ? "Really delete?" : "Delete", ImVec2(bw, bh), fontUI, fs, has)) {
+                if (!delArm) { delArm = true; audio.playUI(); }
+                else {
+                    remove(("worlds/" + worlds[menuWorldSel] + ".bin").c_str());
+                    menuWorldSel = 0; delArm = false;
+                }
+            }
+            y += bh + gap;
             FILE* lf = fopen("world.bin", "rb");
             if (lf) {
                 fclose(lf);
-                if (ImGui::Button("Import legacy world.bin")) {
+                ImGui::SetCursorPos(ImVec2(cx, y));
+                if (MCButton("s_import", "Import legacy world.bin", ImVec2(bw, bh), fontUI, fs)) {
+                    audio.playUI();
                     playPath = "worlds/imported.bin";
                     playNew = false;
                     playCX = 16; playCZ = 16;
-                    // пометка: загрузить из world.bin вместо playPath (флаг ниже)
-                    newSeed = -2;
+                    newSeed = -2; // флаг: грузить из world.bin
                 }
+                y += bh + gap;
             }
-        }
-        ImGui::Separator();
-        ImGui::Text("New world:");
-        ImGui::InputText("name", newName, sizeof(newName));
-        const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
-        ImGui::Combo("size", &newSizeIdx, sizeNames, 3);
-        ImGui::InputInt("seed", &newSeed);
-        ImGui::SameLine();
-        if (ImGui::Button("random")) newSeed = rand();
-        if (ImGui::Button("Create & Play") && newName[0]) {
-            playPath = std::string("worlds/") + newName + ".bin";
-            playCX = sizes[newSizeIdx]; playCZ = sizes[newSizeIdx];
-            playSeed = newSeed;
-            playNew = true;
-        }
-        ImGui::Separator();
-        ImGui::Text("Settings:");
-        {
+            ImGui::SetCursorPos(ImVec2(cx, y));
+            if (MCButton("s_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_MAIN; delArm = false; }
+        } else if (scr == M_CREATE) {
+            MCTitle(md, fontUI, fs + 4.0f, "Create New World", (float)ww, 24.0f);
+            float fx = cx, fy = 84.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::Text("World Name:");
+            fy += 28.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
+            ImGui::InputText("##wname", newName, sizeof(newName));
+            fy += 44.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::Text("World Size:");
+            fy += 28.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("c_size", sizeNames[newSizeIdx], ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); newSizeIdx = (newSizeIdx + 1) % 3; }
+            fy += bh + 16.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::Text("Seed:");
+            fy += 28.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw - 170.0f);
+            ImGui::InputInt("##wseed", &newSeed);
+            ImGui::SetCursorPos(ImVec2(fx + bw - 160.0f, fy - 2.0f));
+            if (MCButton("c_rand", "Random", ImVec2(160, 32), fontUI, fs)) newSeed = rand();
+            fy += 52.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("c_go", "Create New World", ImVec2(bw, bh), fontUI, fs, newName[0] != 0)) {
+                audio.playUI();
+                playPath = std::string("worlds/") + newName + ".bin";
+                playCX = sizes[newSizeIdx]; playCZ = sizes[newSizeIdx];
+                playSeed = newSeed;
+                playNew = true;
+            }
+            fy += bh + gap;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("c_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_SINGLE; }
+        } else if (scr == M_OPTIONS) {
+            MCTitle(md, fontUI, fs + 4.0f, "Options...", (float)ww, 24.0f);
+            float fx = cx, fy = 84.0f;
             float v = cvar.get("cam.fov", 70.0f);
-            if (ImGui::SliderFloat("fov", &v, 30.0f, 110.0f)) cvar.set("cam.fov", v);
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
+            if (ImGui::SliderFloat("FOV", &v, 30.0f, 110.0f)) cvar.set("cam.fov", v);
+            fy += 40.0f;
             v = cvar.get("sun.gamma", 1.2f);
-            if (ImGui::SliderFloat("gamma", &v, 0.5f, 4.0f)) cvar.set("sun.gamma", v);
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
+            if (ImGui::SliderFloat("Gamma", &v, 0.5f, 4.0f)) cvar.set("sun.gamma", v);
+            fy += 40.0f;
             v = cvar.get("fog.far", 260.0f);
-            if (ImGui::SliderFloat("fog far", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
-        }
-        ImGui::Text("Texture pack:");
-        {
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
+            if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
+            fy += 52.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_packs", "Texture Packs...", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_PACKS; }
+            fy += bh + gap;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_done", "Done", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); cvar.exec("save"); scr = M_MAIN; }
+        } else if (scr == M_PACKS) {
+            MCTitle(md, fontUI, fs + 4.0f, "Texture Packs...", (float)ww, 24.0f);
+            float fx = cx, fy = 84.0f;
             if (menuPackIdx >= (int)packNames.size()) menuPackIdx = 0;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
             ImGui::Combo("##tpack", &menuPackIdx, [](void* d, int i) { return (*(std::vector<std::string>*)d)[i].c_str(); },
                          (void*)&packNames, (int)packNames.size());
+            fy += 40.0f;
             static char addT[512] = "";
-            ImGui::InputText("folder##t", addT, sizeof(addT));
-            ImGui::SameLine();
-            if (ImGui::Button("Add pack")) {
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw - 170.0f);
+            ImGui::InputText("##tfolder", addT, sizeof(addT));
+            ImGui::SetCursorPos(ImVec2(fx + bw - 160.0f, fy - 2.0f));
+            if (MCButton("p_add", "Add pack", ImVec2(160, 32), fontUI, fs)) {
                 std::string miss;
                 bool ok = hasFiles(addT, {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"}, miss) ||
                           hasFiles(addT, {"assets/minecraft/textures/block/grass_block_top.png",
@@ -295,15 +454,17 @@ int main()
                     }
                 }
             }
-        }
-        ImGui::Text("Shader pack:");
-        ImGui::Combo("##spack", &menuShaderSel, [](void* d, int i) { return (*(std::vector<std::string>*)d)[i].c_str(); },
-                     (void*)&shaderPacks, (int)shaderPacks.size());
-        {
+            fy += 52.0f;
+            if (menuShaderSel >= (int)shaderPacks.size()) menuShaderSel = 0;
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw);
+            ImGui::Combo("##spack", &menuShaderSel, [](void* d, int i) { return (*(std::vector<std::string>*)d)[i].c_str(); },
+                         (void*)&shaderPacks, (int)shaderPacks.size());
+            fy += 40.0f;
             static char addS[512] = "";
-            ImGui::InputText("folder##s", addS, sizeof(addS));
-            ImGui::SameLine();
-            if (ImGui::Button("Add shaders")) {
+            ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::SetNextItemWidth(bw - 170.0f);
+            ImGui::InputText("##sfolder", addS, sizeof(addS));
+            ImGui::SetCursorPos(ImVec2(fx + bw - 160.0f, fy - 2.0f));
+            if (MCButton("p_adds", "Add shaders", ImVec2(160, 32), fontUI, fs)) {
                 std::string miss;
                 bool ok = hasFiles(addS, {"lighting.vs", "lighting.fs", "line.vs", "outline.fs",
                                           "sky.vs", "sky.fs", "crosshair.vs", "crosshair.fs"}, miss);
@@ -318,16 +479,29 @@ int main()
                     }
                 }
             }
+            fy += 52.0f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("p_done", "Done", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_OPTIONS; }
         }
-        if (ImGui::Button("Save settings")) cvar.exec("save");
-        ImGui::SameLine();
-        if (ImGui::Button("Quit")) wantQuit = true;
-        ImGui::EndChild();
+
+        // Футер как в MC: версия слева, дисклеймер справа.
+        ImDrawList* fgd = ImGui::GetForegroundDrawList();
+        if (fontUI) {
+            fgd->AddText(fontUI, 16.0f, ImVec2(10, (float)hh - 28), IM_COL32(170, 170, 170, 255), "Rendor 0.1");
+            const char* cr = "Not affiliated with Mojang AB";
+            ImVec2 csz = fontUI->CalcTextSizeA(16.0f, 10000.0f, 0, cr);
+            fgd->AddText(fontUI, 16.0f, ImVec2((float)ww - csz.x - 10, (float)hh - 28), IM_COL32(170, 170, 170, 255), cr);
+        }
+        if (fontUI) ImGui::PopFont();
         ImGui::End();
+        ImGui::PopStyleColor();
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
+    glDeleteTextures(1, &texDirt);
+    glDeleteTextures(1, &texGTop);
+    glDeleteTextures(1, &texGSide);
     if (wantQuit || playPath.empty()) {
         audio.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
