@@ -586,13 +586,30 @@ int main()
         player.autoJump = cvar.get("move.bhop", 0.0f) > 0.5f;
         }
         bool jump = false, down = false;
+        static double lastSpaceTap = -1.0;
+        bool sneakNow = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                        glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+        player.sneak = sneakNow && !console.open;
         if (!console.open) {
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mv.y += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mv.y -= 1.0f;
-        jump = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+        bool spaceNow = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        bool ctrlNow = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                       glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+        static bool prevSpace = false, prevCtrl = false;
+        if (spaceNow && !prevSpace) { // фронт пробела
+            if (ctrlNow || (now - lastSpaceTap < 0.35)) { // ctrl+space или дабл-тап = полёт
+                player.fly = !player.fly;
+                player.vel = glm::vec3(0.0f);
+                std::cout << (player.fly ? "FLY\n" : "WALK\n");
+            }
+            lastSpaceTap = now;
+        }
+        prevSpace = spaceNow; prevCtrl = ctrlNow;
+        jump = spaceNow;
+        down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS || sneakNow;
         }
         audio.setMaster(cvar.get("snd.vol", 0.8f) * (cvar.get("snd.on", 1.0f) > 0.5f ? 1.0f : 0.0f));
         audio.listener(camera.Position, camera.Front);
@@ -609,7 +626,7 @@ int main()
                 }
             } else stepAcc = 0.0f;
         }
-        // всплеск при входе в воду (шуршания-лупа больше нет — только всплеск)
+        // всплеск при входе в воду
         {
             static bool wasWet = false;
             unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
@@ -617,6 +634,28 @@ int main()
             if (wet && !wasWet) audio.playSplash(player.pos + worldOffset);
             if (fb == 7 && !wasWet) audio.playThunk(player.pos + worldOffset);
             wasWet = wet || fb == 7;
+        }
+        // гребки в движении + петли лавы рядом и подводья
+        {
+            unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
+            float hs = sqrt(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
+            static float swimAcc = 0.0f;
+            if ((fb == 6 || fb == 7) && hs > 0.5f) {
+                swimAcc += hs * deltaTime;
+                if (swimAcc > 2.5f) {
+                    swimAcc = 0.0f;
+                    audio.playSwim(player.pos + worldOffset, fb == 7);
+                }
+            } else swimAcc = 0.0f;
+            bool nearLava = false;
+            for (int a = -4; a <= 4 && !nearLava; a++)
+                for (int b = -2; b <= 2 && !nearLava; b++)
+                    for (int c = -4; c <= 4 && !nearLava; c++)
+                        if (world->getBlock((int)player.pos.x + a, (int)player.pos.y + b, (int)player.pos.z + c) == 7)
+                            nearLava = true;
+            audio.lavaLoop(camera.Position, nearLava);
+            unsigned char eye = world->getBlock((int)player.pos.x, (int)(player.pos.y + player.eye), (int)player.pos.z);
+            audio.underLoop(eye == 6);
         }
         float rate = cvar.get("tick.rate", 120.0f);
         if (rate < 30.0f) rate = 30.0f;

@@ -39,10 +39,12 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     glm::vec3 right(-fwd.z, 0.0f, fwd.x);
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
     float speed = fly ? flySpeed : walkSpeed;
-    glm::vec3 wish = (fwd * move.x + right * move.y) * speed;
+    float hspeed = sneak && !fly ? 0.35f : 1.0f;
+    glm::vec3 wish = (fwd * move.x + right * move.y) * speed * hspeed;
     { // диагональ W+D не должна давать x1.41: нормируем
+        float cap = speed * hspeed;
         float l = sqrt(wish.x * wish.x + wish.z * wish.z);
-        if (l > speed && l > 1e-6f) { wish.x *= speed / l; wish.z *= speed / l; }
+        if (l > cap && l > 1e-6f) { wish.x *= cap / l; wish.z *= cap / l; }
     }
 
     if (fly) {
@@ -141,6 +143,12 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     t.z = np.z;
     if (collides(w, t, halfW, height)) {
         if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
+    }
+    if (sneak && !fly && onGround) { // край: под целью нет пола — стоим
+        bool ground = false;
+        for (int k = 1; k <= 3 && !ground; k++)
+            if (World::isSolid(w.getBlock((int)floor(t.x), (int)floor(t.y) - k, (int)floor(t.z)))) ground = true;
+        if (!ground) { t.x = pos.x; t.z = pos.z; vel.x = 0; vel.z = 0; }
     }
     // идёт подъём: y едет smoothstep'ом, гравитация молчит
     if (stepT > 0.0f) {

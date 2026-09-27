@@ -16,6 +16,7 @@ struct Player {
     bool stepOn = true;
     float stepH = 1.0f;
     bool autoJump = false; // bhop на зажатый пробел
+    bool sneak = false;    // шифт: медленно + не падать с края
     // плавный автошаг: подъём stepFromY -> stepToY за stepDur
     float stepT = 0.0f, stepDur = 0.12f, stepFromY = 0.0f, stepToY = 0.0f;
     // прыжок только по нажатию (зажатый пробел не бхопит): edge + буфер 0.15с
