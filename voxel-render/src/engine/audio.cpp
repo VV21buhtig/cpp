@@ -38,9 +38,9 @@ bool loadWav(Voice& v, const char* path) {
     return true;
 }
 
-Voice gBreak, gBreakWood, gBreakStone, gPlace, gStepG1, gStepG2, gStepStone, gStepWet, gSplash, gUI, gAmbient;
-ma_sound gAmbSnd;
-bool gAmbOn = false;
+Voice gBreak, gBreakWood, gBreakStone, gPlace, gStepG1, gStepG2, gStepStone, gStepWet, gSplash, gSwim, gUI, gAmbient, gLavaLoop, gUnderLoop;
+ma_sound gAmbSnd, gLavaSnd, gUnderSnd;
+bool gAmbOn = false, gLavaOn = false, gUnderOn = false;
 
 void dropVoice(Voice& v) {
     if (v.has) { ma_sound_uninit(&v.snd); v.has = false; }
@@ -101,6 +101,9 @@ static void loadAll() {
     makeVoice(gStepStone, "step_stone");
     makeVoice(gStepWet, "step_wet");
     makeVoice(gSplash, "splash");
+    makeVoice(gSwim, "swim");
+    makeVoice(gLavaLoop, "lava_loop");
+    makeVoice(gUnderLoop, "underwater");
     makeVoice(gUI, "ui");
     makeVoice(gAmbient, "ambient");
 }
@@ -125,7 +128,9 @@ bool AudioSys::init() {
 void AudioSys::shutdown() {
     if (!g_init) return;
     if (gAmbOn) { ma_sound_uninit(&gAmbSnd); gAmbOn = false; }
-    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gUI, &gAmbient})
+    if (gLavaOn) { ma_sound_uninit(&gLavaSnd); gLavaOn = false; }
+    if (gUnderOn) { ma_sound_uninit(&gUnderSnd); gUnderOn = false; }
+    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
         dropVoice(*v);
     ma_engine_uninit(&g_eng);
     g_init = false;
@@ -139,7 +144,9 @@ void AudioSys::setSoundDir(const std::string& d) { gSndDir = d; }
 void AudioSys::reload() {
     if (!g_init) return;
     if (gAmbOn) { ma_sound_uninit(&gAmbSnd); gAmbOn = false; }
-    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gUI, &gAmbient})
+    if (gLavaOn) { ma_sound_uninit(&gLavaSnd); gLavaOn = false; }
+    if (gUnderOn) { ma_sound_uninit(&gUnderSnd); gUnderOn = false; }
+    for (Voice* v : {&gBreak, &gBreakWood, &gBreakStone, &gPlace, &gStepG1, &gStepG2, &gStepStone, &gStepWet, &gSplash, &gSwim, &gUI, &gAmbient, &gLavaLoop, &gUnderLoop})
         dropVoice(*v);
     loadAll();
     if (gAmbOn) wind(true);
@@ -181,6 +188,26 @@ void AudioSys::playStep(glm::vec3 at, int surf) {
     else play(gStepG2, at, 0.55f, 0.9f + (rand() % 20) / 100.0f, 24.0f, true);
 }
 void AudioSys::playSplash(glm::vec3 at) { play(gSplash, at, 0.9f, 1.0f, 48.0f, true); }
+void AudioSys::playSwim(glm::vec3 at, bool lava) {
+    if (lava) play(gSwim, at, 0.8f, 0.6f, 32.0f, true);
+    else play(gSwim, at, 0.7f, 0.9f + (rand() % 20) / 100.0f, 32.0f, true);
+}
+static void loopTo(ma_sound& s, bool& flag, Voice& v, float vol, bool want, glm::vec3 at) {
+    if (!g_init) return;
+    if (want && !flag) {
+        if (!v.has) return;
+        if (ma_sound_init_from_data_source(&g_eng, &v.rb, MA_SOUND_FLAG_LOOPING, nullptr, &s) == MA_SUCCESS) {
+            ma_sound_set_volume(&s, vol);
+            ma_sound_start(&s);
+            flag = true;
+        }
+        return;
+    }
+    if (!want && flag) { ma_sound_stop(&s); ma_sound_uninit(&s); flag = false; return; }
+    if (flag) ma_sound_set_position(&s, at.x, at.y, at.z);
+}
+void AudioSys::lavaLoop(glm::vec3 at, bool on) { loopTo(gLavaSnd, gLavaOn, gLavaLoop, 0.5f, on, at); }
+void AudioSys::underLoop(bool on) { loopTo(gUnderSnd, gUnderOn, gUnderLoop, 0.6f, on, glm::vec3(0)); }
 void AudioSys::playThunk(glm::vec3 at) { play(gBreak, at, 0.9f, 0.5f, 48.0f, true); }
 void AudioSys::playUI() { play(gUI, glm::vec3(0), 0.5f, 1.0f, 0.0f, false); }
 void AudioSys::wind(bool on) {

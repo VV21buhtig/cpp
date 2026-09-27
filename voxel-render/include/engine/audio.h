@@ -24,6 +24,9 @@ struct AudioSys {
     void playPlace(glm::vec3 at);   // поставил блок
     void playStep(glm::vec3 at, int surf); // шаг: 0 трава 1 камень 2 мокро
     void playSplash(glm::vec3 at);  // вошёл в воду
+    void playSwim(glm::vec3 at, bool lava); // гребок
+    void lavaLoop(glm::vec3 at, bool on);   // бульканье рядом с лавой
+    void underLoop(bool on);                // под водой
     void playThunk(glm::vec3 at);   // вошёл в лаву
     void playUI();                  // клик меню
     void wind(bool on);             // фоновый эмбиент (loop)
