@@ -62,34 +62,34 @@ void World::init(int ncx, int ncz, int s) {
             float h = 8.0f + cont * 10.0f + hills * 6.0f + mount * mount * 26.0f;
             int hi = (int)h;
             if (hi >= Chunk::SY - 1) hi = Chunk::SY - 2;
-            for (int y = 0; y <= hi; y++) setBlock(wx, y, wz, 3); // пока камень
+            for (int y = 0; y <= hi; y++) setBlock(wx, y, wz, B_STONE); // пока камень
             // 2. спагетти-пещеры: тонкая зона |n-0.5| (края шума), только ниже поверхности-1
             for (int y = 1; y < hi - 1 && y < Chunk::SY; y++) {
                 float n = 0.55f * noise3(wx / 9.0f, y / 7.0f, wz / 9.0f)
                         + 0.45f * noise3(wx / 23.0f + 5.0f, y / 17.0f, wz / 23.0f + 9.0f);
-                if (fabs(n - 0.5f) < 0.012f) setBlock(wx, y, wz, 0); // спагетти-тоннели
+                if (fabs(n - 0.5f) < 0.012f) setBlock(wx, y, wz, B_AIR); // спагетти-тоннели
             }
         }
     // 3. флюиды: сначала лава на дне (иначе вода займёт низ), потом море
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= 2; y++)
-                if (getBlock(wx, y, wz) == 0) { setBlock(wx, y, wz, 7); setFlow(wx, y, wz, 8); } // лава на дне
+                if (getBlock(wx, y, wz) == B_AIR) { setBlock(wx, y, wz, B_LAVA); setFlow(wx, y, wz, 8); } // лава на дне
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= SEA && y < Chunk::SY; y++)
-                if (getBlock(wx, y, wz) == 0) { setBlock(wx, y, wz, 6); setFlow(wx, y, wz, 8); } // вода
+                if (getBlock(wx, y, wz) == B_AIR) { setBlock(wx, y, wz, B_WATER); setFlow(wx, y, wz, 8); } // вода
     // 3b. руды в камне по глубине (детерминированно)
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y < Chunk::SY; y++) {
-                if (getBlock(wx, y, wz) != 3) continue;
+                if (getBlock(wx, y, wz) != B_STONE) continue;
                 float r = hash2(wx * 7 + y * 131, wz * 11 - y * 57);
                 unsigned char ore = 0;
-                if (y < 10 && r < 0.006f) ore = 12;
-                else if (y < 16 && r < 0.008f) ore = 11;
-                else if (y < 32 && r < 0.015f) ore = 10;
-                else if (y < 48 && r < 0.020f) ore = 9;
+                if (y < 10 && r < 0.006f) ore = B_DIAMOND;
+                else if (y < 16 && r < 0.008f) ore = B_GOLD;
+                else if (y < 32 && r < 0.015f) ore = B_IRON;
+                else if (y < 48 && r < 0.020f) ore = B_COAL;
                 if (ore) setBlock(wx, y, wz, ore);
             }
     // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень
@@ -101,9 +101,9 @@ void World::init(int ncx, int ncz, int s) {
             if (top < 0) continue;
             for (int y = top; y >= 0 && y >= top - 3; y--) {
                 unsigned char cur = getBlock(wx, y, wz);
-                if (cur != 3) continue;
-                if (y == top) setBlock(wx, y, wz, top <= SEA ? 2 : 1);
-                else setBlock(wx, y, wz, 2);
+                if (cur != B_STONE) continue;
+                if (y == top) setBlock(wx, y, wz, top <= SEA ? B_DIRT : B_GRASS);
+                else setBlock(wx, y, wz, B_DIRT);
             }
         }
     for (auto& d : flowDirty_) d = 0; // сгенерированное стабильно
@@ -173,7 +173,7 @@ int World::tickFluids(bool lavaTick) {
                     for (int y = 0; y < Chunk::SY; y++) {
                         unsigned char id = getBlock(x, y, z);
                         if (!isFluid(id)) continue;
-                        if (id == 7 && !lavaTick) continue;
+                        if (id == B_LAVA && !lavaTick) continue;
                         unsigned char L = getFlow(x, y, z);
                         if (L == 0) L = 8;
                         // вниз
@@ -218,12 +218,9 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
         out.push_back(u); out.push_back(v); out.push_back(tile); out.push_back(ao);
     };
     auto tileFor = [](unsigned char id, int axis, int sign) -> float {
-        if (id == 1) return (axis == 1) ? (sign > 0 ? 0.0f : 2.0f) : 1.0f; // grass: top/side/bottom(dirt)
-        if (id == 2) return 2.0f;
-        if (id == 4) return 6.0f;
-        if (id == 5) return (axis == 1) ? 8.0f : 7.0f; // log top/side
-        if (id >= 9 && id <= 12) return (float)(id); // руды: tile == id (9..12)
-        return 3.0f; // stone и всё остальное
+        const BlockDef& d = gBlocks.get(id); // тайлы из blocks.json
+        if (axis == 1) return (sign > 0) ? (float)d.tileTop : (float)d.tileBottom;
+        return (float)d.tileSide;
     };
     const int S = Chunk::SX;
     int wx0 = cx * S, wz0 = cz * S;
@@ -247,8 +244,10 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     // флюиды не мешутся; грань нужна если сосед не opaque (вода видна насквозь).
                     // листва с дырками (cutout) соседей НЕ закрывает: иначе сквозь дыры
                     // видно полые внутренности (ствол без граней). Лист-лист давим как раньше.
-                    bool oOpaque = ob != 0 && ob < 6 && !(ob == 4 && id != 4);
-                    mask[v][u] = (id != 0 && id < 6 && !oOpaque) ? id : 0;
+                    const BlockDef& dd = gBlocks.get(id);
+                    const BlockDef& od = gBlocks.get(ob);
+                    bool oOpaque = od.solid && !(od.cutout && ob != id); // листва не закрывает чужие грани
+                    mask[v][u] = (dd.solid && !oOpaque) ? id : 0;
                 }
             bool done[64][16] = {};
             for (int v = 0; v < NV; v++)
@@ -364,11 +363,11 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
     for (int x = 0; x < 16; x++) {
         int wx = cx * 16 + x, wz = cz * 16 + z;
         unsigned char id = getBlock(wx, y, wz);
-        if (id != 6 && id != 7) continue;
-        float tile = (id == 6) ? 4.0f : 5.0f;
+        if (id != B_WATER && id != B_LAVA) continue;
+        float tile = (id == B_WATER) ? 4.0f : 5.0f;
         float lvl = (float)getFlow(wx, y, wz) / 8.0f; // поверхность по уровню
         if (lvl <= 0.0f) lvl = 1.0f;
-        std::vector<float>& out = (id == 6) ? water : lava;
+        std::vector<float>& out = (id == B_WATER) ? water : lava;
         for (int f = 0; f < 6; f++) {
             if (getBlock(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]) != 0) continue;
             for (int v = 0; v < 6; v++) {

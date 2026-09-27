@@ -45,6 +45,7 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_world.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_save.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_cvar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_blocks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/audio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_tree.cpp
@@ -78,6 +79,11 @@ add_custom_command(TARGET voxel_render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/structures.cfg
         $<TARGET_FILE_DIR:voxel_render>/structures.cfg
+)
+add_custom_command(TARGET voxel_render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/blocks.json
+        $<TARGET_FILE_DIR:voxel_render>/blocks.json
 )
 add_custom_command(TARGET voxel_render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

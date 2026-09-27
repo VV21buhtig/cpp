@@ -134,11 +134,6 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     camera.ProcessMouseMovement(xo, yo);
 }
 void scroll_callback(GLFWwindow*, double, double) { /* zoom only via console cam.fov */ }
-void processInput(GLFWwindow* w) {
-    (void)w;
-    // ESC — пауза из игрового цикла, окно не закрываем.
-    // WASD — через Player::update, камера следует за игроком
-}
 
 static std::vector<std::string> listDirs(const char* path) {
     std::vector<std::string> out;
@@ -274,6 +269,7 @@ int main()
     AudioSys audio;
     if (!audio.init()) std::cout << "audio: no device, muted\n";
     audio.setMaster(cvar.get("snd.vol", 0.8f));
+    if (!gBlocks.load("blocks.json")) console.print("blocks.json missing/invalid, defaults\n");
 
     // ================= MENU (MC-style) =================
     enum MenuScr { M_MAIN, M_SINGLE, M_CREATE, M_OPTIONS, M_PACKS };
@@ -703,10 +699,10 @@ title_screen:
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
     bool pauseOpt = false, toTitle = false; // подэкран опций паузы, выход в титул
-    bool prevV = false, prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
+    bool prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
     bool flashOn = true, followOn = true;
     bool prev1 = false, prev2 = false, prev3 = false;
-    int placeId = 1;
+    int placeId = B_GRASS;
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
     glm::vec3 pointLightPositions[4];
@@ -717,7 +713,6 @@ title_screen:
         deltaTime = now - lastFrame; lastFrame = now;
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         if (gPaused) deltaTime = 0.0f; // пауза: тики игрока, флюиды и tod стоят
-        processInput(window);
 
         // консоль: строки из stdin по Enter
         {
@@ -772,7 +767,6 @@ title_screen:
         prevEsc = esc;
 
         // --- PLAYER ---
-        bool curV = false; // V убран: полёт — дабл-спейс или Ctrl+Space
         bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
         bool curL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -780,15 +774,9 @@ title_screen:
         bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
         bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
         if (console.open) {
-            prevV = curV; prevF = curF; prevG = curG;
+            prevF = curF; prevG = curG;
             prevL = curL; prevR = curR; prevF5 = curF5; prevF9 = curF9;
         }
-        if (!console.open && curV && !prevV) {
-            player.fly = !player.fly;
-            player.vel = glm::vec3(0.0f);
-            std::cout << (player.fly ? "FLY\n" : "WALK\n");
-        }
-        prevV = curV;
         if (!console.open && curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
         prevF = curF;
         if (!console.open && curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
@@ -834,7 +822,7 @@ title_screen:
                 if (stepAcc > 2.2f) {
                     stepAcc = 0.0f;
                     unsigned char gb = world->getBlock((int)player.pos.x, (int)player.pos.y - 1, (int)player.pos.z);
-                    int surf = (gb == 3 || (gb >= 9 && gb <= 12)) ? 1 : 0;
+                    int surf = gBlocks.get(gb).stepSurf;
                     audio.playStep(player.pos + worldOffset, surf);
                 }
             } else stepAcc = 0.0f;
@@ -843,32 +831,32 @@ title_screen:
         {
             static bool wasWet = false;
             unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
-            bool wet = (fb == 6);
+            bool wet = (fb == B_WATER);
             if (wet && !wasWet) audio.playSplash(player.pos + worldOffset);
-            if (fb == 7 && !wasWet) audio.playThunk(player.pos + worldOffset);
-            wasWet = wet || fb == 7;
+            if (fb == B_LAVA && !wasWet) audio.playThunk(player.pos + worldOffset);
+            wasWet = wet || fb == B_LAVA;
         }
         // гребки в движении + петли лавы рядом и подводья
         {
             unsigned char fb = world->getBlock((int)player.pos.x, (int)(player.pos.y + 0.3f), (int)player.pos.z);
             float hs = sqrt(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
             static float swimAcc = 0.0f;
-            if ((fb == 6 || fb == 7) && hs > 0.5f) {
+            if ((fb == B_WATER || fb == B_LAVA) && hs > 0.5f) {
                 swimAcc += hs * deltaTime;
                 if (swimAcc > 2.5f) {
                     swimAcc = 0.0f;
-                    audio.playSwim(player.pos + worldOffset, fb == 7);
+                    audio.playSwim(player.pos + worldOffset, fb == B_LAVA);
                 }
             } else swimAcc = 0.0f;
             bool nearLava = false;
             for (int a = -4; a <= 4 && !nearLava; a++)
                 for (int b = -2; b <= 2 && !nearLava; b++)
                     for (int c = -4; c <= 4 && !nearLava; c++)
-                        if (world->getBlock((int)player.pos.x + a, (int)player.pos.y + b, (int)player.pos.z + c) == 7)
+                        if (world->getBlock((int)player.pos.x + a, (int)player.pos.y + b, (int)player.pos.z + c) == B_LAVA)
                             nearLava = true;
             audio.lavaLoop(camera.Position, nearLava && !gPaused);
             unsigned char eye = world->getBlock((int)player.pos.x, (int)(player.pos.y + player.eye), (int)player.pos.z);
-            audio.underLoop(eye == 6 && !gPaused);
+            audio.underLoop(eye == B_WATER && !gPaused);
         }
         float rate = cvar.get("tick.rate", 120.0f);
         if (rate < 30.0f) rate = 30.0f;
@@ -983,9 +971,9 @@ title_screen:
         bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
         bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
-        if (!console.open && !gPaused && c1 && !prev1) { placeId = 1; std::cout << "block: grass\n"; }
-        if (!console.open && !gPaused && c2 && !prev2) { placeId = 2; std::cout << "block: dirt\n"; }
-        if (!console.open && !gPaused && c3 && !prev3) { placeId = 3; std::cout << "block: stone\n"; }
+        if (!console.open && !gPaused && c1 && !prev1) { placeId = B_GRASS; std::cout << "block: grass\n"; }
+        if (!console.open && !gPaused && c2 && !prev2) { placeId = B_DIRT; std::cout << "block: dirt\n"; }
+        if (!console.open && !gPaused && c3 && !prev3) { placeId = B_STONE; std::cout << "block: stone\n"; }
         prev1 = c1; prev2 = c2; prev3 = c3;
         if (!console.open && !gPaused && curF5 && !prevF5) {
             if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";

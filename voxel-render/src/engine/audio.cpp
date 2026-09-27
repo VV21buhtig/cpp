@@ -1,5 +1,6 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "engine/audio.h"
+#include "engine/blocks.h"
 #include "../../third-party/miniaudio/miniaudio.h"
 
 #include <cmath>
@@ -164,26 +165,25 @@ int AudioSys::voices() {
         if (v->has && ma_sound_is_playing(&v->snd)) n++;
     return n;
 }
-void AudioSys::playBreak(glm::vec3 at) { play(gBreak, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true); }
-void AudioSys::playBreakWood(glm::vec3 at) { play(gBreakWood, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true); }
-// слом/ставка по типу блока: бревно=дерево, листва=трава, камень/руда=камень, остальное земля
+// слом/ставка по реестру blocks.json (звук берётся из BlockDef блока)
+static Voice* voiceFor(BlockSnd s) {
+    switch (s) {
+        case BlockSnd::Wood: return &gBreakWood;
+        case BlockSnd::Leaves: return &gBreakLeaves;
+        case BlockSnd::Stone: return &gBreakStone;
+        default: return &gBreak;
+    }
+}
 static void breakById(glm::vec3 at, int id) {
-    Voice* dst = &gBreak;
-    if (id == 5) dst = &gBreakWood;
-    else if (id == 4) dst = &gBreakLeaves;
-    else if (id == 3 || (id >= 9 && id <= 12)) dst = &gBreakStone;
+    Voice* dst = voiceFor(gBlocks.get((unsigned char)id).brk);
     play(*dst, at, 0.9f, 0.9f + (rand() % 20) / 100.0f, 48.0f, true);
 }
 void AudioSys::playBreakId(glm::vec3 at, int id) { breakById(at, id); }
 void AudioSys::playPlaceId(glm::vec3 at, int id) {
-    Voice* dst = &gPlace;
-    if (id == 5) dst = &gBreakWood;
-    else if (id == 4) dst = &gBreakLeaves;
-    else if (id == 3 || (id >= 9 && id <= 12)) dst = &gBreakStone;
-    else if (id == 1 || id == 2) dst = &gBreak;
+    BlockSnd p = gBlocks.get((unsigned char)id).plc;
+    Voice* dst = (p == BlockSnd::Generic) ? &gPlace : voiceFor(p);
     play(*dst, at, 0.7f, 1.1f, 48.0f, true);
 }
-void AudioSys::playPlace(glm::vec3 at) { play(gPlace, at, 0.8f, 1.0f, 48.0f, true); }
 void AudioSys::playStep(glm::vec3 at, int surf) {
     if (surf == 2) play(gStepWet, at, 0.6f, 1.0f, 24.0f, true);
     else if (surf == 1) play(gStepStone, at, 0.55f, 0.9f + (rand() % 20) / 100.0f, 24.0f, true);

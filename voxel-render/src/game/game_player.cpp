@@ -105,10 +105,10 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     if (vel.y < -30.0f) vel.y = -30.0f;
     if (onGround && jumpBuf > 0.0f) { vel.y = jumpVel; onGround = false; jumpBuf = 0.0f; }
 
-    // флюиды по клетке ног: 6 вода (тонем медленно, Space всплыть),
-    // 7 лава тягучая (вязнем, не смерть)
+    // флюиды по клетке ног: вода (тонем медленно, Space всплыть),
+    // лава тягучая (вязнем, не смерть)
     unsigned char feetB = w.getBlock((int)floor(pos.x), (int)floor(pos.y + 0.3f), (int)floor(pos.z));
-    if (feetB == 7) {
+    if (feetB == B_LAVA) {
         float drag = 1.0f - 4.0f * dt;
         if (drag < 0.0f) drag = 0.0f;
         vel.x *= drag; vel.z *= drag;
@@ -116,7 +116,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         if (vel.y < -1.0f) vel.y = -1.0f;
         if (jump) { vel.y = 2.0f; onGround = false; }
     } else {
-        bool inWater = (feetB == 6);
+        bool inWater = (feetB == B_WATER);
         if (inWater) {
             vel.y -= g * 0.25f * dt;
             if (vel.y < -2.0f) vel.y = -2.0f;

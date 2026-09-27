@@ -3,7 +3,8 @@
 
 #include <vector>
 
-// Engine: один чанк 16x16x16. 0=air, 1=grass, 2=dirt, 3=stone, 4=leaves, 5=log, 6=water, 7=lava, 9=coal, 10=iron, 11=gold, 12=diamond. Мешим только видимые грани (CCW).
+// Engine: один чанк 16x16x16. Свойства ids — в blocks.json (см. BlockId в engine/blocks.h).
+// Мешим только видимые грани (CCW).
 struct Chunk {
     static const int SX = 16, SY = 64, SZ = 16;
     unsigned char blocks[SX * SY * SZ] = {};

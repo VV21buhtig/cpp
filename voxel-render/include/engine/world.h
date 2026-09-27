@@ -2,13 +2,14 @@
 #define WORLD_H
 
 #include "engine/chunk.h"
+#include "engine/blocks.h"
 #include <glm/glm.hpp>
 #include <vector>
 // vector уже ок
 
 // Engine: ограниченный мир nx*nz чанков по сиду (граница = пустота).
 // Данные всех чанков всегда в RAM, стримятся только МЕШИ вокруг игрока.
-// 0=air, 1=grass, 2=dirt, 3=stone.
+// Свойства блоков (solid/fluid/тайлы/звуки) — из blocks.json через gBlocks.
 struct World {
     int cx_ = 0, cz_ = 0, seed_ = 1337;
     std::vector<Chunk> chunks;
@@ -17,7 +18,6 @@ struct World {
     World() {}
     World(int ncx, int ncz, int s) { init(ncx, ncz, s); }
     void init(int ncx, int ncz, int s); // resize + генерация холмов
-    void clear();                       // вся air (под load)
 
     int ncx() const { return cx_; }
     int ncz() const { return cz_; }
@@ -30,8 +30,8 @@ struct World {
         return wx >= 0 && wx < sizeX() && wz >= 0 && wz < sizeZ();
     }
     unsigned char getBlock(int wx, int y, int wz) const;
-    static bool isSolid(unsigned char id) { return id != 0 && id < 6; } // флюиды не твердые
-    static bool isFluid(unsigned char id) { return id == 6 || id == 7; }
+    static bool isSolid(unsigned char id) { return gBlocks.get(id).solid; }
+    static bool isFluid(unsigned char id) { return gBlocks.get(id).fluid; }
     unsigned char getFlow(int wx, int y, int wz) const;
     void setFlow(int wx, int y, int wz, unsigned char v);
     // тик флюидов по грязным чанкам; lavaTick каждый 4-й. Возвращает число изменений.
