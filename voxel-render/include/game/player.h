@@ -12,6 +12,8 @@ struct Player {
     bool onGround = false;
     bool fly = true; // стартуем с fly чтобы не упасть в текстуры, F — переключить
     float halfW = 0.3f, height = 1.8f, eye = 1.62f;
+    float bodyH() const { return sneak ? 1.5f : height; } // MC: присед 1.5
+    float eyeH() const { return sneak ? eye - 0.35f : eye; }
     float walkSpeed = 4.3f, flySpeed = 8.0f, jumpVel = 7.5f;
     bool stepOn = true;
     float stepH = 1.0f;

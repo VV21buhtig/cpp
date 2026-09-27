@@ -612,7 +612,7 @@ int main()
         static float stepAcc = 0.0f;
         {
             float hs = sqrt(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
-            if (!player.fly && player.onGround && hs > 1.0f) {
+            if (!player.fly && !player.sneak && player.onGround && hs > 1.0f) { // sneak бесшумен
                 stepAcc += hs * deltaTime;
                 if (stepAcc > 2.2f) {
                     stepAcc = 0.0f;
@@ -665,7 +665,7 @@ int main()
         }
         // упал за мир — респаун в центр
         if (player.pos.y < -10.0f) player.spawn(*world, WB / 2, WB / 2);
-        camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eye, 0.0f);
+        camera.Position = player.pos + worldOffset + glm::vec3(0.0f, player.eyeH(), 0.0f);
         ensureAround();
 
         // тики флюидов: вода каждый 2-й, лава каждый 8-й; перестройка грязных чанков

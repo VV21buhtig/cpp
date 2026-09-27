@@ -39,7 +39,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     glm::vec3 right(-fwd.z, 0.0f, fwd.x);
     // Camera yaw у нас: front=(cos yaw, ..., sin yaw)? yaw=-90 => front -z. fwd совпадает.
     float speed = fly ? flySpeed : walkSpeed;
-    float hspeed = sneak && !fly ? 0.35f : 1.0f;
+    float hspeed = sneak && !fly ? 0.3f : 1.0f; // MC: sneak 1.3 м/с
     glm::vec3 wish = (fwd * move.x + right * move.y) * speed * hspeed;
     { // диагональ W+D не должна давать x1.41: нормируем
         float cap = speed * hspeed;
@@ -53,9 +53,9 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         glm::vec3 np = pos + vel * dt;
         // в fly тоже не влетаем в блоки: по осям
         glm::vec3 t = pos;
-        t.x = np.x; if (collides(w, t, halfW, height)) t.x = pos.x;
-        t.z = np.z; if (collides(w, t, halfW, height)) t.z = pos.z;
-        t.y = np.y; if (collides(w, t, halfW, height)) t.y = pos.y;
+        t.x = np.x; if (collides(w, t, halfW, bodyH())) t.x = pos.x;
+        t.z = np.z; if (collides(w, t, halfW, bodyH())) t.z = pos.z;
+        t.y = np.y; if (collides(w, t, halfW, bodyH())) t.y = pos.y;
         pos = t;
         onGround = false;
         return;
@@ -95,10 +95,10 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         }
     }
     // страховка: если уже внутри солида (старый сейв, чужой блок) — вытолкнуть вверх
-    if (collides(w, pos, halfW, height)) {
+    if (collides(w, pos, halfW, bodyH())) {
         for (int k = 1; k <= 3; k++) {
             glm::vec3 up = pos; up.y += (float)k;
-            if (!collides(w, up, halfW, height)) { pos = up; vel = glm::vec3(0.0f); break; }
+            if (!collides(w, up, halfW, bodyH())) { pos = up; vel = glm::vec3(0.0f); break; }
         }
     }
     vel.y -= g * dt;
@@ -129,7 +129,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     // Автошаг на 1 блок: триггер — подъём анимируется в stepT, не телепорт
     auto tryStep = [&](glm::vec3& tt) {
         glm::vec3 up = tt; up.y += stepH;
-        if (stepOn && onGround && stepT <= 0.0f && !collides(w, up, halfW, height)) {
+        if (stepOn && onGround && stepT <= 0.0f && !collides(w, up, halfW, bodyH())) {
             stepT = stepDur; stepFromY = pos.y; stepToY = pos.y + stepH;
             tt = up; tt.y = pos.y; // горизонталь сразу, вертикаль догонит анимацией
             return true;
@@ -137,18 +137,32 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         return false;
     };
     t.x = np.x;
-    if (collides(w, t, halfW, height)) {
+    if (collides(w, t, halfW, bodyH())) {
         if (!tryStep(t)) { t.x = pos.x; vel.x = 0; }
     }
     t.z = np.z;
-    if (collides(w, t, halfW, height)) {
+    if (collides(w, t, halfW, bodyH())) {
         if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
     }
-    if (sneak && !fly && onGround) { // шифт: с блока вниз — никак, за край без опоры — стоим
-        if (t.y < pos.y) { t.y = pos.y; vel.y = 0; }
-        if (!World::isSolid(w.getBlock((int)floor(t.x), (int)floor(t.y) - 1, (int)floor(t.z)))) {
-            t.x = pos.x; t.z = pos.z; vel.x = 0; vel.z = 0;
+    if (sneak && !fly && onGround) {
+        // MC Entity.moveEntity: урезаем dX/dZ шагами 0.05 пока под целью нет земли в -1.
+        // Падение >1 блока запрещено, ступенька в 1 — можно. Пин высоты убран (был неверен).
+        float dx = np.x - pos.x, dz = np.z - pos.z;
+        const float inc = 0.05f;
+        auto groundAt = [&](float px, float pz) {
+            glm::vec3 q(px, pos.y - 1.0f, pz);
+            return collides(w, q, halfW, bodyH());
+        };
+        while (dx != 0.0f && !groundAt(pos.x + dx, pos.z)) {
+            if (fabs(dx) <= inc) { dx = 0.0f; break; }
+            dx += (dx > 0.0f ? -inc : inc);
         }
+        while (dz != 0.0f && !groundAt(pos.x + dx, pos.z + dz)) {
+            if (fabs(dz) <= inc) { dz = 0.0f; break; }
+            dz += (dz > 0.0f ? -inc : inc);
+        }
+        np.x = pos.x + dx; np.z = pos.z + dz;
+        t.x = np.x; t.z = np.z;
     }
     // идёт подъём: y едет smoothstep'ом, гравитация молчит
     if (stepT > 0.0f) {
@@ -163,11 +177,11 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         return;
     }
     t.y = np.y;
-    if (collides(w, t, halfW, height)) {
+    if (collides(w, t, halfW, bodyH())) {
         if (vel.y <= 0) { // приземление: ставим ровно на блок
             t.y = floor(np.y) + 1.0f + 0.001f;
             // если всё ещё коллизия (потолок низкий) — откат
-            if (collides(w, t, halfW, height)) t.y = pos.y;
+            if (collides(w, t, halfW, bodyH())) t.y = pos.y;
             else onGround = true;
         } else {
             t.y = pos.y; // головой в потолок
@@ -178,6 +192,5 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     }
     // провалился под мир — респаун
     if (t.y < -10.0f) { spawn(w, w.sizeX() / 2, w.sizeZ() / 2); return; }
-    if (sneak && !fly && onGround && t.y < pos.y) { t.y = pos.y; vel.y = 0; } // вниз на шифте никак
     pos = t;
 }
