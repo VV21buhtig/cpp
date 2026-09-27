@@ -694,8 +694,7 @@ int main()
                 unsigned char broken = world->getBlock(wx, wy, wz);
                 world->setBlock(wx, wy, wz, 0);
                 glm::vec3 bp = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
-                if (broken == 5 || broken == 4) audio.playBreakWood(bp);
-                else audio.playBreak(bp);
+                audio.playBreakId(bp, broken);
                 touchEdit(wx, wz);
             }
             if (curR && !prevR) {
@@ -706,7 +705,7 @@ int main()
                 // ставить можно в воздух и во флюид (замена воды/лавы блоком)
                 if (!World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
                     world->setBlock(px, py, pz, (unsigned char)placeId);
-                    audio.playPlace(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f));
+                    audio.playPlaceId(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f), placeId);
                     touchEdit(px, pz);
                 }
             }
