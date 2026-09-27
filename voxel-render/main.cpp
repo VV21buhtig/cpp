@@ -101,6 +101,7 @@ static void MCLogo(ImDrawList* d, ImFont* f, float fsize, unsigned int tTop, uns
 
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
+bool gPaused = false; // пауза игры (ESC): тик стоит, поверх — MC-меню
 CVarSys* gCvar = nullptr;
 float lastX = 640.0f, lastY = 360.0f;
 bool  firstMouse = true;
@@ -108,7 +109,7 @@ float deltaTime = 0.0f, lastFrame = 0.0f;
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
-    if (console.open) { firstMouse = true; return; }
+    if (console.open || gPaused) { firstMouse = true; return; }
     if (firstMouse) { lastX = (float)xpos; lastY = (float)ypos; firstMouse = false; }
     float xo = (float)xpos - lastX, yo = lastY - (float)ypos;
     lastX = (float)xpos; lastY = (float)ypos;
@@ -116,7 +117,8 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 }
 void scroll_callback(GLFWwindow*, double, double) { /* zoom only via console cam.fov */ }
 void processInput(GLFWwindow* w) {
-    if (!console.open && glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(w, true);
+    (void)w;
+    // ESC — пауза из игрового цикла, окно не закрываем.
     // WASD — через Player::update, камера следует за игроком
 }
 
@@ -288,6 +290,14 @@ int main()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
+title_screen:
+    // Возврат из игры (Save and Quit to Title): сброс выбора мира.
+    playPath.clear();
+    playNew = false;
+    scr = M_MAIN;
+    delArm = false;
+    menuWorldSel = 0;
+    audio.wind(false);
     while (!wantQuit && playPath.empty()) {
         glfwPollEvents();
         if (glfwWindowShouldClose(window)) { wantQuit = true; break; }
@@ -518,6 +528,7 @@ int main()
     (void)0; // пак текстур выбирается в игре (комбо) либо из меню ниже
 
     // ================= GAME =================
+    gPaused = false;
     audio.wind(true); // эмбиент только в игре, не в меню
     auto sh = [&](const char* n) { return shaderDir + "/" + n; };
     Shader lightingShader(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
@@ -554,8 +565,9 @@ int main()
         }
     }
     if (!haveWorld) {
-        std::cout << "No world, back to menu is unsupported — exiting\n";
-        return 0;
+        std::cout << "No world, back to title\n";
+        glDeleteVertexArrays(1, &triVAO);
+        goto title_screen;
     }
     int NCX = world->ncx(), NCZ = world->ncz();
     int WB = NCX * 16;
@@ -673,6 +685,7 @@ int main()
     std::cout << "\nWASD move, Space jump/up, Shift sneak/down, 2xSpace or Ctrl+Space fly, F flashlight, L lamps, 1/2/3 block, LMB break, RMB place, F5 save, F9 load.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
+    bool pauseOpt = false, toTitle = false; // подэкран опций паузы, выход в титул
     bool prevV = false, prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
     bool flashOn = true, followOn = true;
     bool prev1 = false, prev2 = false, prev3 = false;
@@ -681,11 +694,12 @@ int main()
     float tickAcc = 0.0f, tod = 0.56f;
     glm::vec3 pointLightPositions[4];
 
-    while (!glfwWindowShouldClose(window))
+    while (!glfwWindowShouldClose(window) && !toTitle)
     {
         float now = (float)glfwGetTime();
         deltaTime = now - lastFrame; lastFrame = now;
         if (deltaTime > 0.05f) deltaTime = 0.05f;
+        if (gPaused) deltaTime = 0.0f; // пауза: тики игрока, флюиды и tod стоят
         processInput(window);
 
         // консоль: строки из stdin по Enter
@@ -724,8 +738,20 @@ int main()
         }
         prevF1 = f1; prevGrave = grv;
         bool esc = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-        if (esc && !prevEsc && console.open) console.open = false,
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (esc && !prevEsc) {
+            if (console.open) {
+                console.open = false;
+                if (!gPaused) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            } else {
+                gPaused = !gPaused;
+                pauseOpt = false;
+                glfwSetInputMode(window, GLFW_CURSOR, gPaused ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                firstMouse = true;
+                audio.playUI();
+                if (gPaused) { audio.lavaLoop(camera.Position, false); audio.underLoop(false); }
+                std::cout << (gPaused ? "paused\n" : "resumed\n");
+            }
+        }
         prevEsc = esc;
 
         // --- PLAYER ---
@@ -823,9 +849,9 @@ int main()
                     for (int c = -4; c <= 4 && !nearLava; c++)
                         if (world->getBlock((int)player.pos.x + a, (int)player.pos.y + b, (int)player.pos.z + c) == 7)
                             nearLava = true;
-            audio.lavaLoop(camera.Position, nearLava);
+            audio.lavaLoop(camera.Position, nearLava && !gPaused);
             unsigned char eye = world->getBlock((int)player.pos.x, (int)(player.pos.y + player.eye), (int)player.pos.z);
-            audio.underLoop(eye == 6);
+            audio.underLoop(eye == 6 && !gPaused);
         }
         float rate = cvar.get("tick.rate", 120.0f);
         if (rate < 30.0f) rate = 30.0f;
@@ -914,7 +940,7 @@ int main()
         bool hasHit = (hitT > 0.0f);
 
         // ---- BREAK / PLACE ----
-        if (hasHit && !console.open) {
+        if (hasHit && !console.open && !gPaused) {
             if (curL && !prevL) {
                 unsigned char broken = world->getBlock(wx, wy, wz);
                 world->setBlock(wx, wy, wz, 0);
@@ -940,15 +966,15 @@ int main()
         bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
         bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
         bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
-        if (!console.open && c1 && !prev1) { placeId = 1; std::cout << "block: grass\n"; }
-        if (!console.open && c2 && !prev2) { placeId = 2; std::cout << "block: dirt\n"; }
-        if (!console.open && c3 && !prev3) { placeId = 3; std::cout << "block: stone\n"; }
+        if (!console.open && !gPaused && c1 && !prev1) { placeId = 1; std::cout << "block: grass\n"; }
+        if (!console.open && !gPaused && c2 && !prev2) { placeId = 2; std::cout << "block: dirt\n"; }
+        if (!console.open && !gPaused && c3 && !prev3) { placeId = 3; std::cout << "block: stone\n"; }
         prev1 = c1; prev2 = c2; prev3 = c3;
-        if (!console.open && curF5 && !prevF5) {
+        if (!console.open && !gPaused && curF5 && !prevF5) {
             if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
             else std::cout << "Save FAILED\n";
         }
-        if (!console.open && curF9 && !prevF9) {
+        if (!console.open && !gPaused && curF9 && !prevF9) {
             if (loadWorld(*world, playPath.c_str())) { rebuildAll(); std::cout << "Loaded " << playPath << "\n"; }
             else std::cout << "Load FAILED\n";
         }
@@ -1076,6 +1102,66 @@ int main()
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        // ---- PAUSE (ESC): тик стоит, мир затемнён, MC-кнопки ----
+        if (gPaused) {
+            int pww, phh;
+            glfwGetFramebufferSize(window, &pww, &phh);
+            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)pww, (float)phh), IM_COL32(0, 0, 0, 150));
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2((float)pww, (float)phh));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+            ImGui::Begin("pause", nullptr,
+                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+            if (fontUI) ImGui::PushFont(fontUI);
+            ImDrawList* pd = ImGui::GetWindowDrawList();
+            const float pbw = 400.0f, pbh = 36.0f, pgap = 8.0f;
+            const float pfs = fontUI ? 20.0f : 13.0f;
+            const float pcx = ((float)pww - pbw) * 0.5f;
+            if (!pauseOpt) {
+                MCTitle(pd, fontUI, pfs + 4.0f, "Game menu", (float)pww, (float)phh * 0.18f);
+                float py = (float)phh * 0.18f + 64.0f;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_back", "Back to Game", ImVec2(pbw, pbh), fontUI, pfs)) {
+                    audio.playUI(); gPaused = false; pauseOpt = false;
+                    glfwSetInputMode(window, GLFW_CURSOR, console.open ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                    firstMouse = true;
+                }
+                py += pbh + pgap;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_opt", "Options...", ImVec2(pbw, pbh), fontUI, pfs)) { audio.playUI(); pauseOpt = true; }
+                py += pbh + pgap;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_quit", "Save and Quit to Title", ImVec2(pbw, pbh), fontUI, pfs)) {
+                    audio.playUI();
+                    if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
+                    else std::cout << "Save FAILED\n";
+                    toTitle = true;
+                }
+            } else {
+                MCTitle(pd, fontUI, pfs + 4.0f, "Options...", (float)pww, (float)phh * 0.18f);
+                float py = (float)phh * 0.18f + 64.0f;
+                float v = cvar.get("cam.fov", 70.0f);
+                ImGui::SetCursorPos(ImVec2(pcx, py)); ImGui::SetNextItemWidth(pbw);
+                if (ImGui::SliderFloat("FOV", &v, 30.0f, 110.0f)) cvar.set("cam.fov", v);
+                py += 40.0f;
+                v = cvar.get("sun.gamma", 1.2f);
+                ImGui::SetCursorPos(ImVec2(pcx, py)); ImGui::SetNextItemWidth(pbw);
+                if (ImGui::SliderFloat("Gamma", &v, 0.5f, 4.0f)) cvar.set("sun.gamma", v);
+                py += 40.0f;
+                v = cvar.get("fog.far", 260.0f);
+                ImGui::SetCursorPos(ImVec2(pcx, py)); ImGui::SetNextItemWidth(pbw);
+                if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
+                py += 52.0f;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
+            }
+            if (fontUI) ImGui::PopFont();
+            ImGui::End();
+            ImGui::PopStyleColor();
+        }
+
         if (console.open) {
             ImGui::Begin("Console", &console.open);
             auto slider = [&](const char* label, const char* name, float lo, float hi) {
@@ -1156,6 +1242,10 @@ int main()
         glfwPollEvents();
     }
 
+    // Чистим ресурсы игры — общее для выхода и возврата в титул.
+    audio.wind(false);
+    audio.lavaLoop(camera.Position, false);
+    audio.underLoop(false);
     glDeleteVertexArrays(1, &lineVAO);
     glDeleteBuffers(1, &lineVBO);
     glDeleteVertexArrays(1, &triVAO);
@@ -1164,6 +1254,9 @@ int main()
     for (auto& m : lavaMeshes) m.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
+    world.reset();
+    gPaused = false;
+    if (toTitle && !glfwWindowShouldClose(window)) goto title_screen;
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
