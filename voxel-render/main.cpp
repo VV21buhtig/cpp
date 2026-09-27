@@ -496,7 +496,7 @@ int main()
     lightingShader.setInt("material.diffuse",  0);
     lightingShader.setInt("material.specular", 1);
 
-    std::cout << "\nWASD move, Space jump/up, C down (fly), V fly/walk, F flashlight, L lamps, 1/2/3 block, LMB break, RMB place, F5 save, F9 load.\n";
+    std::cout << "\nWASD move, Space jump/up, Shift sneak/down, 2xSpace or Ctrl+Space fly, F flashlight, L lamps, 1/2/3 block, LMB break, RMB place, F5 save, F9 load.\n";
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
     bool prevV = false, prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
@@ -555,7 +555,7 @@ int main()
         prevEsc = esc;
 
         // --- PLAYER ---
-        bool curV = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
+        bool curV = false; // V убран: полёт — дабл-спейс или Ctrl+Space
         bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
         bool curG = glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS;
         bool curL = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -609,7 +609,7 @@ int main()
         }
         prevSpace = spaceNow; prevCtrl = ctrlNow;
         jump = spaceNow;
-        down = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS || sneakNow;
+        down = sneakNow; // C убран: вниз на шифте
         }
         audio.setMaster(cvar.get("snd.vol", 0.8f) * (cvar.get("snd.on", 1.0f) > 0.5f ? 1.0f : 0.0f));
         audio.listener(camera.Position, camera.Front);
@@ -921,7 +921,7 @@ int main()
             }
             ImGui::Checkbox("flash (F)", &flashOn);
             ImGui::Checkbox("lamps (L)", &followOn);
-            ImGui::Checkbox("fly (V)", &player.fly);
+            ImGui::Checkbox("fly", &player.fly);
             bool bhop = cvar.get("move.bhop", 0.0f) > 0.5f;
             if (ImGui::Checkbox("bhop on space", &bhop)) cvar.set("move.bhop", bhop ? 1.0f : 0.0f);
             ImGui::Separator();

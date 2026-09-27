@@ -77,7 +77,7 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
             if (wl > 1e-4f) {
                 float nx = wish.x / wl, nz = wish.z / wl;
                 float cur = vel.x * nx + vel.z * nz;
-                float add = speed - cur;
+                float add = speed * hspeed - cur; // sneak режет и воздух: бхопа на шифте нет
                 if (add > 0.0f) {
                     float a = 12.0f * dt;
                     if (a > add) a = add;
