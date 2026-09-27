@@ -32,8 +32,9 @@ void bufFromPCM(Buf& b, const std::vector<ma_int16>& pcm) {
 bool loadFile(Buf& b, const char* path) {
     ma_decoder_config cfg = ma_decoder_config_init(ma_format_s16, 1, 22050);
     ma_decoder dec;
-    if (ma_decoder_init_file(path, &cfg, &dec) != MA_SUCCESS) {
-        printf("audio: bad %s (silent)\n", path);
+    ma_result dr = ma_decoder_init_file(path, &cfg, &dec);
+    if (dr != MA_SUCCESS) {
+        printf("audio: bad %s (err %d)\n", path, (int)dr);
         return false;
     }
     std::vector<ma_int16> pcm;
