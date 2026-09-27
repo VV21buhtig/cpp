@@ -136,21 +136,15 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
         }
         return false;
     };
-    t.x = np.x;
-    if (collides(w, t, halfW, bodyH())) {
-        if (!tryStep(t)) { t.x = pos.x; vel.x = 0; }
-    }
-    t.z = np.z;
-    if (collides(w, t, halfW, bodyH())) {
-        if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
-    }
-    if (sneak && !fly && onGround) {
-        // MC Entity.moveEntity: урезаем dX/dZ шагами 0.05 пока под целью нет земли в -1.
-        // Падение >1 блока запрещено, ступенька в 1 — можно. Пин высоты убран (был неверен).
-        float dx = np.x - pos.x, dz = np.z - pos.z;
+    float dx = np.x - pos.x, dz = np.z - pos.z;
+    // + мелкие падения (|vel.y| мал): микро-баунс рвёт onGround через кадр,
+    // без этого клип пропускает каждый второй кадр и край течёт.
+    if (sneak && !fly && (onGround || fabsf(vel.y) < 0.5f)) {
+        // MC: сначала урезаем замысел шагами 0.05 (земля в -0.6 = step_height),
+        // потом коллизии. Падение круче 0.6 запрещено.
         const float inc = 0.05f;
         auto groundAt = [&](float px, float pz) {
-            glm::vec3 q(px, pos.y - 1.0f, pz);
+            glm::vec3 q(px, pos.y - 0.6f, pz);
             return collides(w, q, halfW, bodyH());
         };
         while (dx != 0.0f && !groundAt(pos.x + dx, pos.z)) {
@@ -161,8 +155,14 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
             if (fabs(dz) <= inc) { dz = 0.0f; break; }
             dz += (dz > 0.0f ? -inc : inc);
         }
-        np.x = pos.x + dx; np.z = pos.z + dz;
-        t.x = np.x; t.z = np.z;
+    }
+    t.x = pos.x + dx;
+    if (collides(w, t, halfW, bodyH())) {
+        if (!tryStep(t)) { t.x = pos.x; vel.x = 0; }
+    }
+    t.z = pos.z + dz;
+    if (collides(w, t, halfW, bodyH())) {
+        if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
     }
     // идёт подъём: y едет smoothstep'ом, гравитация молчит
     if (stepT > 0.0f) {
