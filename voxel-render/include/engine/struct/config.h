@@ -16,7 +16,7 @@ struct TreeConfig : PlacementConfig {
 };
 
 struct StructConfigs {
-    TreeConfig tree{};
+    TreeConfig tree{}; // chance правим ниже в structures.cfg
     PlacementConfig mine{6, 2, 777, 0.9f};
     // structures.cfg рядом с бинарником (копируется при сборке, правится локально):
     //   tree 2 1 1337 0.5 4 2 0.6

@@ -78,6 +78,19 @@ void World::init(int ncx, int ncz, int s) {
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= SEA && y < Chunk::SY; y++)
                 if (getBlock(wx, y, wz) == 0) setBlock(wx, y, wz, 6); // вода
+    // 3b. руды в камне по глубине (детерминированно)
+    for (int wz = 0; wz < D; wz++)
+        for (int wx = 0; wx < W; wx++)
+            for (int y = 0; y < Chunk::SY; y++) {
+                if (getBlock(wx, y, wz) != 3) continue;
+                float r = hash2(wx * 7 + y * 131, wz * 11 - y * 57);
+                unsigned char ore = 0;
+                if (y < 10 && r < 0.006f) ore = 12;
+                else if (y < 16 && r < 0.008f) ore = 11;
+                else if (y < 32 && r < 0.015f) ore = 10;
+                else if (y < 48 && r < 0.020f) ore = 9;
+                if (ore) setBlock(wx, y, wz, ore);
+            }
     // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++) {
@@ -127,6 +140,7 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
         if (id == 2) return 2.0f;
         if (id == 4) return 6.0f;
         if (id == 5) return (axis == 1) ? 8.0f : 7.0f; // log top/side
+        if (id >= 9 && id <= 12) return (float)(id); // руды: tile == id (9..12)
         return 3.0f; // stone и всё остальное
     };
     const int S = Chunk::SX;

@@ -9,7 +9,7 @@ find_package(OpenGL REQUIRED)
 
 # --- Glad 2 ---
 add_library(glad STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/gl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/gl.c
 )
 target_include_directories(glad PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -17,7 +17,7 @@ target_include_directories(glad PUBLIC
 
 # --- Shader class ---
 add_library(shader STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/shader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/shader.cpp
 )
 target_include_directories(shader PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -40,14 +40,14 @@ target_link_libraries(imgui PUBLIC glfw)
 
 # --- Engine (mesh/texture) и Game (pick) — распил main.cpp, GL-порядок 1:1 ---
 add_library(engine STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_texture.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_chunk.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_world.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_save.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_cvar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_tree.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/struct_mine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_texture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_chunk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_world.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_save.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_cvar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_tree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/struct/struct_mine.cpp
 )
 target_include_directories(engine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -55,8 +55,8 @@ target_include_directories(engine PUBLIC
 target_link_libraries(engine PUBLIC glad glfw OpenGL::GL)
 
 add_library(game STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/game_player.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/game_console.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/game/game_player.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/game/game_console.cpp
 )
 target_include_directories(game PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -65,7 +65,7 @@ target_include_directories(game PUBLIC
 # --- Executable ---
 add_executable(voxel_render
     main.cpp
-    src/stb_impl.cpp
+    src/game/stb_impl.cpp
 )
 target_link_libraries(voxel_render PRIVATE shader engine game imgui glad glfw OpenGL::GL)
 
