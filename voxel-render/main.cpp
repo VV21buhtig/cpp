@@ -187,7 +187,6 @@ int main()
     AudioSys audio;
     if (!audio.init()) std::cout << "audio: no device, muted\n";
     audio.setMaster(cvar.get("snd.vol", 0.8f));
-    audio.wind(true);
 
     // ================= MENU =================
     std::string playPath;   // worlds/<name>.bin
@@ -345,6 +344,7 @@ int main()
     (void)0; // пак текстур выбирается в игре (комбо) либо из меню ниже
 
     // ================= GAME =================
+    audio.wind(true); // эмбиент только в игре, не в меню
     auto sh = [&](const char* n) { return shaderDir + "/" + n; };
     Shader lightingShader(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
     Shader lineShader(sh("line.vs").c_str(), sh("outline.fs").c_str());
