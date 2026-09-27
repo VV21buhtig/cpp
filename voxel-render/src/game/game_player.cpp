@@ -144,11 +144,11 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     if (collides(w, t, halfW, height)) {
         if (!tryStep(t)) { t.z = pos.z; vel.z = 0; }
     }
-    if (sneak && !fly && onGround) { // край: под целью нет пола — стоим
-        bool ground = false;
-        for (int k = 1; k <= 3 && !ground; k++)
-            if (World::isSolid(w.getBlock((int)floor(t.x), (int)floor(t.y) - k, (int)floor(t.z)))) ground = true;
-        if (!ground) { t.x = pos.x; t.z = pos.z; vel.x = 0; vel.z = 0; }
+    if (sneak && !fly && onGround) { // шифт: с блока вниз — никак, за край без опоры — стоим
+        if (t.y < pos.y) { t.y = pos.y; vel.y = 0; }
+        if (!World::isSolid(w.getBlock((int)floor(t.x), (int)floor(t.y) - 1, (int)floor(t.z)))) {
+            t.x = pos.x; t.z = pos.z; vel.x = 0; vel.z = 0;
+        }
     }
     // идёт подъём: y едет smoothstep'ом, гравитация молчит
     if (stepT > 0.0f) {
@@ -178,5 +178,6 @@ void Player::update(float dt, const World& w, glm::vec2 move, float yaw,
     }
     // провалился под мир — респаун
     if (t.y < -10.0f) { spawn(w, w.sizeX() / 2, w.sizeZ() / 2); return; }
+    if (sneak && !fly && onGround && t.y < pos.y) { t.y = pos.y; vel.y = 0; } // вниз на шифте никак
     pos = t;
 }
