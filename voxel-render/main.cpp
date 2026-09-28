@@ -1043,10 +1043,8 @@ title_screen:
             }
         }
 
-        glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        // FXAA on: сцена в FBO, resolve-пасс ниже; off: сразу в backbuffer
+        // FXAA on: сцена в FBO (чистим именно его), resolve-пасс ниже;
+        // off: сразу в backbuffer. Порядок важен: clear ПОСЛЕ бинда цели.
         bool fxaaOn = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
         int fww = 0, fhh = 0;
         if (fxaaOn) {
@@ -1055,6 +1053,8 @@ title_screen:
             glBindFramebuffer(GL_FRAMEBUFFER, postFBO);
             glViewport(0, 0, fww, fhh);
         }
+        glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         int vbw, vbh;
         glfwGetFramebufferSize(window, &vbw, &vbh);
