@@ -66,11 +66,12 @@ target_link_libraries(engine PUBLIC glad glfw OpenGL::GL pthread dl m)
 add_library(game STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/game_player.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/game/game_console.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/rml_gl.cpp
 )
 target_include_directories(game PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(game PUBLIC RmlUi::Core)
+target_link_libraries(game PUBLIC shader RmlUi::Core)
 
 # --- Executable ---
 add_executable(voxel_render
@@ -99,6 +100,11 @@ add_custom_command(TARGET voxel_render POST_BUILD
         $<TARGET_FILE_DIR:voxel_render>/sounds
 )
 # --- Копируем shaders/ и texture/ рядом с бинарником после сборки ---
+add_custom_command(TARGET voxel_render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/ui
+        $<TARGET_FILE_DIR:voxel_render>/ui
+)
 add_custom_command(TARGET voxel_render POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders

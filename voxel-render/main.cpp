@@ -13,6 +13,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "ui/rml_gl.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -133,7 +134,18 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     lastX = (float)xpos; lastY = (float)ypos;
     camera.ProcessMouseMovement(xo, yo);
 }
-void scroll_callback(GLFWwindow*, double, double) { /* zoom only via console cam.fov */ }
+void scroll_callback(GLFWwindow* w, double x, double y) {
+    ImGui_ImplGlfw_ScrollCallback(w, x, y); // цепочка в ImGui + RML
+    gRmlScroll(x, y);
+}
+void key_callback(GLFWwindow* w, int key, int sc, int action, int mods) {
+    ImGui_ImplGlfw_KeyCallback(w, key, sc, action, mods);
+    gRmlKey(key, action, mods);
+}
+void char_callback(GLFWwindow* w, unsigned int c) {
+    ImGui_ImplGlfw_CharCallback(w, c);
+    gRmlChar(c);
+}
 
 static std::vector<std::string> listDirs(const char* path) {
     std::vector<std::string> out;
@@ -210,6 +222,8 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
+    glfwSetKeyCallback(window, key_callback);
+    glfwSetCharCallback(window, char_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL); // в меню курсор свободный
 
     if (gladLoadGL(glfwGetProcAddress) == 0) { glfwTerminate(); return -1; }
@@ -254,6 +268,7 @@ int main()
     cvar.reg("view.dist", 4.0f);
     cvar.reg("gfx.filter", 0.0f);
     cvar.reg("gfx.fxaa", 0.0f);
+    cvar.reg("ui.rml", 1.0f); // пауза через RmlUi (0 = старый MC-оверлей)
     cvar.reg("snd.vol", 0.8f);
     cvar.reg("snd.on", 1.0f);
     cvar.load("gfx.cfg");
@@ -291,6 +306,7 @@ int main()
     if (!audio.init()) std::cout << "audio: no device, muted\n";
     audio.setMaster(cvar.get("snd.vol", 0.8f));
     if (!gBlocks.load("blocks.json")) console.print("blocks.json missing/invalid, defaults\n");
+    if (!gRml.init(window)) console.print("rml init failed, old pause\n");
 
     // ================= MENU (MC-style) =================
     enum MenuScr { M_MAIN, M_SINGLE, M_CREATE, M_OPTIONS, M_PACKS };
@@ -848,6 +864,32 @@ title_screen:
 
     bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
     bool pauseOpt = false, toTitle = false; // подэкран опций паузы, выход в титул
+    // RML-пауза: действия игры (старый оверлей остаётся при ui.rml=0)
+    gRml.onResume = [&]() {
+        audio.playUI();
+        gPaused = false;
+        glfwSetInputMode(window, GLFW_CURSOR, console.open ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+        firstMouse = true;
+    };
+    gRml.onQuit = [&]() {
+        audio.playUI();
+        if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
+        else std::cout << "Save FAILED\n";
+        toTitle = true;
+    };
+    gRml.onSlider = [&](const char* id, float v) {
+        std::string s = id ? id : "";
+        if (s == "s_fov") cvar.set("cam.fov", v);
+        else if (s == "s_gamma") cvar.set("sun.gamma", v);
+        else if (s == "s_fog") cvar.set("fog.far", v);
+    };
+    gRml.getSlider = [&](const char* id) -> float {
+        std::string s = id ? id : "";
+        if (s == "s_fov") return cvar.get("cam.fov", 70.0f);
+        if (s == "s_gamma") return cvar.get("sun.gamma", 1.2f);
+        return cvar.get("fog.far", 260.0f);
+    };
+    gRml.onDone = [&]() { audio.playUI(); cvar.exec("save"); };
     bool prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
     bool flashOn = true, followOn = true;
     bool prev1 = false, prev2 = false, prev3 = false;
@@ -863,6 +905,7 @@ title_screen:
         deltaTime = now - lastFrame; lastFrame = now;
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         if (gPaused) deltaTime = 0.0f; // пауза: тики игрока, флюиды и tod стоят
+        { int rw, rh; glfwGetFramebufferSize(window, &rw, &rh); gRml.setSize(rw, rh); }
 
         // консоль: строки из stdin по Enter
         {
@@ -1295,8 +1338,19 @@ title_screen:
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        // ---- PAUSE (ESC): тик стоит, мир затемнён, MC-кнопки ----
-        if (gPaused) {
+        // ---- PAUSE (ESC): RmlUi-документ или старый MC-оверлей (ui.rml) ----
+        bool useRml = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
+        gRml.inputActive = gPaused && useRml;
+        gRml.showPause(gPaused && useRml);
+        if (gPaused && useRml) {
+            double mx, my;
+            glfwGetCursorPos(window, &mx, &my);
+            gRml.mouseMove(mx, my);
+            static bool rmlL = false, rmlR = false;
+            if (curL != rmlL) { gRml.mouseButton(0, curL); rmlL = curL; }
+            if (curR != rmlR) { gRml.mouseButton(1, curR); rmlR = curR; }
+            gRml.frame();
+        } else if (gPaused) {
             int pww, phh;
             glfwGetFramebufferSize(window, &pww, &phh);
             ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -1499,6 +1553,7 @@ title_screen:
     world.reset();
     gPaused = false;
     if (toTitle && !glfwWindowShouldClose(window)) goto title_screen;
+    gRml.shutdown();
     // Меню-текстуры живут пока возможен возврат в титул — только полный выход.
     glDeleteTextures(1, &texDirt);
     glDeleteTextures(1, &texGTop);
