@@ -134,16 +134,13 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
     lastX = (float)xpos; lastY = (float)ypos;
     camera.ProcessMouseMovement(xo, yo);
 }
-void scroll_callback(GLFWwindow* w, double x, double y) {
-    ImGui_ImplGlfw_ScrollCallback(w, x, y); // цепочка в ImGui + RML
-    gRmlScroll(x, y);
+void scroll_callback(GLFWwindow*, double x, double y) {
+    gRmlScroll(x, y); // ImGui уже получил событие раньше нас по цепочке GLFW->ImGui->мы
 }
-void key_callback(GLFWwindow* w, int key, int sc, int action, int mods) {
-    ImGui_ImplGlfw_KeyCallback(w, key, sc, action, mods);
+void key_callback(GLFWwindow*, int key, int, int action, int mods) {
     gRmlKey(key, action, mods);
 }
-void char_callback(GLFWwindow* w, unsigned int c) {
-    ImGui_ImplGlfw_CharCallback(w, c);
+void char_callback(GLFWwindow*, unsigned int c) {
     gRmlChar(c);
 }
 
