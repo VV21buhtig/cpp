@@ -19,9 +19,12 @@ body {
 #menu {
     position: relative; /* выше #shade: absolute без z-index красится поверх статики и жрёт клики */
     width: 460dp;
+    max-height: 94%;
+    overflow-y: auto;
     text-align: center;
 }
 h1 {
+    display: block;
     font-size: 26dp;
     color: #c8c8c8;
     font-effect: shadow(2dp 2dp #3f3f3f);
@@ -44,23 +47,47 @@ button:hover {
     color: #ffffa0;
 }
 #opts { display: none; }
+/* Range-слайдеры: внутри slidertrack/sliderbar (+стрелки прячем).
+   Без явных размеров дети схлопываются в ноль (паттерн из invader.rcss). */
 .srow {
+    display: block;
     width: 400dp;
     margin-left: auto; margin-right: auto;
 }
 .srow span {
     display: inline-block;
+    vertical-align: middle;
     width: 70dp;
     text-align: left;
 }
-.srow input {
-    display: inline-block;
-    width: 220dp;
-    height: 24dp;
-}
 .srow .val {
     display: inline-block;
+    vertical-align: middle;
     width: 90dp;
     text-align: right;
     color: #c8c8c8;
 }
+input.range {
+    display: inline-block;
+    vertical-align: middle;
+    width: 220dp;
+    height: 28dp;
+}
+input.range slidertrack {
+    height: 10dp;
+    margin-top: 9dp;
+    background: #2e2e2e;
+    border-width: 2dp;
+    border-color: #000000;
+}
+input.range sliderbar {
+    width: 18dp;
+    height: 24dp;
+    margin-top: 2dp;
+    background: #c8c8c8;
+    border-width: 2dp;
+    border-color: #000000;
+}
+input.range sliderbar:hover { background: #ececec; }
+input.range sliderbar:active { background: #ffffa0; }
+input.range sliderarrowdec, input.range sliderarrowinc { display: none; }
