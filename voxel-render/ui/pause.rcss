@@ -6,8 +6,12 @@
     background: rgba(0, 0, 0, 153);
 }
 #menu {
-    position: relative; /* выше #shade: absolute без z-index красится поверх статики и жрёт клики */
+    position: absolute;
+    left: 50%;
+    top: 50%;
     width: 460dp;
+    margin-left: -220dp;
+    transform: translateY(-50%);
     max-height: 94%;
     overflow-y: auto;
     text-align: center;
