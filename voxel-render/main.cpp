@@ -253,6 +253,7 @@ int main()
     cvar.reg("vid.vsync", 1.0f);
     cvar.reg("view.dist", 4.0f);
     cvar.reg("gfx.filter", 0.0f);
+    cvar.reg("gfx.fxaa", 0.0f);
     cvar.reg("snd.vol", 0.8f);
     cvar.reg("snd.on", 1.0f);
     cvar.load("gfx.cfg");
@@ -535,6 +536,12 @@ title_screen:
                 audio.playUI(); cvar.set("vid.fullscreen", fsm ? 0.0f : 1.0f); applyVideo();
             }
             fy += bh + gap;
+            bool faa = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_aa", (std::string("AA: ") + (faa ? "FXAA" : "OFF")).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI(); cvar.set("gfx.fxaa", faa ? 0.0f : 1.0f);
+            }
+            fy += bh + gap;
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("o_packs", "Texture Packs...", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_PACKS; }
             fy += bh + gap;
@@ -638,11 +645,20 @@ title_screen:
     Shader lineShader(sh("line.vs").c_str(), sh("outline.fs").c_str());
     Shader crosshairShader(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
     Shader skyShader(sh("sky.vs").c_str(), sh("sky.fs").c_str());
+    // fxaa есть только в дефолтном паке: у кастомных — fallback на shaders/
+    auto fxaaFile = [&](const char* n) {
+        std::string p = shaderDir + "/" + n;
+        FILE* f = fopen(p.c_str(), "rb");
+        if (f) { fclose(f); return p; }
+        return std::string("shaders/") + n;
+    };
+    Shader fxaaShader(fxaaFile("fxaa.vs").c_str(), fxaaFile("fxaa.fs").c_str());
     auto reloadShaders = [&]() {
         lightingShader.load(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
         lineShader.load(sh("line.vs").c_str(), sh("outline.fs").c_str());
         crosshairShader.load(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
         skyShader.load(sh("sky.vs").c_str(), sh("sky.fs").c_str());
+        fxaaShader.load(fxaaFile("fxaa.vs").c_str(), fxaaFile("fxaa.fs").c_str());
         console.print("shaders reloaded: " + shaderDir + "\n");
     };
     unsigned int triVAO = 0;
@@ -784,6 +800,45 @@ title_screen:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
+
+    // Пост-FBO для FXAA: сцена в текстуру, затем один пасс на экран.
+    // Без FXAA рендерим как раньше сразу в backbuffer (нулевая цена).
+    unsigned int postFBO = 0, postTex = 0, postDepth = 0;
+    int postW = 0, postH = 0;
+    auto ensurePost = [&](int w, int h) {
+        if (postFBO && w == postW && h == postH) return;
+        if (postFBO) {
+            glDeleteFramebuffers(1, &postFBO);
+            glDeleteTextures(1, &postTex);
+            glDeleteRenderbuffers(1, &postDepth);
+            postFBO = 0;
+        }
+        postW = w; postH = h;
+        glGenFramebuffers(1, &postFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, postFBO);
+        glGenTextures(1, &postTex);
+        glBindTexture(GL_TEXTURE_2D, postTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, postTex, 0);
+        glGenRenderbuffers(1, &postDepth);
+        glBindRenderbuffer(GL_RENDERBUFFER, postDepth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, postDepth);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cout << "post FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    };
+    auto dropPost = [&]() {
+        if (postFBO) {
+            glDeleteFramebuffers(1, &postFBO);
+            glDeleteTextures(1, &postTex);
+            glDeleteRenderbuffers(1, &postDepth);
+            postFBO = 0; postTex = 0; postDepth = 0;
+        }
+        postW = postH = 0;
+    };
 
     lightingShader.use();
     lightingShader.setInt("material.diffuse",  0);
@@ -991,6 +1046,16 @@ title_screen:
         glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        // FXAA on: сцена в FBO, resolve-пасс ниже; off: сразу в backbuffer
+        bool fxaaOn = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
+        int fww = 0, fhh = 0;
+        if (fxaaOn) {
+            glfwGetFramebufferSize(window, &fww, &fhh);
+            ensurePost(fww, fhh);
+            glBindFramebuffer(GL_FRAMEBUFFER, postFBO);
+            glViewport(0, 0, fww, fhh);
+        }
+
         int vbw, vbh;
         glfwGetFramebufferSize(window, &vbw, &vbh);
         if (vbh <= 0) vbh = 1;
@@ -1191,6 +1256,27 @@ title_screen:
             glDepthFunc(GL_LESS);
         }
 
+        // FXAA-resolve: сцена из FBO на экран одним пассом (прицел и UI — после, без AA)
+        if (fxaaOn) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, fww, fhh);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            fxaaShader.use();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, postTex);
+            fxaaShader.setInt("sceneTex", 0);
+            fxaaShader.setVec2("rcpFrame", 1.0f / (float)fww, 1.0f / (float)fhh);
+            fxaaShader.setFloat("subpix", 0.75f);
+            fxaaShader.setFloat("edgeThr", 0.125f);
+            fxaaShader.setFloat("edgeThrMin", 0.0625f);
+            glBindVertexArray(triVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+        }
+
         // прицел поверх всего
         {
             int ww, hh;
@@ -1303,6 +1389,12 @@ title_screen:
                     audio.playUI(); cvar.set("vid.fullscreen", pfs2 ? 0.0f : 1.0f); applyVideo();
                 }
                 py += pbh + pgap;
+                bool pfaa = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_aa", (std::string("AA: ") + (pfaa ? "FXAA" : "OFF")).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI(); cvar.set("gfx.fxaa", pfaa ? 0.0f : 1.0f);
+                }
+                py += pbh + pgap;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
                 if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
             }
@@ -1403,6 +1495,7 @@ title_screen:
     for (auto& m : lavaMeshes) m.destroy();
     glDeleteTextures(1, &diffuseMap);
     glDeleteTextures(1, &specularMap);
+    dropPost();
     world.reset();
     gPaused = false;
     if (toTitle && !glfwWindowShouldClose(window)) goto title_screen;
