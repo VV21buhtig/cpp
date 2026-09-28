@@ -84,39 +84,30 @@ if (UNIX AND NOT APPLE)
     target_link_libraries(voxel_render PRIVATE dl)
 endif()
 
-add_custom_command(TARGET voxel_render POST_BUILD
+# --- Данные рядом с бинарником. Через sync_data (ALL), а не POST_BUILD:
+# POST_BUILD срабатывает только при перелинковке, и правка одного .rcss/.json
+# без перекомпиляции оставляла в build/ несвежие файлы. sync_data едет каждый make.
+add_custom_target(sync_data ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/structures.cfg
-        $<TARGET_FILE_DIR:voxel_render>/structures.cfg
-)
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/structures.cfg
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/blocks.json
-        $<TARGET_FILE_DIR:voxel_render>/blocks.json
-)
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/blocks.json
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/sounds
-        $<TARGET_FILE_DIR:voxel_render>/sounds
-)
-# --- Копируем shaders/ и texture/ рядом с бинарником после сборки ---
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/sounds
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/ui
-        $<TARGET_FILE_DIR:voxel_render>/ui
-)
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/ui
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders
-        $<TARGET_FILE_DIR:voxel_render>/shaders
-)
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/texture
-        $<TARGET_FILE_DIR:voxel_render>/texture
-)
-add_custom_command(TARGET voxel_render POST_BUILD
+        ${CMAKE_CURRENT_BINARY_DIR}/texture
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/fonts
-        $<TARGET_FILE_DIR:voxel_render>/fonts
+        ${CMAKE_CURRENT_BINARY_DIR}/fonts
 )
+add_dependencies(voxel_render sync_data)

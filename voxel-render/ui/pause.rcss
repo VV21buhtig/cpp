@@ -17,6 +17,7 @@ body {
     background: rgba(0, 0, 0, 153);
 }
 #menu {
+    position: relative; /* выше #shade: absolute без z-index красится поверх статики и жрёт клики */
     width: 460dp;
     text-align: center;
 }
