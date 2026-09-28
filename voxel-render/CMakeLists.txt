@@ -24,7 +24,14 @@ target_include_directories(shader PUBLIC
 )
 target_link_libraries(shader PUBLIC glad)
 
-# --- Dear ImGui (вендор, MIT): консоль и крутилки света ---
+# --- RmlUi (MIT): HTML/CSS UI, свой RenderInterface на нашем GL (их GL3-рендерер
+# тащит свой glad — конфликт символов, не используем). Только Core, без сэмплов.
+set(RMLUI_TMP_SHARED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(third-party/rmlui)
+set(BUILD_SHARED_LIBS ${RMLUI_TMP_SHARED})
+
+# --- Dear ImGui (вендор, MIT): F1 дев-консоль (player-facing UI уезжает в RmlUi) ---
 add_library(imgui STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_draw.cpp
@@ -63,6 +70,7 @@ add_library(game STATIC
 target_include_directories(game PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_link_libraries(game PUBLIC RmlUi::Core)
 
 # --- Executable ---
 add_executable(voxel_render
