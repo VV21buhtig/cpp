@@ -144,6 +144,8 @@ public:
                 Rml::Element* o = el->GetOwnerDocument()->GetElementById("opts");
                 if (o) o->SetProperty("display", "none");
                 if (gRml.onDone) gRml.onDone();
+            } else if (id == "doneTitle") {
+                if (gRml.onDoneTitle) gRml.onDoneTitle();
             } else if (id == "quit" && gRml.onQuit) gRml.onQuit();
             else if (id.compare(0, 2, "b_") == 0 && gRml.onCycle) gRml.onCycle(id.c_str());
         } else if (type == "change") {
@@ -168,6 +170,7 @@ static RIRml* ri = nullptr;
 static Shader* rsh = nullptr;
 static Rml::Context* ctx = nullptr;
 static Rml::ElementDocument* pauseDoc = nullptr;
+static Rml::ElementDocument* optionsDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -240,6 +243,11 @@ bool RmlUI::init(GLFWwindow* window) {
     pauseDoc->AddEventListener("click", &pauseListener);
     pauseDoc->AddEventListener("change", &pauseListener);
     pauseDoc->Hide();
+    optionsDoc = ctx->LoadDocument("ui/options.rml");
+    if (!optionsDoc) return false;
+    optionsDoc->AddEventListener("click", &pauseListener);
+    optionsDoc->AddEventListener("change", &pauseListener);
+    optionsDoc->Hide();
     ok = true;
     return true;
 }
@@ -249,6 +257,7 @@ void RmlUI::shutdown() {
     ok = false;
     ctx = nullptr;
     pauseDoc = nullptr;
+    optionsDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -300,26 +309,40 @@ void RmlUI::showPause(bool show) {
     else pauseDoc->Hide();
 }
 
-void RmlUI::syncPauseValues() {
-    if (!ok || !pauseDoc || !getSlider) return;
+static bool optionsShown = false;
+void RmlUI::showOptions(bool show) {
+    if (!ok || !optionsDoc || show == optionsShown) return;
+    optionsShown = show;
+    if (show) { syncPauseValues(); optionsDoc->Show(); }
+    else optionsDoc->Hide();
+}
+
+static void syncDoc(Rml::ElementDocument* doc, RmlUI* ui) {
+    if (!doc || !ui->getSlider) return;
     const char* ids[] = {"s_fov", "s_gamma", "s_fog"};
     for (auto id : ids) {
-        Rml::Element* el = pauseDoc->GetElementById(id);
+        Rml::Element* el = doc->GetElementById(id);
         auto* fc = static_cast<Rml::ElementFormControl*>(el);
         if (!fc) continue;
         char buf[32];
-        snprintf(buf, sizeof(buf), "%g", (double)getSlider(id));
+        snprintf(buf, sizeof(buf), "%g", (double)ui->getSlider(id));
         fc->SetValue(Rml::String(buf));
         Rml::String vid = Rml::String("v_") + Rml::String(id).substr(2);
-        Rml::Element* sp = pauseDoc->GetElementById(vid);
+        Rml::Element* sp = doc->GetElementById(vid);
         if (sp) sp->SetInnerRML(Rml::String(buf));
     }
-    if (!getLabel) return;
+    if (!ui->getLabel) return;
     const char* bids[] = {"b_dist", "b_filter", "b_vsync", "b_res", "b_fs", "b_aa", "b_gscale"};
     for (auto id : bids) {
-        Rml::Element* el = pauseDoc->GetElementById(id);
-        if (el) el->SetInnerRML(Rml::String(getLabel(id).c_str()));
+        Rml::Element* el = doc->GetElementById(id);
+        if (el) el->SetInnerRML(Rml::String(ui->getLabel(id).c_str()));
     }
+}
+
+void RmlUI::syncPauseValues() {
+    if (!ok) return;
+    if (pauseShown && pauseDoc) syncDoc(pauseDoc, this);
+    if (optionsShown && optionsDoc) syncDoc(optionsDoc, this);
 }
 
 void RmlUI::frame() {

@@ -1,0 +1,11 @@
+/* Титульные Options: поверх mc.rcss — центрирование колонки (фон — земля движка). */
+#menu {
+    position: absolute;
+    left: 50%;
+    top: 8%;
+    width: 460dp;
+    margin-left: -220dp;
+    max-height: 88%;
+    overflow-y: auto;
+    text-align: center;
+}
