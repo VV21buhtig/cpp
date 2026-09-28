@@ -266,6 +266,7 @@ int main()
     cvar.reg("gfx.filter", 0.0f);
     cvar.reg("gfx.fxaa", 0.0f);
     cvar.reg("ui.rml", 1.0f); // пауза через RmlUi (0 = старый MC-оверлей)
+    cvar.reg("ui.scale", 1.0f); // GUI Scale RML: 0.5..4 (как MC мелкий/крупный)
     cvar.reg("snd.vol", 0.8f);
     cvar.reg("snd.on", 1.0f);
     cvar.load("gfx.cfg");
@@ -902,7 +903,7 @@ title_screen:
         deltaTime = now - lastFrame; lastFrame = now;
         if (deltaTime > 0.05f) deltaTime = 0.05f;
         if (gPaused) deltaTime = 0.0f; // пауза: тики игрока, флюиды и tod стоят
-        { int rw, rh; glfwGetFramebufferSize(window, &rw, &rh); gRml.setSize(rw, rh); }
+        { int rw, rh; glfwGetFramebufferSize(window, &rw, &rh); gRml.setSize(rw, rh); gRml.setScale(cvar.get("ui.scale", 1.0f)); }
 
         // консоль: строки из stdin по Enter
         {
@@ -1438,6 +1439,20 @@ title_screen:
                 ImGui::SetCursorPos(ImVec2(pcx, py));
                 if (MCButton("p_fs", (std::string("Fullscreen: ") + (pfs2 ? "ON" : "OFF")).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
                     audio.playUI(); cvar.set("vid.fullscreen", pfs2 ? 0.0f : 1.0f); applyVideo();
+                }
+                py += pbh + pgap;
+                float gsc = cvar.get("ui.scale", 1.0f);
+                char gsb[16];
+                snprintf(gsb, sizeof(gsb), "%gx", (double)gsc);
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_gscale", ("GUI Scale: " + std::string(gsb)).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI();
+                    float ns = 1.0f;
+                    if (gsc < 0.75f) ns = 1.0f;
+                    else if (gsc < 1.5f) ns = 2.0f;
+                    else if (gsc < 2.5f) ns = 3.0f;
+                    else ns = 0.5f;
+                    cvar.set("ui.scale", ns);
                 }
                 py += pbh + pgap;
                 bool pfaa = cvar.get("gfx.fxaa", 0.0f) > 0.5f;

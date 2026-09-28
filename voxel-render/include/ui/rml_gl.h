@@ -20,6 +20,7 @@ struct RmlUI {
     // пауза-документ (ui/pause.rml)
     void showPause(bool show);
     void syncPauseValues(); // залить fov/gamma/fog из getSlider в инпуты
+    void setScale(float s); // GUI Scale: dp->px (MC: мелкий/обычный/крупный)
     // действия игры (назначает main)
     std::function<void()> onResume, onQuit, onDone;
     std::function<void(const char* id, float v)> onSlider; // s_fov/s_gamma/s_fog

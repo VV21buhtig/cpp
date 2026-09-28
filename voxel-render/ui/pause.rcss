@@ -1,37 +1,41 @@
-/* Пауза в духе MC: каменные кнопки, тень текста, затемнение мира. */
+/* Пауза в духе MC: каменные кнопки, тень текста, затемнение мира.
+   Размеры в dp — масштабируются через density ratio (GUI Scale). */
 body {
     font-family: Monocraft;
-    font-size: 20px;
+    font-size: 20dp;
     color: #ffffff;
+    width: 100%;
+    height: 100%;
 }
 #shade {
     position: absolute;
-    left: 0px; top: 0px;
+    left: 0dp; top: 0dp;
     width: 100%; height: 100%;
     background: rgba(0, 0, 0, 153);
 }
 #menu {
     position: absolute;
-    left: 0px; top: 15%;
-    width: 100%;
+    left: 50%; top: 12%;
+    width: 440dp;
+    margin-left: -220dp;
     text-align: center;
 }
 h1 {
-    font-size: 26px;
+    font-size: 26dp;
     color: #c8c8c8;
-    font-effect: shadow(2px 2px #3f3f3f);
+    font-effect: shadow(2dp 2dp #3f3f3f);
     text-align: center;
 }
 button {
     display: block;
-    width: 400px; height: 36px;
-    margin-top: 4px; margin-bottom: 4px;
+    width: 400dp; height: 36dp;
+    margin-top: 4dp; margin-bottom: 4dp;
     margin-left: auto; margin-right: auto;
     background: #969696;
     color: #ffffff;
-    border-width: 2px;
+    border-width: 2dp;
     border-color: #000000;
-    font-effect: shadow(2px 2px #3f3f3f);
+    font-effect: shadow(2dp 2dp #3f3f3f);
     text-align: center;
 }
 button:hover {
@@ -40,12 +44,12 @@ button:hover {
 }
 #opts { display: none; }
 .srow {
-    width: 400px;
+    width: 400dp;
     margin-left: auto; margin-right: auto;
 }
 .srow span {
     display: inline-block;
-    width: 110px;
+    width: 110dp;
     text-align: left;
 }
-.srow input { width: 280px; }
+.srow input { width: 280dp; }

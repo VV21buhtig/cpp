@@ -160,6 +160,7 @@ static Rml::ElementDocument* pauseDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
+static float curScale = 0.0f;
 static bool pauseShown = false;
 
 static Rml::Input::KeyIdentifier mapKey(int k) {
@@ -271,6 +272,14 @@ void RmlUI::keyEvent(int key, bool down, int mods) {
 void RmlUI::textInput(unsigned int cp) {
     if (!ok || !ctx || !inputActive) return;
     ctx->ProcessTextInput((Rml::Character)cp);
+}
+
+void RmlUI::setScale(float s) {
+    if (!ok || !ctx || s == curScale) return;
+    if (s < 0.5f) s = 0.5f;
+    if (s > 4.0f) s = 4.0f;
+    curScale = s;
+    ctx->SetDensityIndependentPixelRatio(s);
 }
 
 void RmlUI::showPause(bool show) {
