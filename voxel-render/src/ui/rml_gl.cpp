@@ -145,10 +145,21 @@ public:
                 if (o) o->SetProperty("display", "none");
                 if (gRml.onDone) gRml.onDone();
             } else if (id == "quit" && gRml.onQuit) gRml.onQuit();
+            else if (id.compare(0, 2, "b_") == 0 && gRml.onCycle) gRml.onCycle(id.c_str());
         } else if (type == "change") {
             auto* fc = static_cast<Rml::ElementFormControl*>(el);
             float v = (float)atof(fc->GetValue().c_str());
             if (gRml.onSlider) gRml.onSlider(id.c_str(), v);
+            // значение рядом со слайдером: s_fov -> v_fov
+            if (id.compare(0, 2, "s_") == 0) {
+                Rml::String vid = Rml::String("v_") + id.substr(2);
+                Rml::Element* sp = el->GetOwnerDocument()->GetElementById(vid);
+                if (sp) {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%g", (double)v);
+                    sp->SetInnerRML(Rml::String(buf));
+                }
+            }
         }
     }
 };
@@ -299,6 +310,15 @@ void RmlUI::syncPauseValues() {
         char buf[32];
         snprintf(buf, sizeof(buf), "%g", (double)getSlider(id));
         fc->SetValue(Rml::String(buf));
+        Rml::String vid = Rml::String("v_") + Rml::String(id).substr(2);
+        Rml::Element* sp = pauseDoc->GetElementById(vid);
+        if (sp) sp->SetInnerRML(Rml::String(buf));
+    }
+    if (!getLabel) return;
+    const char* bids[] = {"b_dist", "b_filter", "b_vsync", "b_res", "b_fs", "b_aa", "b_gscale"};
+    for (auto id : bids) {
+        Rml::Element* el = pauseDoc->GetElementById(id);
+        if (el) el->SetInnerRML(Rml::String(getLabel(id).c_str()));
     }
 }
 

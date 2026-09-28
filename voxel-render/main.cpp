@@ -887,6 +887,65 @@ title_screen:
         if (s == "s_gamma") return cvar.get("sun.gamma", 1.2f);
         return cvar.get("fog.far", 260.0f);
     };
+    // Кнопки-циклы RML-паузы (та же логика, что в старом оверлее/титуле).
+    gRml.onCycle = [&](const char* id) {
+        std::string s = id ? id : "";
+        audio.playUI();
+        if (s == "b_dist") {
+            static const int ds[] = {2, 4, 6, 8, 12};
+            int v = (int)cvar.get("view.dist", 4.0f), ni = 0;
+            for (int i = 0; i < 5; i++) if (ds[i] == v) ni = (i + 1) % 5;
+            cvar.set("view.dist", (float)ds[ni]);
+        } else if (s == "b_filter") {
+            int v = (int)cvar.get("gfx.filter", 0.0f);
+            cvar.set("gfx.filter", (float)((v + 1) % 4));
+        } else if (s == "b_vsync") {
+            bool v = cvar.get("vid.vsync", 1.0f) > 0.5f;
+            cvar.set("vid.vsync", v ? 0.0f : 1.0f); applyVideo();
+        } else if (s == "b_res") {
+            static const int pr[][2] = {{960, 540}, {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
+            int w = (int)cvar.get("vid.w", 1280.0f), h = (int)cvar.get("vid.h", 720.0f), ni = 0;
+            for (int i = 0; i < 5; i++) if (pr[i][0] == w && pr[i][1] == h) ni = (i + 1) % 5;
+            cvar.set("vid.w", (float)pr[ni][0]); cvar.set("vid.h", (float)pr[ni][1]);
+            applyVideo();
+        } else if (s == "b_fs") {
+            bool v = cvar.get("vid.fullscreen", 0.0f) > 0.5f;
+            cvar.set("vid.fullscreen", v ? 0.0f : 1.0f); applyVideo();
+        } else if (s == "b_aa") {
+            bool v = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
+            cvar.set("gfx.fxaa", v ? 0.0f : 1.0f);
+        } else if (s == "b_gscale") {
+            float v = cvar.get("ui.scale", 1.0f), ns = 1.0f;
+            if (v < 0.75f) ns = 1.0f;
+            else if (v < 1.5f) ns = 2.0f;
+            else if (v < 2.5f) ns = 3.0f;
+            else ns = 0.5f;
+            cvar.set("ui.scale", ns);
+        }
+        gRml.syncPauseValues();
+    };
+    gRml.getLabel = [&](const char* id) -> std::string {
+        std::string s = id ? id : "";
+        char b[64];
+        if (s == "b_dist") { snprintf(b, sizeof(b), "Render Distance: %d", (int)cvar.get("view.dist", 4.0f)); return b; }
+        static const char* fn[] = {"Nearest", "Bilinear", "Trilinear", "Aniso 8x"};
+        if (s == "b_filter") {
+            int v = (int)cvar.get("gfx.filter", 0.0f); if (v < 0) v = 0; if (v > 3) v = 3;
+            snprintf(b, sizeof(b), "Filtering: %s", fn[v]); return b;
+        }
+        if (s == "b_vsync") return std::string("VSync: ") + (cvar.get("vid.vsync", 1.0f) > 0.5f ? "ON" : "OFF");
+        if (s == "b_res") {
+            snprintf(b, sizeof(b), "Resolution: %dx%d", (int)cvar.get("vid.w", 1280.0f), (int)cvar.get("vid.h", 720.0f));
+            return b;
+        }
+        if (s == "b_fs") return std::string("Fullscreen: ") + (cvar.get("vid.fullscreen", 0.0f) > 0.5f ? "ON" : "OFF");
+        if (s == "b_aa") return std::string("AA: ") + (cvar.get("gfx.fxaa", 0.0f) > 0.5f ? "FXAA" : "OFF");
+        if (s == "b_gscale") {
+            snprintf(b, sizeof(b), "GUI Scale: %gx", (double)cvar.get("ui.scale", 1.0f));
+            return b;
+        }
+        return s;
+    };
     gRml.onDone = [&]() { audio.playUI(); cvar.exec("save"); };
     bool prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
     bool flashOn = true, followOn = true;

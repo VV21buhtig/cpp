@@ -6,6 +6,9 @@ body {
     color: #ffffff;
     width: 100%;
     height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 #shade {
     position: absolute;
@@ -14,10 +17,7 @@ body {
     background: rgba(0, 0, 0, 153);
 }
 #menu {
-    position: absolute;
-    left: 50%; top: 12%;
-    width: 440dp;
-    margin-left: -220dp;
+    width: 460dp;
     text-align: center;
 }
 h1 {
@@ -49,7 +49,17 @@ button:hover {
 }
 .srow span {
     display: inline-block;
-    width: 110dp;
+    width: 70dp;
     text-align: left;
 }
-.srow input { width: 280dp; }
+.srow input {
+    display: inline-block;
+    width: 220dp;
+    height: 24dp;
+}
+.srow .val {
+    display: inline-block;
+    width: 90dp;
+    text-align: right;
+    color: #c8c8c8;
+}

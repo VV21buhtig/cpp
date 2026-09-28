@@ -2,6 +2,7 @@
 #define RML_GL_H
 
 #include <functional>
+#include <string>
 
 // RmlUi: собственный RenderInterface на нашем GL 4.5 (без их glad) + ввод с GLFW.
 // GL-состояние на время context->Render() берём на себя, после возвращаем.
@@ -25,6 +26,8 @@ struct RmlUI {
     std::function<void()> onResume, onQuit, onDone;
     std::function<void(const char* id, float v)> onSlider; // s_fov/s_gamma/s_fog
     std::function<float(const char* id)> getSlider;
+    std::function<void(const char* id)> onCycle; // b_dist/b_filter/... кнопки-циклы
+    std::function<std::string(const char* id)> getLabel; // текст для кнопок-циклов
     void frame(); // Update + Render
 };
 
