@@ -402,6 +402,35 @@ title_screen:
                 }
             }
             y += bh + gap;
+            if (has) {
+                int icx = 0, icz = 0, iseed = -1;
+                std::string ipath = "worlds/" + worlds[menuWorldSel] + ".bin";
+                if (readWorldInfo(ipath.c_str(), icx, icz, iseed)) {
+                    std::string info = "Size: " + std::to_string(icx) + "x" + std::to_string(icz) +
+                                       "  Seed: " + (iseed < 0 ? std::string("?") : std::to_string(iseed));
+                    ImGui::SetCursorPos(ImVec2(cx, y));
+                    ImGui::TextUnformatted(info.c_str());
+                    y += 28.0f;
+                    static char renName[64] = "";
+                    ImGui::SetCursorPos(ImVec2(cx, y)); ImGui::SetNextItemWidth(bw - 170.0f);
+                    ImGui::InputText("##wrename", renName, sizeof(renName));
+                    ImGui::SetCursorPos(ImVec2(cx + bw - 160.0f, y - 2.0f));
+                    if (MCButton("s_rename", "Rename", ImVec2(160, 32), fontUI, fs, renName[0] != 0)) {
+                        std::string np = std::string("worlds/") + renName + ".bin";
+                        FILE* ex = fopen(np.c_str(), "rb");
+                        if (ex) { fclose(ex); console.print("rename: name taken\n"); }
+                        else if (rename(ipath.c_str(), np.c_str()) == 0) {
+                            audio.playUI(); worlds[menuWorldSel] = renName; renName[0] = 0;
+                        } else console.print("rename FAILED\n");
+                    }
+                    y += 42.0f;
+                    ImGui::SetCursorPos(ImVec2(cx, y));
+                    if (MCButton("s_seed", "New World with This Seed", ImVec2(bw, bh), fontUI, fs, iseed >= 0)) {
+                        audio.playUI(); newSeed = iseed; scr = M_CREATE;
+                    }
+                    y += bh + gap;
+                }
+            }
             FILE* lf = fopen("world.bin", "rb");
             if (lf) {
                 fclose(lf);
@@ -1233,6 +1262,47 @@ title_screen:
                 if (ImGui::SliderFloat("Fog distance", &v, 50.0f, 500.0f)) cvar.set("fog.far", v);
                 MCPopSliderStyle();
                 py += 52.0f;
+                // --- video живьём (дистанция подхватывается стримингом, фильтр — кадром) ---
+                static const int pds[] = {2, 4, 6, 8, 12};
+                int pvd = (int)cvar.get("view.dist", 4.0f);
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_dist", ("Render Distance: " + std::to_string(pvd)).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI();
+                    int ni = 0;
+                    for (int i = 0; i < 5; i++) if (pds[i] == pvd) ni = (i + 1) % 5;
+                    cvar.set("view.dist", (float)pds[ni]);
+                }
+                py += pbh + pgap;
+                static const char* pfn[] = {"Nearest", "Bilinear", "Trilinear", "Aniso 8x"};
+                int pfm = (int)cvar.get("gfx.filter", 0.0f); if (pfm < 0) pfm = 0; if (pfm > 3) pfm = 3;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_filter", ("Filtering: " + std::string(pfn[pfm])).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI(); cvar.set("gfx.filter", (float)((pfm + 1) % 4));
+                }
+                py += pbh + pgap;
+                bool pvs = cvar.get("vid.vsync", 1.0f) > 0.5f;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_vsync", (std::string("VSync: ") + (pvs ? "ON" : "OFF")).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI(); cvar.set("vid.vsync", pvs ? 0.0f : 1.0f); applyVideo();
+                }
+                py += pbh + pgap;
+                int pvw = (int)cvar.get("vid.w", 1280.0f), pvh = (int)cvar.get("vid.h", 720.0f);
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_res", ("Resolution: " + std::to_string(pvw) + "x" + std::to_string(pvh)).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI();
+                    static const int pp[][2] = {{960, 540}, {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}};
+                    int ni = 0;
+                    for (int i = 0; i < 5; i++) if (pp[i][0] == pvw && pp[i][1] == pvh) ni = (i + 1) % 5;
+                    cvar.set("vid.w", (float)pp[ni][0]); cvar.set("vid.h", (float)pp[ni][1]);
+                    applyVideo();
+                }
+                py += pbh + pgap;
+                bool pfs2 = cvar.get("vid.fullscreen", 0.0f) > 0.5f;
+                ImGui::SetCursorPos(ImVec2(pcx, py));
+                if (MCButton("p_fs", (std::string("Fullscreen: ") + (pfs2 ? "ON" : "OFF")).c_str(), ImVec2(pbw, pbh), fontUI, pfs, true, 45)) {
+                    audio.playUI(); cvar.set("vid.fullscreen", pfs2 ? 0.0f : 1.0f); applyVideo();
+                }
+                py += pbh + pgap;
                 ImGui::SetCursorPos(ImVec2(pcx, py));
                 if (MCButton("p_odone", "Done", ImVec2(pbw, pbh), fontUI, pfs, true, 45)) { audio.playUI(); cvar.exec("save"); pauseOpt = false; }
             }

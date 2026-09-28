@@ -72,3 +72,21 @@ bool loadWorld(World& w, const char* path) {
     fclose(f);
     return true;
 }
+
+bool readWorldInfo(const char* path, int& ncx, int& ncz, int& seed) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    char magic[4];
+    int dims[5];
+    bool ok = fread(magic, 1, 4, f) == 4 && magic[0] == 'V' && magic[1] == 'X' && magic[2] == 'W' &&
+              fread(dims, sizeof(int), 5, f) == 5 &&
+              dims[2] == Chunk::SX && dims[3] == Chunk::SY && dims[4] == Chunk::SZ &&
+              dims[0] > 0 && dims[0] <= 64 && dims[1] > 0 && dims[1] <= 64;
+    ncx = dims[0]; ncz = dims[1];
+    seed = -1;
+    if (ok && (magic[3] == '4' || magic[3] == '3'))
+        ok = fread(&seed, sizeof(int), 1, f) == 1;
+    else if (ok && magic[3] != '2') ok = false;
+    fclose(f);
+    return ok;
+}
