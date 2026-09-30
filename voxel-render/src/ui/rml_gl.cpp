@@ -305,7 +305,7 @@ void RmlUI::setScale(float s) {
 void RmlUI::showPause(bool show) {
     if (!ok || !pauseDoc || show == pauseShown) return;
     pauseShown = show;
-    if (show) { syncPauseValues(); pauseDoc->Show(); }
+    if (show) { syncPauseValues(); pauseDoc->Show(); dump(); }
     else pauseDoc->Hide();
 }
 
@@ -313,7 +313,7 @@ static bool optionsShown = false;
 void RmlUI::showOptions(bool show) {
     if (!ok || !optionsDoc || show == optionsShown) return;
     optionsShown = show;
-    if (show) { syncPauseValues(); optionsDoc->Show(); }
+    if (show) { syncPauseValues(); optionsDoc->Show(); dump(); }
     else optionsDoc->Hide();
 }
 
@@ -381,6 +381,35 @@ void RmlUI::frame() {
     if (depth) glEnable(GL_DEPTH_TEST);
     if (sciss) glEnable(GL_SCISSOR_TEST);
     glViewport(vp[0], vp[1], vp[2], vp[3]);
+}
+
+void RmlUI::dump() {
+    if (!ok || !ctx) { printf("rml: not initialised\n"); return; }
+    int ww = 0, hh = 0, wx = 0, wy = 0;
+    float csx = 0, csy = 0;
+    if (win) {
+        glfwGetFramebufferSize(win, &ww, &hh);
+        glfwGetWindowSize(win, &wx, &wy);
+        glfwGetWindowContentScale(win, &csx, &csy);
+    }
+    Rml::Vector2i dims = ctx->GetDimensions();
+    printf("rml: fb=%dx%d win=%dx%d contentScale=%.2f/%.2f ctx=%dx%d density=%.2f\n",
+           ww, hh, wx, wy, (double)csx, (double)csy, dims.x, dims.y,
+           (double)ctx->GetDensityIndependentPixelRatio());
+    auto dumpDoc = [&](const char* name, Rml::ElementDocument* doc) {
+        if (!doc) { printf("rml: doc %s null\n", name); return; }
+        Rml::Element* menu = doc->GetElementById("menu");
+        if (!menu) {
+            printf("rml: doc %s visible=%d NO #menu\n", name, (int)doc->IsVisible());
+            return;
+        }
+        Rml::Vector2f off = menu->GetAbsoluteOffset();
+        printf("rml: doc %s visible=%d menu off=(%.0f,%.0f) size=%.0fx%.0f\n",
+               name, (int)doc->IsVisible(), (double)off.x, (double)off.y,
+               (double)menu->GetClientWidth(), (double)menu->GetClientHeight());
+    };
+    dumpDoc("pause", pauseDoc);
+    dumpDoc("options", optionsDoc);
 }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }

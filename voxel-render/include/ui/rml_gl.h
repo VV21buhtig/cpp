@@ -23,6 +23,7 @@ struct RmlUI {
     void showOptions(bool show);
     void syncPauseValues(); // залить значения в открытый RML-документ
     void setScale(float s); // GUI Scale: dp->px (MC: мелкий/обычный/крупный)
+    void dump(); // диагностика в stdout: размеры, видимость, геометрия #menu
     // действия игры (назначает main)
     std::function<void()> onResume, onQuit, onDone, onDoneTitle;
     std::function<void(const char* id, float v)> onSlider; // s_fov/s_gamma/s_fog

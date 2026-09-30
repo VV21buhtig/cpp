@@ -892,6 +892,7 @@ title_screen:
     if (packNames[packIdx] != "default") applyPack(packNames[packIdx]);
     runLine = [&](const std::string& s) {
         if (s.rfind("pack ", 0) == 0) applyPack(s.substr(5));
+        else if (s == "rmlinfo") gRml.dump();
         else cvar.exec(s);
     };
     unsigned int specularMap = 0;
