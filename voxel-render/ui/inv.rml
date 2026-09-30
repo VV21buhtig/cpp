@@ -1,0 +1,17 @@
+<rml>
+<head>
+<title>Inventory</title>
+<link type="text/css" href="rml-base.rcss"/>
+<link type="text/css" href="mc.rcss"/>
+<link type="text/css" href="inv.rcss"/>
+</head>
+<body>
+<div id="invpanel">
+<h1>Inventory</h1>
+<div class="invrow"><img class="invitem" id="inv_1" src="items/grass_side.png"/><img class="invitem" id="inv_2" src="items/dirt.png"/><img class="invitem" id="inv_3" src="items/stone.png"/></div>
+<div class="invrow"><img class="invitem" id="inv_5" src="items/log_side.png"/><img class="invitem" id="inv_4" src="items/leaves.png"/><img class="invitem" id="inv_9" src="items/ore_coal.png"/></div>
+<div class="invrow"><img class="invitem" id="inv_10" src="items/ore_iron.png"/><img class="invitem" id="inv_11" src="items/ore_gold.png"/><img class="invitem" id="inv_12" src="items/ore_diamond.png"/></div>
+<div id="invhint">Click: assign to current hotbar slot</div>
+</div>
+</body>
+</rml>

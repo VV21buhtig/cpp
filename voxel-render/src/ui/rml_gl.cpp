@@ -177,6 +177,7 @@ static Rml::ElementDocument* singleDoc = nullptr;
 static Rml::ElementDocument* createDoc = nullptr;
 static Rml::ElementDocument* packsDoc = nullptr;
 static Rml::ElementDocument* hudDoc = nullptr;
+static Rml::ElementDocument* invDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -277,6 +278,10 @@ bool RmlUI::init(GLFWwindow* window) {
     hudDoc = ctx->LoadDocument("ui/hud.rml");
     if (!hudDoc) return false;
     hudDoc->Hide();
+    invDoc = ctx->LoadDocument("ui/inv.rml");
+    if (!invDoc) return false;
+    invDoc->AddEventListener("click", &pauseListener);
+    invDoc->Hide();
     ok = true;
     return true;
 }
@@ -292,6 +297,7 @@ void RmlUI::shutdown() {
     createDoc = nullptr;
     packsDoc = nullptr;
     hudDoc = nullptr;
+    invDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -400,6 +406,22 @@ void RmlUI::setHudSlot(int i) {
         snprintf(buf, sizeof(buf), "%ddp", i * 20 - 2);
         el->SetProperty("left", Rml::String(buf));
     }
+}
+
+static bool invShown = false;
+void RmlUI::showInv(bool show) {
+    if (!ok || !invDoc || show == invShown) return;
+    invShown = show;
+    if (show) invDoc->Show();
+    else invDoc->Hide();
+}
+
+void RmlUI::setHudIcon(int slot, const char* src) {
+    if (!ok || !hudDoc || !src || slot < 0 || slot > 8) return;
+    char id[16];
+    snprintf(id, sizeof(id), "hi%d", slot);
+    Rml::Element* el = hudDoc->GetElementById(id);
+    if (el) el->SetAttribute("src", Rml::String(src));
 }
 
 void RmlUI::refreshSingle(const std::vector<std::string>& worlds, int sel) {
@@ -600,6 +622,7 @@ void RmlUI::dump() {
     dumpDoc("create", createDoc);
     dumpDoc("packs", packsDoc);
     dumpDoc("hud", hudDoc);
+    dumpDoc("inv", invDoc);
 }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }

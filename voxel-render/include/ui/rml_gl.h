@@ -28,6 +28,8 @@ struct RmlUI {
     void showPacks(bool show); // ui/packs.rml
     void showHud(bool show); // ui/hud.rml (игровой хотбар)
     void setHudSlot(int i); // рамка выбора 0..8
+    void showInv(bool show); // ui/inv.rml (креатив-инвентарь)
+    void setHudIcon(int slot, const char* src); // иконка слота (src перезагружается)
     void refreshSingle(const std::vector<std::string>& worlds, int sel);
     void selectSingleRow(int oldN, int newN);
     void setWInfo(const std::string& t);
@@ -51,6 +53,7 @@ struct RmlUI {
     std::function<void(const char* id)> onCycle; // b_dist/b_filter/... кнопки-циклы
     std::function<std::string(const char* id)> getLabel; // текст для кнопок-циклов
     std::function<void(const char* id)> onAction; // прочие клики титульных доков (t_*)
+    std::function<void(int bid)> onInvAssign; // клик по блоку инвентаря (назначает game)
     void frame(); // Update + Render
 };
 

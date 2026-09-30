@@ -1,0 +1,35 @@
+/* Инвентарь (креатив V1): панель по центру, мир видно (без shade). */
+#invpanel {
+    position: absolute;
+    left: 50%;
+    top: 12%;
+    width: 460dp;
+    margin-left: -220dp;
+    text-align: center;
+    background: rgba(0, 0, 0, 120);
+    border-width: 2dp;
+    border-color: #000000;
+    padding-top: 8dp;
+    padding-bottom: 8dp;
+}
+.invrow {
+    display: block;
+    text-align: center;
+}
+.invitem {
+    display: inline-block;
+    vertical-align: middle;
+    width: 48dp;
+    height: 48dp;
+    margin: 4dp;
+    background: rgba(0, 0, 0, 120);
+    border-width: 2dp;
+    border-color: #404040;
+}
+.invitem:hover {
+    border-color: #ffffff;
+}
+#invhint {
+    color: #c8c8c8;
+    text-align: center;
+}

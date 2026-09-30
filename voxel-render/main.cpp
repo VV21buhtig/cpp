@@ -121,6 +121,7 @@ static void MCLogo(ImDrawList* d, ImFont* f, float fsize, unsigned int tTop, uns
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
 bool gPaused = false; // пауза игры (ESC): тик стоит, поверх — MC-меню
+bool gInvOpen = false; // креатив-инвентарь (E): ввод в игру закрыт, мир тикает
 int gWheelAcc = 0; // колесо мыши для хотбара (копит scroll_callback, ест игровой цикл)
 CVarSys* gCvar = nullptr;
 float lastX = 640.0f, lastY = 360.0f;
@@ -129,7 +130,7 @@ float deltaTime = 0.0f, lastFrame = 0.0f;
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) { glViewport(0, 0, w, h); }
 void mouse_callback(GLFWwindow*, double xpos, double ypos) {
-    if (console.open || gPaused) { firstMouse = true; return; }
+    if (console.open || gPaused || gInvOpen) { firstMouse = true; return; }
     if (firstMouse) { lastX = (float)xpos; lastY = (float)ypos; firstMouse = false; }
     float xo = (float)xpos - lastX, yo = lastY - (float)ypos;
     lastX = (float)xpos; lastY = (float)ypos;
@@ -497,6 +498,12 @@ int main()
             }
         }
         else if (s == "c_cancel") { audio.playUI(); scr = M_SINGLE; }
+        else if (s.compare(0, 4, "inv_") == 0) {
+            // Креатив-инвентарь: блок кладёт game-секция (там хотбар/placeId).
+            int bid = atoi(s.c_str() + 4);
+            if (bid >= 0 && bid < 256 && gBlocks.get((unsigned char)bid).solid && gRml.onInvAssign)
+                gRml.onInvAssign(bid);
+        }
         else if (s.compare(0, 5, "wrow_") == 0) {
             int idx = atoi(s.c_str() + 5);
             std::vector<std::string> ws = listWorlds();
@@ -619,6 +626,7 @@ title_screen:
         gRml.showCreate(scr == M_CREATE && useRmlMenu);
         gRml.showPacks(scr == M_PACKS && useRmlMenu);
         gRml.showHud(false); // хад в титуле не живёт
+        gRml.showInv(false); // инвентарь в титуле не живёт
         static MenuScr prevScrM = M_MAIN;
         if (scr != prevScrM) {
             if (scr == M_SINGLE && useRmlMenu) syncSingleFull();
@@ -992,6 +1000,7 @@ title_screen:
     // ================= GAME =================
     gPaused = false;
     gWheelAcc = 0;
+    gInvOpen = false;
     gRml.showHud(true);
     gRml.setHudSlot(0);
     audio.wind(true); // эмбиент только в игре, не в меню
@@ -1202,7 +1211,7 @@ title_screen:
 
     std::cout << "\nWASD move, Space jump/up, Shift sneak/down, 2xSpace or Ctrl+Space fly, F flashlight, L lamps, 1/2/3 block, LMB break, RMB place, F5 save, F9 load.\n";
 
-    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false;
+    bool prevL = false, prevR = false, prevF5 = false, prevF9 = false, prevE = false;
     bool pauseOpt = false, toTitle = false; // подэкран опций паузы, выход в титул
     // RML-пауза: действия игры (старый оверлей остаётся при ui.rml=0)
     gRml.onResume = [&]() {
@@ -1224,8 +1233,29 @@ title_screen:
     int placeId = B_GRASS;
     int hudSlot = 0;
     // Хотбар как в MC: 9 слотов (картинки ui/items/), клавиши 1..9 + колесо.
-    const unsigned char hotbar[9] = {B_GRASS, B_DIRT, B_STONE, B_LOG, B_LEAVES,
-                                     B_COAL, B_IRON, B_GOLD, B_DIAMOND};
+    unsigned char hotbar[9] = {B_GRASS, B_DIRT, B_STONE, B_LOG, B_LEAVES,
+                               B_COAL, B_IRON, B_GOLD, B_DIAMOND};
+    // id блока -> иконка хотбара/инвентаря (имена файлов ui/items/).
+    auto itemPng = [](unsigned char id) -> const char* {        switch (id) {
+            case B_GRASS: return "items/grass_side.png";
+            case B_DIRT: return "items/dirt.png";
+            case B_STONE: return "items/stone.png";
+            case B_LOG: return "items/log_side.png";
+            case B_LEAVES: return "items/leaves.png";
+            case B_COAL: return "items/ore_coal.png";
+            case B_IRON: return "items/ore_iron.png";
+            case B_GOLD: return "items/ore_gold.png";
+            case B_DIAMOND: return "items/ore_diamond.png";
+            default: return "items/stone.png";
+        }
+    };
+    gRml.onInvAssign = [&](int bid) {
+        audio.playUI();
+        hotbar[hudSlot] = (unsigned char)bid;
+        placeId = bid;
+        gRml.setHudIcon(hudSlot, itemPng((unsigned char)bid));
+        std::cout << "hotbar[" << hudSlot << "] = " << gBlocks.get((unsigned char)bid).name << "\n";
+    };
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
     int lastFilter = -1; // смена gfx.filter из консоли применяется живо
@@ -1276,7 +1306,13 @@ title_screen:
         prevF1 = f1; prevGrave = grv;
         bool esc = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
         if (esc && !prevEsc) {
-            if (console.open) {
+            if (gInvOpen) {
+                gInvOpen = false;
+                audio.playUI();
+                if (!gPaused && !console.open) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                firstMouse = true;
+                std::cout << "inventory closed\n";
+            } else if (console.open) {
                 console.open = false;
                 if (!gPaused) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             } else {
@@ -1290,6 +1326,16 @@ title_screen:
             }
         }
         prevEsc = esc;
+        // E — креатив-инвентарь (мир продолжает тикать, ввод закрыт)
+        bool curE = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+        if (curE && !prevE && !console.open && !gPaused) {
+            gInvOpen = !gInvOpen;
+            audio.playUI();
+            glfwSetInputMode(window, GLFW_CURSOR, gInvOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+            std::cout << (gInvOpen ? "inventory open\n" : "inventory closed\n");
+        }
+        prevE = curE;
 
         // --- PLAYER ---
         bool curF = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
@@ -1298,16 +1344,16 @@ title_screen:
         bool curR = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
         bool curF5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
         bool curF9 = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
-        if (console.open) {
+        if (console.open || gInvOpen) {
             prevF = curF; prevG = curG;
             prevL = curL; prevR = curR; prevF5 = curF5; prevF9 = curF9;
         }
-        if (!console.open && curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
+        if (!console.open && !gInvOpen && curF && !prevF) { flashOn = !flashOn; std::cout << (flashOn ? "flash ON\n" : "flash OFF\n"); }
         prevF = curF;
-        if (!console.open && curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
+        if (!console.open && !gInvOpen && curG && !prevG) { followOn = !followOn; std::cout << (followOn ? "lamps ON\n" : "lamps OFF\n"); }
         prevG = curG;
         glm::vec2 mv(0.0f);
-        if (!console.open) {
+        if (!console.open && !gInvOpen) {
         player.walkSpeed = cvar.get("move.walk", 4.3f);
         player.flySpeed = cvar.get("move.fly", 8.0f);
         player.jumpVel = cvar.get("move.jump", 7.5f);
@@ -1319,8 +1365,8 @@ title_screen:
         static bool prevSpace = false;
         bool sneakNow = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                         glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
-        player.sneak = sneakNow && !console.open;
-        if (!console.open) {
+        player.sneak = sneakNow && !console.open && !gInvOpen;
+        if (!console.open && !gInvOpen) {
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mv.x += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mv.x -= 1.0f;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mv.y += 1.0f;
@@ -1487,7 +1533,7 @@ title_screen:
         bool hasHit = (hitT > 0.0f);
 
         // ---- BREAK / PLACE ----
-        if (hasHit && !console.open && !gPaused) {
+        if (hasHit && !console.open && !gPaused && !gInvOpen) {
             if (curL && !prevL) {
                 unsigned char broken = world->getBlock(wx, wy, wz);
                 world->setBlock(wx, wy, wz, 0);
@@ -1527,6 +1573,7 @@ title_screen:
                 hudSlot = i;
                 placeId = hotbar[i];
                 gRml.setHudSlot(i);
+                gRml.setHudIcon(i, itemPng(hotbar[i]));
                 std::cout << "block: " << gBlocks.get(hotbar[i]).name << "\n";
             }
             pn[i] = cn[i];
@@ -1539,12 +1586,13 @@ title_screen:
             else gWheelAcc++;
             placeId = hotbar[hudSlot];
             gRml.setHudSlot(hudSlot);
+            gRml.setHudIcon(hudSlot, itemPng(hotbar[hudSlot]));
         }
-        if (!console.open && !gPaused && curF5 && !prevF5) {
+        if (!console.open && !gPaused && !gInvOpen && curF5 && !prevF5) {
             if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
             else std::cout << "Save FAILED\n";
         }
-        if (!console.open && !gPaused && curF9 && !prevF9) {
+        if (!console.open && !gPaused && !gInvOpen && curF9 && !prevF9) {
             if (loadWorld(*world, playPath.c_str())) { rebuildAll(); std::cout << "Loaded " << playPath << "\n"; }
             else std::cout << "Load FAILED\n";
         }
@@ -1695,14 +1743,16 @@ title_screen:
         ImGui::NewFrame();
         // ---- PAUSE (ESC): RmlUi-документ или старый MC-оверлей (ui.rml) ----
         bool useRml = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
-        gRml.inputActive = gPaused && useRml;
+        gRml.inputActive = (gPaused || gInvOpen) && useRml;
         gRml.showPause(gPaused && useRml);
         gRml.showOptions(false); // титульные опции в игре не живут
         gRml.showTitle(false); // титул в игре не живёт
         gRml.showSingle(false); // одиночка в игре не живёт
         gRml.showCreate(false); // создание в игре не живёт
         gRml.showPacks(false); // паки в игре не живут
-        if (gPaused && useRml) {
+        gRml.showHud(true); // хотбар виден всегда в игре
+        gRml.showInv(gInvOpen);
+        if ((gPaused || gInvOpen) && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
             gRml.mouseMove(mx, my);
