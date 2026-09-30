@@ -1,6 +1,7 @@
 <rml>
 <head>
 <title>Rendor</title>
+<link type="text/css" href="rml-base.rcss"/>
 <link type="text/css" href="mc.rcss"/>
 <link type="text/css" href="title.rcss"/>
 </head>
