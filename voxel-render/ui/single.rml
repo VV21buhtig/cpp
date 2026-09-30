@@ -1,0 +1,22 @@
+<rml>
+<head>
+<title>Select World</title>
+<link type="text/css" href="rml-base.rcss"/>
+<link type="text/css" href="mc.rcss"/>
+<link type="text/css" href="single.rcss"/>
+</head>
+<body>
+<div id="smenu">
+<h1>Select World</h1>
+<div id="wlist"></div>
+<div id="winfo">No worlds</div>
+<button id="s_play">Play Selected World</button>
+<button id="s_create">Create New World</button>
+<button id="s_del">Delete</button>
+<div id="renrow"><input type="text" id="s_ren"/><button id="s_rename">Rename</button></div>
+<button id="s_seed">New World with This Seed</button>
+<button id="s_import">Import legacy world.bin</button>
+<button id="s_cancel">Cancel</button>
+</div>
+</body>
+</rml>

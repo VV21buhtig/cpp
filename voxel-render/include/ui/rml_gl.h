@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 // RmlUi: собственный RenderInterface на нашем GL 4.5 (без их glad) + ввод с GLFW.
 // GL-состояние на время context->Render() берём на себя, после возвращаем.
@@ -18,10 +19,18 @@ struct RmlUI {
     void mouseWheel(double y);
     void keyEvent(int glfwKey, bool down, int mods);
     void textInput(unsigned int codepoint);
-    // документы: пауза, титульные опции, титул
+    // документы: пауза, титульные опции, титул, одиночка
     void showPause(bool show);
     void showOptions(bool show);
     void showTitle(bool show);
+    void showSingle(bool show); // ui/single.rml
+    void refreshSingle(const std::vector<std::string>& worlds, int sel);
+    void selectSingleRow(int oldN, int newN);
+    void setWInfo(const std::string& t);
+    void setImportVisible(bool show);
+    std::string getSingleText(const char* id);
+    void setSingleText(const char* id, const std::string& t);
+    void setSingleInner(const char* id, const std::string& t);
     void syncPauseValues(); // залить значения в открытый RML-документ
     void setScale(float s); // GUI Scale: dp->px (MC: мелкий/обычный/крупный)
     void dump(); // диагностика в stdout: размеры, видимость, геометрия #menu

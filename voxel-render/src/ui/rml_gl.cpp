@@ -173,6 +173,7 @@ static Rml::Context* ctx = nullptr;
 static Rml::ElementDocument* pauseDoc = nullptr;
 static Rml::ElementDocument* optionsDoc = nullptr;
 static Rml::ElementDocument* titleDoc = nullptr;
+static Rml::ElementDocument* singleDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -255,6 +256,11 @@ bool RmlUI::init(GLFWwindow* window) {
     titleDoc->AddEventListener("click", &pauseListener);
     titleDoc->AddEventListener("change", &pauseListener);
     titleDoc->Hide();
+    singleDoc = ctx->LoadDocument("ui/single.rml");
+    if (!singleDoc) return false;
+    singleDoc->AddEventListener("click", &pauseListener);
+    singleDoc->AddEventListener("change", &pauseListener);
+    singleDoc->Hide();
     ok = true;
     return true;
 }
@@ -266,6 +272,7 @@ void RmlUI::shutdown() {
     pauseDoc = nullptr;
     optionsDoc = nullptr;
     titleDoc = nullptr;
+    singleDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -331,6 +338,71 @@ void RmlUI::showTitle(bool show) {
     titleShown = show;
     if (show) titleDoc->Show();
     else titleDoc->Hide();
+}
+
+static bool singleShown = false;
+void RmlUI::showSingle(bool show) {
+    if (!ok || !singleDoc || show == singleShown) return;
+    singleShown = show;
+    if (show) singleDoc->Show();
+    else singleDoc->Hide();
+}
+
+void RmlUI::refreshSingle(const std::vector<std::string>& worlds, int sel) {
+    if (!ok || !singleDoc) return;
+    Rml::Element* list = singleDoc->GetElementById("wlist");
+    if (!list) return;
+    while (list->GetNumChildren() > 0) list->RemoveChild(list->GetChild(0));
+    for (size_t i = 0; i < worlds.size(); i++) {
+        Rml::ElementPtr row = singleDoc->CreateElement("button");
+        row->SetClass("wrow", true);
+        char id[32];
+        snprintf(id, sizeof(id), "wrow_%zu", i);
+        row->SetId(Rml::String(id));
+        row->SetInnerRML(Rml::String(worlds[i].c_str()));
+        if ((int)i == sel) row->SetClass("sel", true);
+        list->AppendChild(std::move(row));
+    }
+}
+
+void RmlUI::selectSingleRow(int oldN, int newN) {
+    if (!ok || !singleDoc) return;
+    char id[32];
+    snprintf(id, sizeof(id), "wrow_%d", oldN);
+    if (Rml::Element* e = singleDoc->GetElementById(id)) e->SetClass("sel", false);
+    snprintf(id, sizeof(id), "wrow_%d", newN);
+    if (Rml::Element* e = singleDoc->GetElementById(id)) e->SetClass("sel", true);
+}
+
+void RmlUI::setWInfo(const std::string& t) {
+    if (!ok || !singleDoc) return;
+    if (Rml::Element* el = singleDoc->GetElementById("winfo")) el->SetInnerRML(Rml::String(t.c_str()));
+}
+
+void RmlUI::setImportVisible(bool show) {
+    if (!ok || !singleDoc) return;
+    if (Rml::Element* el = singleDoc->GetElementById("s_import"))
+        el->SetProperty("display", show ? "block" : "none");
+}
+
+std::string RmlUI::getSingleText(const char* id) {
+    if (!ok || !singleDoc || !id) return "";
+    Rml::Element* el = singleDoc->GetElementById(id);
+    auto* fc = static_cast<Rml::ElementFormControl*>(el);
+    if (!fc) return "";
+    return fc->GetValue().c_str();
+}
+
+void RmlUI::setSingleText(const char* id, const std::string& t) {
+    if (!ok || !singleDoc || !id) return;
+    Rml::Element* el = singleDoc->GetElementById(id);
+    auto* fc = static_cast<Rml::ElementFormControl*>(el);
+    if (fc) fc->SetValue(Rml::String(t.c_str()));
+}
+
+void RmlUI::setSingleInner(const char* id, const std::string& t) {
+    if (!ok || !singleDoc || !id) return;
+    if (Rml::Element* el = singleDoc->GetElementById(id)) el->SetInnerRML(Rml::String(t.c_str()));
 }
 
 static void syncDoc(Rml::ElementDocument* doc, RmlUI* ui) {
@@ -429,6 +501,8 @@ void RmlUI::dump() {
     };
     dumpDoc("pause", pauseDoc);
     dumpDoc("options", optionsDoc);
+    dumpDoc("title", titleDoc);
+    dumpDoc("single", singleDoc);
 }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }

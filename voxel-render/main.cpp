@@ -391,11 +391,92 @@ int main()
     int newSeed = 1337;
     int menuWorldSel = 0, menuShaderSel = 0, menuPackIdx = 0;
     bool delArm = false; // удаление мира: первое нажатие ставит на взвод
+    // Полный синк RML-одиночки: список + инфо + импорт + подпись Delete.
+    auto syncSingleFull = [&]() {
+        std::vector<std::string> ws = listWorlds();
+        if (menuWorldSel >= (int)ws.size()) menuWorldSel = 0;
+        gRml.refreshSingle(ws, menuWorldSel);
+        if (!ws.empty()) {
+            int icx = 0, icz = 0, iseed = -1;
+            if (readWorldInfo(("worlds/" + ws[menuWorldSel] + ".bin").c_str(), icx, icz, iseed))
+                gRml.setWInfo("Size: " + std::to_string(icx) + "x" + std::to_string(icz) +
+                              "  Seed: " + (iseed < 0 ? std::string("?") : std::to_string(iseed)));
+            else gRml.setWInfo("?");
+        } else gRml.setWInfo("No worlds");
+        FILE* lf = fopen("world.bin", "rb");
+        gRml.setImportVisible(lf != nullptr);
+        if (lf) fclose(lf);
+        gRml.setSingleInner("s_del", delArm ? "Really delete?" : "Delete");
+    };
     gRml.onAction = [&](const char* id) {
         std::string s = id ? id : "";
         if (s == "t_single") { audio.playUI(); scr = M_SINGLE; delArm = false; }
         else if (s == "t_opt") { audio.playUI(); scr = M_OPTIONS; }
         else if (s == "t_quit") { wantQuit = true; }
+        else if (s == "s_play") {
+            std::vector<std::string> ws = listWorlds();
+            if (!ws.empty() && menuWorldSel < (int)ws.size()) {
+                audio.playUI();
+                playPath = "worlds/" + ws[menuWorldSel] + ".bin";
+                playNew = false;
+            }
+        }
+        else if (s == "s_create") { audio.playUI(); scr = M_CREATE; }
+        else if (s == "s_del") {
+            std::vector<std::string> ws = listWorlds();
+            if (!ws.empty() && menuWorldSel < (int)ws.size()) {
+                if (!delArm) { delArm = true; audio.playUI(); gRml.setSingleInner("s_del", "Really delete?"); }
+                else {
+                    remove(("worlds/" + ws[menuWorldSel] + ".bin").c_str());
+                    menuWorldSel = 0; delArm = false;
+                    syncSingleFull();
+                }
+            }
+        }
+        else if (s == "s_rename") {
+            std::string nn = gRml.getSingleText("s_ren");
+            std::vector<std::string> ws = listWorlds();
+            if (!nn.empty() && !ws.empty() && menuWorldSel < (int)ws.size()) {
+                std::string np = "worlds/" + nn + ".bin";
+                FILE* ex = fopen(np.c_str(), "rb");
+                if (ex) { fclose(ex); console.print("rename: name taken\n"); }
+                else if (rename(("worlds/" + ws[menuWorldSel] + ".bin").c_str(), np.c_str()) == 0) {
+                    audio.playUI(); gRml.setSingleText("s_ren", ""); syncSingleFull();
+                } else console.print("rename FAILED\n");
+            }
+        }
+        else if (s == "s_seed") {
+            std::vector<std::string> ws = listWorlds();
+            if (!ws.empty() && menuWorldSel < (int)ws.size()) {
+                int icx = 0, icz = 0, iseed = -1;
+                if (readWorldInfo(("worlds/" + ws[menuWorldSel] + ".bin").c_str(), icx, icz, iseed) && iseed >= 0) {
+                    audio.playUI(); newSeed = iseed; scr = M_CREATE;
+                }
+            }
+        }
+        else if (s == "s_import") {
+            audio.playUI();
+            playPath = "worlds/imported.bin";
+            playNew = false;
+            playCX = 16; playCZ = 16;
+            newSeed = -2; // флаг: грузить из world.bin
+        }
+        else if (s == "s_cancel") { audio.playUI(); scr = M_MAIN; delArm = false; }
+        else if (s.compare(0, 5, "wrow_") == 0) {
+            int idx = atoi(s.c_str() + 5);
+            std::vector<std::string> ws = listWorlds();
+            if (idx >= 0 && idx < (int)ws.size() && idx != menuWorldSel) {
+                int old = menuWorldSel;
+                menuWorldSel = idx; delArm = false;
+                audio.playUI();
+                gRml.selectSingleRow(old, idx);
+                int icx = 0, icz = 0, iseed = -1;
+                if (readWorldInfo(("worlds/" + ws[idx] + ".bin").c_str(), icx, icz, iseed))
+                    gRml.setWInfo("Size: " + std::to_string(icx) + "x" + std::to_string(icz) +
+                                  "  Seed: " + (iseed < 0 ? std::string("?") : std::to_string(iseed)));
+                gRml.setSingleInner("s_del", "Delete");
+            }
+        }
     };
     const int sizes[3] = {8, 16, 24};
     const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
@@ -441,6 +522,12 @@ title_screen:
         gRml.inputActive = useRmlMenu;
         gRml.showOptions(scr == M_OPTIONS && useRmlMenu);
         gRml.showTitle(scr == M_MAIN && useRmlMenu);
+        gRml.showSingle(scr == M_SINGLE && useRmlMenu);
+        static MenuScr prevScrM = M_MAIN;
+        if (scr != prevScrM) {
+            if (scr == M_SINGLE && useRmlMenu) syncSingleFull();
+            prevScrM = scr;
+        }
         if (useRmlMenu) rmlMenuFrame = true;
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -486,6 +573,16 @@ title_screen:
             if (MCButton("m_quit", "Quit Game", ImVec2(bw2, bh), fontUI, fs)) { wantQuit = true; }
             } // старый титул (ui.rml=0)
         } else if (scr == M_SINGLE) {
+            if (useRmlMenu) {
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                gRml.mouseMove(mx, my);
+                static bool rmlML = false, rmlMR = false;
+                bool bl = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                bool br = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                if (bl != rmlML) { gRml.mouseButton(0, bl); rmlML = bl; }
+                if (br != rmlMR) { gRml.mouseButton(1, br); rmlMR = br; }
+            } else {
             MCTitle(md, fontUI, fs + 4.0f, "Select World", (float)ww, 24.0f);
             std::vector<std::string> worlds = listWorlds();
             if (menuWorldSel >= (int)worlds.size()) { menuWorldSel = 0; delArm = false; }
@@ -561,6 +658,7 @@ title_screen:
             }
             ImGui::SetCursorPos(ImVec2(cx, y));
             if (MCButton("s_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_MAIN; delArm = false; }
+            } // старая одиночка (ui.rml=0)
         } else if (scr == M_CREATE) {
             MCTitle(md, fontUI, fs + 4.0f, "Create New World", (float)ww, 24.0f);
             float fx = cx, fy = 84.0f;

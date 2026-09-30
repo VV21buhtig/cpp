@@ -12,3 +12,6 @@
   unclear — local use; replace with CC0 if publishing (see OGA "100 CC0 SFX").
 - fonts/Monocraft.ttf: Monocraft by Idrees Hassan, SIL OFL 1.1 (see fonts/OFL.txt),
   https://github.com/IdreesInc/Monocraft
+- RmlUi 6.3 (third-party/rmlui, MIT, https://github.com/mikke89/RmlUi): HTML/CSS UI,
+  свой RenderInterface на нашем GL (их GL3-рендерер не используем — конфликт glad).
+  ui/rml-base.rcss — их Samples/assets/rml.rcss без изменений.

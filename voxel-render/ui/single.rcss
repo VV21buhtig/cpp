@@ -1,0 +1,57 @@
+/* Одиночка: список миров со скроллом (фикс. высота + overflow, без max-height —
+   max-height+overflow схлопывал ширину в их движке). */
+#smenu {
+    position: absolute;
+    left: 50%;
+    top: 6%;
+    width: 620dp;
+    margin-left: -310dp;
+    text-align: center;
+}
+#wlist {
+    width: 440dp;
+    height: 260dp;
+    overflow: hidden auto;
+    background: rgba(0, 0, 0, 153);
+    border-width: 2dp;
+    border-color: #000000;
+    margin-left: auto; margin-right: auto;
+    text-align: left;
+}
+.wrow {
+    display: block;
+    width: 100%;
+    background: rgba(0, 0, 0, 0);
+    border-width: 0dp;
+    text-align: left;
+    color: #ffffff;
+    padding: 4dp 8dp;
+}
+.wrow:hover { color: #ffffa0; }
+.wrow.sel { color: #ffffa0; }
+#winfo {
+    color: #c8c8c8;
+    text-align: center;
+}
+#renrow {
+    width: 400dp;
+    margin-left: auto; margin-right: auto;
+}
+#renrow input {
+    display: inline-block;
+    vertical-align: middle;
+    width: 220dp;
+    background: #000000;
+    color: #ffffff;
+    border-width: 2dp;
+    border-color: #808080;
+}
+#renrow button {
+    display: inline-block;
+    vertical-align: middle;
+    width: 170dp;
+}
+input.text {
+    background: #000000;
+    color: #ffffff;
+}
