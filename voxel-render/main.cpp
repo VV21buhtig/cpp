@@ -1709,7 +1709,6 @@ title_screen:
             static bool rmlL = false, rmlR = false;
             if (curL != rmlL) { gRml.mouseButton(0, curL); rmlL = curL; }
             if (curR != rmlR) { gRml.mouseButton(1, curR); rmlR = curR; }
-            gRml.frame();
         } else if (gPaused) {
             int pww, phh;
             glfwGetFramebufferSize(window, &pww, &phh);
@@ -1830,6 +1829,8 @@ title_screen:
             ImGui::End();
             ImGui::PopStyleColor();
         }
+        // RML каждый кадр игры: HUD всегда, пауза когда показана (не только на паузе!)
+        gRml.frame();
 
         if (console.open) {
             ImGui::Begin("Console", &console.open);

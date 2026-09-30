@@ -17,6 +17,7 @@ button {
     display: block;
     box-sizing: border-box;
     font-size: 18dp;
+    white-space: nowrap;
     width: 400dp; height: 36dp;
     margin-top: 4dp; margin-bottom: 4dp;
     margin-left: auto; margin-right: auto;
@@ -60,6 +61,7 @@ button:hover {
     display: inline-block;
     vertical-align: top;
     width: 196dp;
+    font-size: 15dp;
     margin-left: 0dp; margin-right: 0dp;
 }
 .brow button:first-child { margin-right: 8dp; }
