@@ -110,4 +110,14 @@ add_custom_target(sync_data ALL
         ${CMAKE_CURRENT_SOURCE_DIR}/fonts
         ${CMAKE_CURRENT_BINARY_DIR}/fonts
 )
+# Иконки хотбара (наши тайлы) рядом с RML-документами: ui/items/.
+# Явный список вместо симлинков — детерминированно и дружит с паками.
+set(HUD_ITEMS grass_side dirt stone log_side leaves ore_coal ore_iron ore_gold ore_diamond)
+foreach(it ${HUD_ITEMS})
+    add_custom_command(TARGET sync_data POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/texture/tiles/${it}.png
+            ${CMAKE_CURRENT_BINARY_DIR}/ui/items/${it}.png
+    )
+endforeach()
 add_dependencies(voxel_render sync_data)

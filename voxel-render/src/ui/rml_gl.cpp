@@ -99,8 +99,8 @@ public:
         glGenTextures(1, &t);
         glBindTexture(GL_TEXTURE_2D, t);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, d);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         stbi_image_free(d);
         return (Rml::TextureHandle)t;
     }
@@ -176,6 +176,7 @@ static Rml::ElementDocument* titleDoc = nullptr;
 static Rml::ElementDocument* singleDoc = nullptr;
 static Rml::ElementDocument* createDoc = nullptr;
 static Rml::ElementDocument* packsDoc = nullptr;
+static Rml::ElementDocument* hudDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -273,6 +274,9 @@ bool RmlUI::init(GLFWwindow* window) {
     packsDoc->AddEventListener("click", &pauseListener);
     packsDoc->AddEventListener("change", &pauseListener);
     packsDoc->Hide();
+    hudDoc = ctx->LoadDocument("ui/hud.rml");
+    if (!hudDoc) return false;
+    hudDoc->Show(); // видимостью управляет main через showHud
     ok = true;
     return true;
 }
@@ -287,6 +291,7 @@ void RmlUI::shutdown() {
     singleDoc = nullptr;
     createDoc = nullptr;
     packsDoc = nullptr;
+    hudDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -376,6 +381,25 @@ void RmlUI::showPacks(bool show) {
     packsShown = show;
     if (show) packsDoc->Show();
     else packsDoc->Hide();
+}
+
+static bool hudShown = false;
+void RmlUI::showHud(bool show) {
+    if (!ok || !hudDoc || show == hudShown) return;
+    hudShown = show;
+    if (show) hudDoc->Show();
+    else hudDoc->Hide();
+}
+
+void RmlUI::setHudSlot(int i) {
+    if (!ok || !hudDoc) return;
+    if (i < 0) i = 0;
+    if (i > 8) i = 8;
+    if (Rml::Element* el = hudDoc->GetElementById("hudsel")) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%ddp", i * 48);
+        el->SetProperty("left", Rml::String(buf));
+    }
 }
 
 void RmlUI::refreshSingle(const std::vector<std::string>& worlds, int sel) {
@@ -575,6 +599,7 @@ void RmlUI::dump() {
     dumpDoc("single", singleDoc);
     dumpDoc("create", createDoc);
     dumpDoc("packs", packsDoc);
+    dumpDoc("hud", hudDoc);
 }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }

@@ -121,6 +121,7 @@ static void MCLogo(ImDrawList* d, ImFont* f, float fsize, unsigned int tTop, uns
 Camera camera(glm::vec3(8.0f, 6.0f, 14.0f));
 GameConsole console;
 bool gPaused = false; // пауза игры (ESC): тик стоит, поверх — MC-меню
+int gWheelAcc = 0; // колесо мыши для хотбара (копит scroll_callback, ест игровой цикл)
 CVarSys* gCvar = nullptr;
 float lastX = 640.0f, lastY = 360.0f;
 bool  firstMouse = true;
@@ -136,6 +137,8 @@ void mouse_callback(GLFWwindow*, double xpos, double ypos) {
 }
 void scroll_callback(GLFWwindow*, double x, double y) {
     gRmlScroll(x, y); // ImGui уже получил событие раньше нас по цепочке GLFW->ImGui->мы
+    if (y > 0.0) gWheelAcc += 1;
+    else if (y < 0.0) gWheelAcc -= 1;
 }
 void key_callback(GLFWwindow*, int key, int, int action, int mods) {
     gRmlKey(key, action, mods);
@@ -615,6 +618,7 @@ title_screen:
         gRml.showSingle(scr == M_SINGLE && useRmlMenu);
         gRml.showCreate(scr == M_CREATE && useRmlMenu);
         gRml.showPacks(scr == M_PACKS && useRmlMenu);
+        gRml.showHud(false); // хад в титуле не живёт
         static MenuScr prevScrM = M_MAIN;
         if (scr != prevScrM) {
             if (scr == M_SINGLE && useRmlMenu) syncSingleFull();
@@ -987,6 +991,9 @@ title_screen:
 
     // ================= GAME =================
     gPaused = false;
+    gWheelAcc = 0;
+    gRml.showHud(true);
+    gRml.setHudSlot(0);
     audio.wind(true); // эмбиент только в игре, не в меню
     auto sh = [&](const char* n) { return shaderDir + "/" + n; };
     Shader lightingShader(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
@@ -1212,8 +1219,13 @@ title_screen:
     };
     bool prevF = false, prevG = false, prevF1 = false, prevGrave = false, prevEsc = false;
     bool flashOn = true, followOn = true;
-    bool prev1 = false, prev2 = false, prev3 = false;
+    bool prev1 = false, prev2 = false, prev3 = false, prev4 = false, prev5 = false;
+    bool prev6 = false, prev7 = false, prev8 = false, prev9 = false;
     int placeId = B_GRASS;
+    int hudSlot = 0;
+    // Хотбар как в MC: 9 слотов (картинки ui/items/), клавиши 1..9 + колесо.
+    const unsigned char hotbar[9] = {B_GRASS, B_DIRT, B_STONE, B_LOG, B_LEAVES,
+                                     B_COAL, B_IRON, B_GOLD, B_DIAMOND};
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
     int lastFilter = -1; // смена gfx.filter из консоли применяется живо
@@ -1497,14 +1509,37 @@ title_screen:
             }
         }
         prevL = curL; prevR = curR;
-        // выбор блока: 1 трава 2 земля 3 камень
-        bool c1 = glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS;
-        bool c2 = glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS;
-        bool c3 = glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS;
-        if (!console.open && !gPaused && c1 && !prev1) { placeId = B_GRASS; std::cout << "block: grass\n"; }
-        if (!console.open && !gPaused && c2 && !prev2) { placeId = B_DIRT; std::cout << "block: dirt\n"; }
-        if (!console.open && !gPaused && c3 && !prev3) { placeId = B_STONE; std::cout << "block: stone\n"; }
-        prev1 = c1; prev2 = c2; prev3 = c3;
+        // выбор блока хотбаром: клавиши 1..9 и колесо мыши
+        bool cn[9] = {
+            glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_7) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_8) == GLFW_PRESS,
+            glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS,
+        };
+        bool pn[9] = {prev1, prev2, prev3, prev4, prev5, prev6, prev7, prev8, prev9};
+        for (int i = 0; i < 9; i++) {
+            if (!console.open && !gPaused && cn[i] && !pn[i]) {
+                hudSlot = i;
+                placeId = hotbar[i];
+                gRml.setHudSlot(i);
+                std::cout << "block: " << gBlocks.get(hotbar[i]).name << "\n";
+            }
+            pn[i] = cn[i];
+        }
+        prev1 = pn[0]; prev2 = pn[1]; prev3 = pn[2]; prev4 = pn[3]; prev5 = pn[4];
+        prev6 = pn[5]; prev7 = pn[6]; prev8 = pn[7]; prev9 = pn[8];
+        if (!console.open && !gPaused && gWheelAcc != 0) {
+            hudSlot = (hudSlot + (gWheelAcc > 0 ? 8 : 1)) % 9; // вверх — назад
+            if (gWheelAcc > 0) gWheelAcc--;
+            else gWheelAcc++;
+            placeId = hotbar[hudSlot];
+            gRml.setHudSlot(hudSlot);
+        }
         if (!console.open && !gPaused && curF5 && !prevF5) {
             if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";
             else std::cout << "Save FAILED\n";

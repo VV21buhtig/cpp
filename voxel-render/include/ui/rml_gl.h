@@ -26,6 +26,8 @@ struct RmlUI {
     void showSingle(bool show); // ui/single.rml
     void showCreate(bool show); // ui/create.rml
     void showPacks(bool show); // ui/packs.rml
+    void showHud(bool show); // ui/hud.rml (игровой хотбар)
+    void setHudSlot(int i); // рамка выбора 0..8
     void refreshSingle(const std::vector<std::string>& worlds, int sel);
     void selectSingleRow(int oldN, int newN);
     void setWInfo(const std::string& t);

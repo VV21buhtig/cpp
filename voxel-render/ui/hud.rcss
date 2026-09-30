@@ -1,0 +1,34 @@
+/* Хотбар: 9 слотов + рамка выбора отдельным спрайтом (как в MC).
+   Картинки — наши тайлы 16x16, NEAREST (см. LoadTexture). */
+#hudbar {
+    position: absolute;
+    left: 50%;
+    bottom: 8dp;
+    width: 432dp;
+    margin-left: -216dp;
+}
+.hslot {
+    display: inline-block;
+    vertical-align: top;
+    box-sizing: border-box;
+    width: 48dp;
+    height: 48dp;
+    padding-top: 6dp;
+    text-align: center;
+    background: rgba(0, 0, 0, 120);
+    border-width: 2dp;
+    border-color: #000000;
+}
+.hslot img {
+    width: 32dp;
+    height: 32dp;
+}
+#hudsel {
+    position: absolute;
+    left: 0dp;
+    top: 0dp;
+    width: 48dp;
+    height: 48dp;
+    border-width: 3dp;
+    border-color: #ffffff;
+}

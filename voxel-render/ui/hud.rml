@@ -1,0 +1,14 @@
+<rml>
+<head>
+<title>HUD</title>
+<link type="text/css" href="rml-base.rcss"/>
+<link type="text/css" href="mc.rcss"/>
+<link type="text/css" href="hud.rcss"/>
+</head>
+<body>
+<div id="hudbar">
+<div class="hslot"><img src="items/grass_side.png"/></div><div class="hslot"><img src="items/dirt.png"/></div><div class="hslot"><img src="items/stone.png"/></div><div class="hslot"><img src="items/log_side.png"/></div><div class="hslot"><img src="items/leaves.png"/></div><div class="hslot"><img src="items/ore_coal.png"/></div><div class="hslot"><img src="items/ore_iron.png"/></div><div class="hslot"><img src="items/ore_gold.png"/></div><div class="hslot"><img src="items/ore_diamond.png"/></div>
+<div id="hudsel"></div>
+</div>
+</body>
+</rml>
