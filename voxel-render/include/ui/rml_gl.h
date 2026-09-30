@@ -24,6 +24,7 @@ struct RmlUI {
     void showOptions(bool show);
     void showTitle(bool show);
     void showSingle(bool show); // ui/single.rml
+    void showCreate(bool show); // ui/create.rml
     void refreshSingle(const std::vector<std::string>& worlds, int sel);
     void selectSingleRow(int oldN, int newN);
     void setWInfo(const std::string& t);
@@ -31,6 +32,9 @@ struct RmlUI {
     std::string getSingleText(const char* id);
     void setSingleText(const char* id, const std::string& t);
     void setSingleInner(const char* id, const std::string& t);
+    std::string getCreateText(const char* id);
+    void setCreateText(const char* id, const std::string& t);
+    void setCreateInner(const char* id, const std::string& t);
     void syncPauseValues(); // залить значения в открытый RML-документ
     void setScale(float s); // GUI Scale: dp->px (MC: мелкий/обычный/крупный)
     void dump(); // диагностика в stdout: размеры, видимость, геометрия #menu

@@ -1,0 +1,20 @@
+<rml>
+<head>
+<title>Create New World</title>
+<link type="text/css" href="rml-base.rcss"/>
+<link type="text/css" href="mc.rcss"/>
+<link type="text/css" href="create.rcss"/>
+</head>
+<body>
+<div id="cmenu">
+<h1>Create New World</h1>
+<div class="lab">World Name:</div>
+<input type="text" id="c_name"/>
+<button id="c_size">Small 8x8</button>
+<div class="lab">Seed:</div>
+<div id="seedrow"><input type="text" id="c_seed"/><button id="c_rand">Random</button></div>
+<button id="c_go">Create New World</button>
+<button id="c_cancel">Cancel</button>
+</div>
+</body>
+</rml>

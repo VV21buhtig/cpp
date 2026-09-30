@@ -391,6 +391,8 @@ int main()
     int newSeed = 1337;
     int menuWorldSel = 0, menuShaderSel = 0, menuPackIdx = 0;
     bool delArm = false; // удаление мира: первое нажатие ставит на взвод
+    const int sizes[3] = {8, 16, 24};
+    const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
     // Полный синк RML-одиночки: список + инфо + импорт + подпись Delete.
     auto syncSingleFull = [&]() {
         std::vector<std::string> ws = listWorlds();
@@ -462,6 +464,29 @@ int main()
             newSeed = -2; // флаг: грузить из world.bin
         }
         else if (s == "s_cancel") { audio.playUI(); scr = M_MAIN; delArm = false; }
+        else if (s == "c_size") {
+            audio.playUI();
+            newSizeIdx = (newSizeIdx + 1) % 3;
+            gRml.setCreateInner("c_size", sizeNames[newSizeIdx]);
+        }
+        else if (s == "c_rand") {
+            newSeed = rand();
+            gRml.setCreateText("c_seed", std::to_string(newSeed));
+        }
+        else if (s == "c_go") {
+            std::string nn = gRml.getCreateText("c_name");
+            std::string ns = gRml.getCreateText("c_seed");
+            if (!nn.empty()) {
+                audio.playUI();
+                snprintf(newName, sizeof(newName), "%s", nn.c_str());
+                newSeed = ns.empty() ? 0 : atoi(ns.c_str());
+                playPath = std::string("worlds/") + newName + ".bin";
+                playCX = sizes[newSizeIdx]; playCZ = sizes[newSizeIdx];
+                playSeed = newSeed;
+                playNew = true;
+            }
+        }
+        else if (s == "c_cancel") { audio.playUI(); scr = M_SINGLE; }
         else if (s.compare(0, 5, "wrow_") == 0) {
             int idx = atoi(s.c_str() + 5);
             std::vector<std::string> ws = listWorlds();
@@ -478,8 +503,7 @@ int main()
             }
         }
     };
-    const int sizes[3] = {8, 16, 24};
-    const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
+    // (sizes/sizeNames объявлены выше, до onAction)
 
     // Шрифт меню (Monocraft, OFL) + текстуры меню. CWD=build/, fonts/ копируется пост-билдом.
     ImFont* fontUI = nullptr, *fontLogo = nullptr;
@@ -524,9 +548,15 @@ title_screen:
         gRml.showOptions(scr == M_OPTIONS && useRmlMenu);
         gRml.showTitle(scr == M_MAIN && useRmlMenu);
         gRml.showSingle(scr == M_SINGLE && useRmlMenu);
+        gRml.showCreate(scr == M_CREATE && useRmlMenu);
         static MenuScr prevScrM = M_MAIN;
         if (scr != prevScrM) {
             if (scr == M_SINGLE && useRmlMenu) syncSingleFull();
+            if (scr == M_CREATE && useRmlMenu) {
+                gRml.setCreateText("c_name", newName);
+                gRml.setCreateText("c_seed", std::to_string(newSeed));
+                gRml.setCreateInner("c_size", sizeNames[newSizeIdx]);
+            }
             prevScrM = scr;
         }
         if (useRmlMenu) rmlMenuFrame = true;
@@ -661,6 +691,16 @@ title_screen:
             if (MCButton("s_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_MAIN; delArm = false; }
             } // старая одиночка (ui.rml=0)
         } else if (scr == M_CREATE) {
+            if (useRmlMenu) {
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                gRml.mouseMove(mx, my);
+                static bool rmlML = false, rmlMR = false;
+                bool bl = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                bool br = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                if (bl != rmlML) { gRml.mouseButton(0, bl); rmlML = bl; }
+                if (br != rmlMR) { gRml.mouseButton(1, br); rmlMR = br; }
+            } else {
             MCTitle(md, fontUI, fs + 4.0f, "Create New World", (float)ww, 24.0f);
             float fx = cx, fy = 84.0f;
             ImGui::SetCursorPos(ImVec2(fx, fy)); ImGui::Text("World Name:");
@@ -691,6 +731,7 @@ title_screen:
             fy += bh + gap;
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("c_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_SINGLE; }
+            } // старое создание (ui.rml=0)
         } else if (scr == M_OPTIONS) {
             gRml.inputActive = useRmlMenu;
             if (useRmlMenu) {
@@ -1546,6 +1587,7 @@ title_screen:
         gRml.showOptions(false); // титульные опции в игре не живут
         gRml.showTitle(false); // титул в игре не живёт
         gRml.showSingle(false); // одиночка в игре не живёт
+        gRml.showCreate(false); // создание в игре не живёт
         if (gPaused && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
