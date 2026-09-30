@@ -5,7 +5,5 @@
     top: 8%;
     width: 460dp;
     margin-left: -220dp;
-    max-height: 88%;
-    overflow-y: auto;
     text-align: center;
 }
