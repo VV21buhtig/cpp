@@ -40,6 +40,9 @@ struct RmlUI {
     std::string getCreateText(const char* id);
     void setCreateText(const char* id, const std::string& t);
     void setCreateInner(const char* id, const std::string& t);
+    // Survival-инвентарь: вид слота для syncInv.
+    struct InvView { unsigned char id = 0; int n = 0; const char* src = ""; };
+    void syncInv(const InvView store[27], const InvView hot[9], int lifted);
     std::string getPacksText(const char* id);
     void setPacksText(const char* id, const std::string& t);
     void setPacksInner(const char* id, const std::string& t);
@@ -53,7 +56,7 @@ struct RmlUI {
     std::function<void(const char* id)> onCycle; // b_dist/b_filter/... кнопки-циклы
     std::function<std::string(const char* id)> getLabel; // текст для кнопок-циклов
     std::function<void(const char* id)> onAction; // прочие клики титульных доков (t_*)
-    std::function<void(int bid)> onInvAssign; // клик по блоку инвентаря (назначает game)
+    std::function<void(int g)> onInvClick; // клик по слоту (swap), назначает game
     void frame(); // Update + Render
 };
 

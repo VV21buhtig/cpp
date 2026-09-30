@@ -498,11 +498,13 @@ int main()
             }
         }
         else if (s == "c_cancel") { audio.playUI(); scr = M_SINGLE; }
-        else if (s.compare(0, 4, "inv_") == 0) {
-            // Креатив-инвентарь: блок кладёт game-секция (там хотбар/placeId).
-            int bid = atoi(s.c_str() + 4);
-            if (bid >= 0 && bid < 256 && gBlocks.get((unsigned char)bid).solid && gRml.onInvAssign)
-                gRml.onInvAssign(bid);
+        else if (s.compare(0, 3, "ss_") == 0 || s.compare(0, 3, "hh_") == 0) {
+            // Survival-обмен решает game-секция (там модель слотов).
+            bool isHot = s[0] == 'h';
+            int idx = atoi(s.c_str() + 3);
+            int lim = isHot ? 9 : 27;
+            if (idx >= 0 && idx < lim && gRml.onInvClick)
+                gRml.onInvClick(isHot ? 100 + idx : idx);
         }
         else if (s.compare(0, 5, "wrow_") == 0) {
             int idx = atoi(s.c_str() + 5);
@@ -1230,11 +1232,12 @@ title_screen:
     bool flashOn = true, followOn = true;
     bool prev1 = false, prev2 = false, prev3 = false, prev4 = false, prev5 = false;
     bool prev6 = false, prev7 = false, prev8 = false, prev9 = false;
-    int placeId = B_GRASS;
     int hudSlot = 0;
-    // Хотбар как в MC: 9 слотов (картинки ui/items/), клавиши 1..9 + колесо.
-    unsigned char hotbar[9] = {B_GRASS, B_DIRT, B_STONE, B_LOG, B_LEAVES,
-                               B_COAL, B_IRON, B_GOLD, B_DIAMOND};
+    // Survival-инвентарь V1 (сессия, в сейв не пишем): 27 хранилище + 9 хотбар.
+    // Слом даёт блок (стак 64), ставка тратит. Старт пустой, как в MC.
+    InvSlot store[27];
+    InvSlot hotbar[9];
+    int lifted = -1; // поднятый стек: -1 нет, 0..26 store, 100+i хотбар
     // id блока -> иконка хотбара/инвентаря (имена файлов ui/items/).
     auto itemPng = [](unsigned char id) -> const char* {        switch (id) {
             case B_GRASS: return "items/grass_side.png";
@@ -1249,12 +1252,31 @@ title_screen:
             default: return "items/stone.png";
         }
     };
-    gRml.onInvAssign = [&](int bid) {
-        audio.playUI();
-        hotbar[hudSlot] = (unsigned char)bid;
-        placeId = bid;
-        gRml.setHudIcon(hudSlot, itemPng((unsigned char)bid));
-        std::cout << "hotbar[" << hudSlot << "] = " << gBlocks.get((unsigned char)bid).name << "\n";
+    // Синк всего инвентарного UI: панель + иконки HUD + рамка.
+    auto syncAllInv = [&]() {
+        RmlUI::InvView vs[27], vh[9];
+        for (int i = 0; i < 27; i++) { vs[i].id = store[i].id; vs[i].n = store[i].n; vs[i].src = itemPng(store[i].id); }
+        for (int i = 0; i < 9; i++) { vh[i].id = hotbar[i].id; vh[i].n = hotbar[i].n; vh[i].src = itemPng(hotbar[i].id); }
+        gRml.syncInv(vs, vh, lifted);
+        for (int i = 0; i < 9; i++) {
+            if (hotbar[i].id == 0) gRml.setHudIcon(i, "");
+            else gRml.setHudIcon(i, itemPng(hotbar[i].id));
+        }
+        gRml.setHudSlot(hudSlot);
+    };
+    auto slotAt = [&](int g) -> InvSlot& { return g < 100 ? store[g] : hotbar[g - 100]; };
+    syncAllInv(); // старт пустой: иконки спрятаны (как в MC)
+    gRml.onInvClick = [&](int g) {
+        if (lifted < 0) {
+            if (slotAt(g).n > 0) { lifted = g; audio.playUI(); syncAllInv(); }
+        } else if (lifted == g) {
+            lifted = -1; audio.playUI(); syncAllInv();
+        } else {
+            InvSlot t = slotAt(lifted);
+            slotAt(lifted) = slotAt(g);
+            slotAt(g) = t;
+            lifted = -1; audio.playUI(); syncAllInv();
+        }
     };
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
@@ -1540,6 +1562,20 @@ title_screen:
                 glm::vec3 bp = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
                 audio.playBreakId(bp, broken);
                 touchEdit(wx, wz);
+                if (broken != B_AIR) {
+                    // подобрать: сначала свой стак хотбара, потом хранилище, кап 64
+                    bool put = false;
+                    for (int i = 0; i < 9 && !put; i++)
+                        if (hotbar[i].id == broken && hotbar[i].n < 64) { hotbar[i].n++; put = true; }
+                    for (int i = 0; i < 27 && !put; i++) {
+                        if (store[i].id == broken && store[i].n < 64) { store[i].n++; put = true; }
+                        else if (store[i].n == 0) { store[i].id = broken; store[i].n = 1; put = true; }
+                    }
+                    for (int i = 0; i < 9 && !put; i++)
+                        if (hotbar[i].n == 0) { hotbar[i].id = broken; hotbar[i].n = 1; put = true; }
+                    if (!put) console.print("inventory full\n");
+                    syncAllInv();
+                }
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
@@ -1547,10 +1583,13 @@ title_screen:
                                  py + 1 > player.pos.y && py < player.pos.y + player.height &&
                                  pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
                 // ставить можно в воздух и во флюид (замена воды/лавы блоком)
-                if (!World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
-                    world->setBlock(px, py, pz, (unsigned char)placeId);
-                    audio.playPlaceId(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f), placeId);
+                unsigned char pid = hotbar[hudSlot].id;
+                if (pid != B_AIR && hotbar[hudSlot].n > 0 && !World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
+                    world->setBlock(px, py, pz, pid);
+                    audio.playPlaceId(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f), pid);
                     touchEdit(px, pz);
+                    if (--hotbar[hudSlot].n <= 0) { hotbar[hudSlot].n = 0; hotbar[hudSlot].id = B_AIR; }
+                    syncAllInv();
                 }
             }
         }
@@ -1571,10 +1610,8 @@ title_screen:
         for (int i = 0; i < 9; i++) {
             if (!console.open && !gPaused && cn[i] && !pn[i]) {
                 hudSlot = i;
-                placeId = hotbar[i];
                 gRml.setHudSlot(i);
-                gRml.setHudIcon(i, itemPng(hotbar[i]));
-                std::cout << "block: " << gBlocks.get(hotbar[i]).name << "\n";
+                std::cout << "block: " << gBlocks.get(hotbar[i].id).name << "\n";
             }
             pn[i] = cn[i];
         }
@@ -1584,9 +1621,7 @@ title_screen:
             hudSlot = (hudSlot + (gWheelAcc > 0 ? 8 : 1)) % 9; // вверх — назад
             if (gWheelAcc > 0) gWheelAcc--;
             else gWheelAcc++;
-            placeId = hotbar[hudSlot];
             gRml.setHudSlot(hudSlot);
-            gRml.setHudIcon(hudSlot, itemPng(hotbar[hudSlot]));
         }
         if (!console.open && !gPaused && !gInvOpen && curF5 && !prevF5) {
             if (saveWorld(*world, playPath.c_str())) std::cout << "Saved " << playPath << "\n";

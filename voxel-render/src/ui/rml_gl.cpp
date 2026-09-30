@@ -133,7 +133,12 @@ public:
     void ProcessEvent(Rml::Event& ev) override {
         Rml::Element* el = ev.GetTargetElement();
         if (!el) return;
-        Rml::String id = el->GetId();
+        // Клик мог прийти во вложенный img/span: поднимаемся к именованному предку.
+        Rml::String id;
+        for (Rml::Element* e = el; e; e = e->GetParentNode()) {
+            id = e->GetId();
+            if (!id.empty()) break;
+        }
         Rml::String type = ev.GetType();
         if (type == "click") {
             if (id == "back" && gRml.onResume) gRml.onResume();
@@ -421,7 +426,55 @@ void RmlUI::setHudIcon(int slot, const char* src) {
     char id[16];
     snprintf(id, sizeof(id), "hi%d", slot);
     Rml::Element* el = hudDoc->GetElementById(id);
-    if (el) el->SetAttribute("src", Rml::String(src));
+    if (!el) return;
+    if (!src || !*src) el->SetProperty("display", "none");
+    else {
+        el->SetProperty("display", "inline-block");
+        el->SetAttribute("src", Rml::String(src));
+    }
+}
+
+void RmlUI::syncInv(const InvView store[27], const InvView hot[9], int lifted) {
+    if (!ok || !invDoc) return;
+    char id[16], cnt[16];
+    for (int i = 0; i < 27; i++) {
+        snprintf(id, sizeof(id), "ss%d", i);
+        Rml::Element* box = invDoc->GetElementById(id);
+        if (box) box->SetClass("lift", lifted == i);
+        snprintf(id, sizeof(id), "si%d", i);
+        Rml::Element* im = invDoc->GetElementById(id);
+        if (im) {
+            if (store[i].id == 0) im->SetProperty("display", "none");
+            else {
+                im->SetProperty("display", "inline-block");
+                im->SetAttribute("src", Rml::String(store[i].src));
+            }
+        }
+        snprintf(id, sizeof(id), "sc%d", i);
+        if (Rml::Element* sp = invDoc->GetElementById(id)) {
+            snprintf(cnt, sizeof(cnt), "%d", store[i].n);
+            sp->SetInnerRML(Rml::String(store[i].n > 1 ? cnt : ""));
+        }
+    }
+    for (int i = 0; i < 9; i++) {
+        snprintf(id, sizeof(id), "hh%d", i);
+        Rml::Element* box = invDoc->GetElementById(id);
+        if (box) box->SetClass("lift", lifted == 100 + i);
+        snprintf(id, sizeof(id), "hi%dh", i);
+        Rml::Element* im = invDoc->GetElementById(id);
+        if (im) {
+            if (hot[i].id == 0) im->SetProperty("display", "none");
+            else {
+                im->SetProperty("display", "inline-block");
+                im->SetAttribute("src", Rml::String(hot[i].src));
+            }
+        }
+        snprintf(id, sizeof(id), "hc%d", i);
+        if (Rml::Element* sp = invDoc->GetElementById(id)) {
+            snprintf(cnt, sizeof(cnt), "%d", hot[i].n);
+            sp->SetInnerRML(Rml::String(hot[i].n > 1 ? cnt : ""));
+        }
+    }
 }
 
 void RmlUI::refreshSingle(const std::vector<std::string>& worlds, int sel) {

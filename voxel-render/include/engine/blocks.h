@@ -29,6 +29,12 @@ struct BlockDef {
     int stepSurf = 0; // 0 трава 1 камень (см. playStep)
 };
 
+// Слот инвентаря (survival): id блока + штуки. Пусто = id 0. Сейвится? Пока нет (сессия).
+struct InvSlot {
+    unsigned char id = 0;
+    int n = 0;
+};
+
 struct BlockRegistry {
     BlockDef defs[256];
     bool loaded = false; // true если blocks.json разобран
