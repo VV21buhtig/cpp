@@ -429,6 +429,10 @@ title_screen:
         glViewport(0, 0, ww, hh);
         bool rmlMenuFrame = false; // RML-кадр после ImGui Render (см. M_OPTIONS)
         { gRml.setSize(ww, hh); gRml.setScale(cvar.get("ui.scale", 1.0f)); }
+        // Инвариант: RML-опции видны ТОЛЬКО на экране M_OPTIONS, иначе залипают
+        // поверх всего (пауза+опции одновременно = двойная вёрстка).
+        bool useRmlMenu = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
+        gRml.showOptions(scr == M_OPTIONS && useRmlMenu);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -569,10 +573,8 @@ title_screen:
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("c_cancel", "Cancel", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_SINGLE; }
         } else if (scr == M_OPTIONS) {
-            bool useRmlT = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
-            gRml.inputActive = useRmlT;
-            gRml.showOptions(useRmlT);
-            if (useRmlT) {
+            gRml.inputActive = useRmlMenu;
+            if (useRmlMenu) {
                 double mx, my;
                 glfwGetCursorPos(window, &mx, &my);
                 gRml.mouseMove(mx, my);
@@ -1422,6 +1424,7 @@ title_screen:
         bool useRml = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
         gRml.inputActive = gPaused && useRml;
         gRml.showPause(gPaused && useRml);
+        gRml.showOptions(false); // титульные опции в игре не живут
         if (gPaused && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
