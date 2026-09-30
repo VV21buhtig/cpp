@@ -15,6 +15,8 @@ h1 {
 }
 button {
     display: block;
+    box-sizing: border-box;
+    font-size: 18dp;
     width: 400dp; height: 36dp;
     margin-top: 4dp; margin-bottom: 4dp;
     margin-left: auto; margin-right: auto;
@@ -48,6 +50,19 @@ button:hover {
     text-align: right;
     color: #c8c8c8;
 }
+/* Пары кнопок в ряд как в MC (влезает без скролла). */
+.brow {
+    display: block;
+    width: 400dp;
+    margin-left: auto; margin-right: auto;
+}
+.brow button {
+    display: inline-block;
+    vertical-align: top;
+    width: 196dp;
+    margin-left: 0dp; margin-right: 0dp;
+}
+.brow button:first-child { margin-right: 8dp; }
 input.range {
     display: inline-block;
     vertical-align: middle;
