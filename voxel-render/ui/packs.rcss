@@ -1,0 +1,27 @@
+/* Паки: две секции, поля папок. */
+#pmenu {
+    position: absolute;
+    left: 50%;
+    top: 6%;
+    width: 460dp;
+    margin-left: -220dp;
+    text-align: center;
+}
+#pmenu input {
+    display: block;
+    width: 400dp;
+    margin-left: auto; margin-right: auto;
+}
+#pmenu .lab {
+    display: block;
+    width: 400dp;
+    margin-left: auto; margin-right: auto;
+    color: #c8c8c8;
+    text-align: left;
+}
+input.text {
+    background: #000000;
+    color: #ffffff;
+    border-width: 2dp;
+    border-color: #808080;
+}

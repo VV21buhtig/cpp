@@ -410,6 +410,13 @@ int main()
         if (lf) fclose(lf);
         gRml.setSingleInner("s_del", delArm ? "Really delete?" : "Delete");
     };
+    // Подписи кнопок-циклов паков (текущий выбор).
+    auto syncPacksLabels = [&]() {
+        if (menuPackIdx >= (int)packNames.size()) menuPackIdx = 0;
+        if (menuShaderSel >= (int)shaderPacks.size()) menuShaderSel = 0;
+        gRml.setPacksInner("k_tp", packNames[menuPackIdx]);
+        gRml.setPacksInner("k_sp", shaderPacks[menuShaderSel]);
+    };
     gRml.onAction = [&](const char* id) {
         std::string s = id ? id : "";
         if (s == "t_single") { audio.playUI(); scr = M_SINGLE; delArm = false; }
@@ -502,6 +509,64 @@ int main()
                 gRml.setSingleInner("s_del", "Delete");
             }
         }
+        else if (s == "k_tp") {
+            audio.playUI();
+            if (!packNames.empty()) menuPackIdx = (menuPackIdx + 1) % (int)packNames.size();
+            syncPacksLabels();
+        }
+        else if (s == "k_sp") {
+            audio.playUI();
+            if (!shaderPacks.empty()) menuShaderSel = (menuShaderSel + 1) % (int)shaderPacks.size();
+            syncPacksLabels();
+        }
+        else if (s == "k_tpadd") {
+            std::string dir = gRml.getPacksText("k_tfolder");
+            if (!dir.empty()) {
+                std::string miss;
+                bool okp = hasFiles(dir, {"grass_top.png", "grass_side.png", "dirt.png", "stone.png"}, miss) ||
+                           hasFiles(dir, {"assets/minecraft/textures/block/grass_block_top.png",
+                                           "assets/minecraft/textures/block/grass_block_side.png",
+                                           "assets/minecraft/textures/block/dirt.png",
+                                           "assets/minecraft/textures/block/stone.png"}, miss);
+                if (!okp) console.print(std::string("pack rejected, missing: ") + miss + "\n");
+                else {
+                    std::string nm = linkPack("texture/packs", dir.c_str());
+                    if (nm.empty()) console.print("pack add failed (exists?)\n");
+                    else {
+                        audio.playUI();
+                        packNames = {"default"};
+                        for (auto& d : listDirs("texture/packs")) packNames.push_back(d);
+                        menuPackIdx = (int)packNames.size() - 1;
+                        gRml.setPacksText("k_tfolder", "");
+                        console.print("pack added: " + nm + "\n");
+                        syncPacksLabels();
+                    }
+                }
+            }
+        }
+        else if (s == "k_spadd") {
+            std::string dir = gRml.getPacksText("k_sfolder");
+            if (!dir.empty()) {
+                std::string miss;
+                bool oks = hasFiles(dir, {"lighting.vs", "lighting.fs", "line.vs", "outline.fs",
+                                          "sky.vs", "sky.fs", "crosshair.vs", "crosshair.fs"}, miss);
+                if (!oks) console.print(std::string("shader pack rejected, missing: ") + miss + "\n");
+                else {
+                    std::string nm = linkPack("shaders/packs", dir.c_str());
+                    if (nm.empty()) console.print("shader add failed (exists?)\n");
+                    else {
+                        audio.playUI();
+                        shaderPacks = {"default"};
+                        for (auto& d : listDirs("shaders/packs")) shaderPacks.push_back(d);
+                        menuShaderSel = (int)shaderPacks.size() - 1;
+                        gRml.setPacksText("k_sfolder", "");
+                        console.print("shader pack added: " + nm + "\n");
+                        syncPacksLabels();
+                    }
+                }
+            }
+        }
+        else if (s == "k_pdone") { audio.playUI(); scr = M_MAIN; }
     };
     // (sizes/sizeNames объявлены выше, до onAction)
 
@@ -549,6 +614,7 @@ title_screen:
         gRml.showTitle(scr == M_MAIN && useRmlMenu);
         gRml.showSingle(scr == M_SINGLE && useRmlMenu);
         gRml.showCreate(scr == M_CREATE && useRmlMenu);
+        gRml.showPacks(scr == M_PACKS && useRmlMenu);
         static MenuScr prevScrM = M_MAIN;
         if (scr != prevScrM) {
             if (scr == M_SINGLE && useRmlMenu) syncSingleFull();
@@ -557,6 +623,7 @@ title_screen:
                 gRml.setCreateText("c_seed", std::to_string(newSeed));
                 gRml.setCreateInner("c_size", sizeNames[newSizeIdx]);
             }
+            if (scr == M_PACKS && useRmlMenu) syncPacksLabels();
             prevScrM = scr;
         }
         if (useRmlMenu) rmlMenuFrame = true;
@@ -817,6 +884,16 @@ title_screen:
             if (MCButton("o_done", "Done", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); cvar.exec("save"); scr = M_MAIN; }
             } // старый Options (ui.rml=0)
         } else if (scr == M_PACKS) {
+            if (useRmlMenu) {
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                gRml.mouseMove(mx, my);
+                static bool rmlML = false, rmlMR = false;
+                bool bl = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                bool br = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                if (bl != rmlML) { gRml.mouseButton(0, bl); rmlML = bl; }
+                if (br != rmlMR) { gRml.mouseButton(1, br); rmlMR = br; }
+            } else {
             MCTitle(md, fontUI, fs + 4.0f, "Texture Packs...", (float)ww, 24.0f);
             float fx = cx, fy = 84.0f;
             if (menuPackIdx >= (int)packNames.size()) menuPackIdx = 0;
@@ -874,6 +951,7 @@ title_screen:
             fy += 52.0f;
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("p_done", "Done", ImVec2(bw, bh), fontUI, fs)) { audio.playUI(); scr = M_OPTIONS; }
+            } // старые паки (ui.rml=0)
         }
 
         // Футер как в MC: версия слева, дисклеймер справа.
@@ -1588,6 +1666,7 @@ title_screen:
         gRml.showTitle(false); // титул в игре не живёт
         gRml.showSingle(false); // одиночка в игре не живёт
         gRml.showCreate(false); // создание в игре не живёт
+        gRml.showPacks(false); // паки в игре не живут
         if (gPaused && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);

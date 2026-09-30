@@ -1,0 +1,23 @@
+<rml>
+<head>
+<title>Packs</title>
+<link type="text/css" href="rml-base.rcss"/>
+<link type="text/css" href="mc.rcss"/>
+<link type="text/css" href="packs.rcss"/>
+</head>
+<body>
+<div id="pmenu">
+<h1>Texture Packs...</h1>
+<button id="k_tp">Default</button>
+<div class="lab">Folder:</div>
+<input type="text" id="k_tfolder"/>
+<button id="k_tpadd">Add pack</button>
+<h1>Shader Packs...</h1>
+<button id="k_sp">Default</button>
+<div class="lab">Folder:</div>
+<input type="text" id="k_sfolder"/>
+<button id="k_spadd">Add shaders</button>
+<button id="k_pdone">Done</button>
+</div>
+</body>
+</rml>

@@ -175,6 +175,7 @@ static Rml::ElementDocument* optionsDoc = nullptr;
 static Rml::ElementDocument* titleDoc = nullptr;
 static Rml::ElementDocument* singleDoc = nullptr;
 static Rml::ElementDocument* createDoc = nullptr;
+static Rml::ElementDocument* packsDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -267,6 +268,11 @@ bool RmlUI::init(GLFWwindow* window) {
     createDoc->AddEventListener("click", &pauseListener);
     createDoc->AddEventListener("change", &pauseListener);
     createDoc->Hide();
+    packsDoc = ctx->LoadDocument("ui/packs.rml");
+    if (!packsDoc) return false;
+    packsDoc->AddEventListener("click", &pauseListener);
+    packsDoc->AddEventListener("change", &pauseListener);
+    packsDoc->Hide();
     ok = true;
     return true;
 }
@@ -280,6 +286,7 @@ void RmlUI::shutdown() {
     titleDoc = nullptr;
     singleDoc = nullptr;
     createDoc = nullptr;
+    packsDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -363,6 +370,14 @@ void RmlUI::showCreate(bool show) {
     else createDoc->Hide();
 }
 
+static bool packsShown = false;
+void RmlUI::showPacks(bool show) {
+    if (!ok || !packsDoc || show == packsShown) return;
+    packsShown = show;
+    if (show) packsDoc->Show();
+    else packsDoc->Hide();
+}
+
 void RmlUI::refreshSingle(const std::vector<std::string>& worlds, int sel) {
     if (!ok || !singleDoc) return;
     Rml::Element* list = singleDoc->GetElementById("wlist");
@@ -438,6 +453,26 @@ void RmlUI::setCreateText(const char* id, const std::string& t) {
 void RmlUI::setCreateInner(const char* id, const std::string& t) {
     if (!ok || !createDoc || !id) return;
     if (Rml::Element* el = createDoc->GetElementById(id)) el->SetInnerRML(Rml::String(t.c_str()));
+}
+
+std::string RmlUI::getPacksText(const char* id) {
+    if (!ok || !packsDoc || !id) return "";
+    Rml::Element* el = packsDoc->GetElementById(id);
+    auto* fc = static_cast<Rml::ElementFormControl*>(el);
+    if (!fc) return "";
+    return fc->GetValue().c_str();
+}
+
+void RmlUI::setPacksText(const char* id, const std::string& t) {
+    if (!ok || !packsDoc || !id) return;
+    Rml::Element* el = packsDoc->GetElementById(id);
+    auto* fc = static_cast<Rml::ElementFormControl*>(el);
+    if (fc) fc->SetValue(Rml::String(t.c_str()));
+}
+
+void RmlUI::setPacksInner(const char* id, const std::string& t) {
+    if (!ok || !packsDoc || !id) return;
+    if (Rml::Element* el = packsDoc->GetElementById(id)) el->SetInnerRML(Rml::String(t.c_str()));
 }
 
 static void syncDoc(Rml::ElementDocument* doc, RmlUI* ui) {
@@ -539,6 +574,7 @@ void RmlUI::dump() {
     dumpDoc("title", titleDoc);
     dumpDoc("single", singleDoc);
     dumpDoc("create", createDoc);
+    dumpDoc("packs", packsDoc);
 }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }
