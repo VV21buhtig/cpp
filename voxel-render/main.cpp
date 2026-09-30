@@ -391,6 +391,12 @@ int main()
     int newSeed = 1337;
     int menuWorldSel = 0, menuShaderSel = 0, menuPackIdx = 0;
     bool delArm = false; // удаление мира: первое нажатие ставит на взвод
+    gRml.onAction = [&](const char* id) {
+        std::string s = id ? id : "";
+        if (s == "t_single") { audio.playUI(); scr = M_SINGLE; delArm = false; }
+        else if (s == "t_opt") { audio.playUI(); scr = M_OPTIONS; }
+        else if (s == "t_quit") { wantQuit = true; }
+    };
     const int sizes[3] = {8, 16, 24};
     const char* sizeNames[3] = {"Small 8x8", "Normal 16x16", "Large 24x24"};
 
@@ -432,7 +438,10 @@ title_screen:
         // Инвариант: RML-опции видны ТОЛЬКО на экране M_OPTIONS, иначе залипают
         // поверх всего (пауза+опции одновременно = двойная вёрстка).
         bool useRmlMenu = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
+        gRml.inputActive = useRmlMenu;
         gRml.showOptions(scr == M_OPTIONS && useRmlMenu);
+        gRml.showTitle(scr == M_MAIN && useRmlMenu);
+        if (useRmlMenu) rmlMenuFrame = true;
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -454,6 +463,16 @@ title_screen:
         const float cx = ((float)ww - bw) * 0.5f;
 
         if (scr == M_MAIN) {
+            if (useRmlMenu) {
+                double mx, my;
+                glfwGetCursorPos(window, &mx, &my);
+                gRml.mouseMove(mx, my);
+                static bool rmlML = false, rmlMR = false;
+                bool bl = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                bool br = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                if (bl != rmlML) { gRml.mouseButton(0, bl); rmlML = bl; }
+                if (br != rmlMR) { gRml.mouseButton(1, br); rmlMR = br; }
+            } else {
             MCLogo(md, fontLogo ? fontLogo : ImGui::GetFont(), fontLogo ? 64.0f : 40.0f,
                    texGTop, texGSide, ImVec2(0, (float)hh * 0.10f), (float)ww);
             float y = (float)hh * 0.10f + 2 * (fontLogo ? 64.0f : 40.0f) * 0.72f + 48.0f;
@@ -465,6 +484,7 @@ title_screen:
             if (MCButton("m_opt", "Options...", ImVec2(bw2, bh), fontUI, fs)) { audio.playUI(); scr = M_OPTIONS; }
             ImGui::SetCursorPos(ImVec2(cx + bw2 + gap, y));
             if (MCButton("m_quit", "Quit Game", ImVec2(bw2, bh), fontUI, fs)) { wantQuit = true; }
+            } // старый титул (ui.rml=0)
         } else if (scr == M_SINGLE) {
             MCTitle(md, fontUI, fs + 4.0f, "Select World", (float)ww, 24.0f);
             std::vector<std::string> worlds = listWorlds();

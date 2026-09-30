@@ -1,0 +1,15 @@
+/* Главный экран титула (фон — земля движка). */
+#tmenu {
+    position: absolute;
+    left: 50%;
+    top: 10%;
+    width: 460dp;
+    margin-left: -220dp;
+    text-align: center;
+}
+#logo {
+    font-size: 64dp;
+    color: #ffffff;
+    font-effect: shadow(3dp 3dp #3f3f3f);
+    text-align: center;
+}

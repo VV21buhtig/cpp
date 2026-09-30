@@ -18,9 +18,10 @@ struct RmlUI {
     void mouseWheel(double y);
     void keyEvent(int glfwKey, bool down, int mods);
     void textInput(unsigned int codepoint);
-    // пауза-документ (ui/pause.rml) и титульные опции (ui/options.rml)
+    // документы: пауза, титульные опции, титул
     void showPause(bool show);
     void showOptions(bool show);
+    void showTitle(bool show);
     void syncPauseValues(); // залить значения в открытый RML-документ
     void setScale(float s); // GUI Scale: dp->px (MC: мелкий/обычный/крупный)
     void dump(); // диагностика в stdout: размеры, видимость, геометрия #menu
@@ -30,6 +31,7 @@ struct RmlUI {
     std::function<float(const char* id)> getSlider;
     std::function<void(const char* id)> onCycle; // b_dist/b_filter/... кнопки-циклы
     std::function<std::string(const char* id)> getLabel; // текст для кнопок-циклов
+    std::function<void(const char* id)> onAction; // прочие клики титульных доков (t_*)
     void frame(); // Update + Render
 };
 

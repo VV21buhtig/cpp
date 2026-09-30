@@ -148,6 +148,7 @@ public:
                 if (gRml.onDoneTitle) gRml.onDoneTitle();
             } else if (id == "quit" && gRml.onQuit) gRml.onQuit();
             else if (id.compare(0, 2, "b_") == 0 && gRml.onCycle) gRml.onCycle(id.c_str());
+            else if (gRml.onAction) gRml.onAction(id.c_str());
         } else if (type == "change") {
             auto* fc = static_cast<Rml::ElementFormControl*>(el);
             float v = (float)atof(fc->GetValue().c_str());
@@ -171,6 +172,7 @@ static Shader* rsh = nullptr;
 static Rml::Context* ctx = nullptr;
 static Rml::ElementDocument* pauseDoc = nullptr;
 static Rml::ElementDocument* optionsDoc = nullptr;
+static Rml::ElementDocument* titleDoc = nullptr;
 static PauseListener pauseListener;
 static GLFWwindow* win = nullptr;
 static int curW = 0, curH = 0;
@@ -248,6 +250,11 @@ bool RmlUI::init(GLFWwindow* window) {
     optionsDoc->AddEventListener("click", &pauseListener);
     optionsDoc->AddEventListener("change", &pauseListener);
     optionsDoc->Hide();
+    titleDoc = ctx->LoadDocument("ui/title.rml");
+    if (!titleDoc) return false;
+    titleDoc->AddEventListener("click", &pauseListener);
+    titleDoc->AddEventListener("change", &pauseListener);
+    titleDoc->Hide();
     ok = true;
     return true;
 }
@@ -258,6 +265,7 @@ void RmlUI::shutdown() {
     ctx = nullptr;
     pauseDoc = nullptr;
     optionsDoc = nullptr;
+    titleDoc = nullptr;
     Rml::Shutdown();
     delete ri; ri = nullptr;
     delete rsh; rsh = nullptr;
@@ -315,6 +323,14 @@ void RmlUI::showOptions(bool show) {
     optionsShown = show;
     if (show) { syncPauseValues(); optionsDoc->Show(); dump(); }
     else optionsDoc->Hide();
+}
+
+static bool titleShown = false;
+void RmlUI::showTitle(bool show) {
+    if (!ok || !titleDoc || show == titleShown) return;
+    titleShown = show;
+    if (show) titleDoc->Show();
+    else titleDoc->Hide();
 }
 
 static void syncDoc(Rml::ElementDocument* doc, RmlUI* ui) {
