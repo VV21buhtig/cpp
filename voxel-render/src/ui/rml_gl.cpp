@@ -358,6 +358,7 @@ void RmlUI::frame() {
     glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
     GLboolean blend = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST), sciss = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean cull = glIsEnabled(GL_CULL_FACE);
     glGetIntegerv(GL_BLEND_SRC_RGB, &sRgb); glGetIntegerv(GL_BLEND_DST_RGB, &dRgb);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &sA); glGetIntegerv(GL_BLEND_DST_ALPHA, &dA);
     glGetIntegerv(GL_VIEWPORT, vp);
@@ -366,6 +367,7 @@ void RmlUI::frame() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // вершины RmlUi premultiplied
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE); // как их GL3-рендерер: winding геометрии не гарантирован
     glDisable(GL_SCISSOR_TEST);
     glActiveTexture(GL_TEXTURE0);
     ri->beginFrame(ww, hh);
@@ -379,6 +381,7 @@ void RmlUI::frame() {
     if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     glBlendFuncSeparate(sRgb, dRgb, sA, dA);
     if (depth) glEnable(GL_DEPTH_TEST);
+    if (cull) glEnable(GL_CULL_FACE);
     if (sciss) glEnable(GL_SCISSOR_TEST);
     glViewport(vp[0], vp[1], vp[2], vp[3]);
 }

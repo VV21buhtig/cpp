@@ -427,6 +427,7 @@ title_screen:
         int ww, hh;
         glfwGetFramebufferSize(window, &ww, &hh);
         glViewport(0, 0, ww, hh);
+        bool rmlMenuFrame = false; // RML-кадр после ImGui Render (см. M_OPTIONS)
         { gRml.setSize(ww, hh); gRml.setScale(cvar.get("ui.scale", 1.0f)); }
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -580,7 +581,9 @@ title_screen:
                 bool br = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
                 if (bl != rmlML) { gRml.mouseButton(0, bl); rmlML = bl; }
                 if (br != rmlMR) { gRml.mouseButton(1, br); rmlMR = br; }
-                gRml.frame();
+                // frame() ПОСЛЕ ImGui Render ниже: земля из background-списка
+                // выполняется в RenderDrawData и хоронит немедленный RML-рендер.
+                rmlMenuFrame = true;
             } else {
             MCTitle(md, fontUI, fs + 4.0f, "Options...", (float)ww, 24.0f);
             float fx = cx, fy = 84.0f;
@@ -724,6 +727,7 @@ title_screen:
         ImGui::PopStyleColor();
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (rmlMenuFrame) gRml.frame(); // поверх всего меню (земля уже нарисована)
         glfwSwapBuffers(window);
     }
     if (wantQuit || playPath.empty()) {
