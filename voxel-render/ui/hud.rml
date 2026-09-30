@@ -7,7 +7,7 @@
 </head>
 <body>
 <div id="hudbar">
-<div class="hslot"><img src="items/grass_side.png"/></div><div class="hslot"><img src="items/dirt.png"/></div><div class="hslot"><img src="items/stone.png"/></div><div class="hslot"><img src="items/log_side.png"/></div><div class="hslot"><img src="items/leaves.png"/></div><div class="hslot"><img src="items/ore_coal.png"/></div><div class="hslot"><img src="items/ore_iron.png"/></div><div class="hslot"><img src="items/ore_gold.png"/></div><div class="hslot"><img src="items/ore_diamond.png"/></div>
+<img class="hitem" id="hi0" src="items/grass_side.png"/><img class="hitem" id="hi1" src="items/dirt.png"/><img class="hitem" id="hi2" src="items/stone.png"/><img class="hitem" id="hi3" src="items/log_side.png"/><img class="hitem" id="hi4" src="items/leaves.png"/><img class="hitem" id="hi5" src="items/ore_coal.png"/><img class="hitem" id="hi6" src="items/ore_iron.png"/><img class="hitem" id="hi7" src="items/ore_gold.png"/><img class="hitem" id="hi8" src="items/ore_diamond.png"/>
 <div id="hudsel"></div>
 </div>
 </body>

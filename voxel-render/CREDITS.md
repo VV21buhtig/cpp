@@ -15,3 +15,5 @@
 - RmlUi 6.3 (third-party/rmlui, MIT, https://github.com/mikke89/RmlUi): HTML/CSS UI,
   свой RenderInterface на нашем GL (их GL3-рендерер не используем — конфликт glad).
   ui/rml-base.rcss — их Samples/assets/rml.rcss без изменений.
+- texture/gui/widgets.png: хотбар и селектор из ванильного Minecraft 1.16.5 (Mojang).
+  Только локальное моддинг-использование, не продавать; при публикации заменить.

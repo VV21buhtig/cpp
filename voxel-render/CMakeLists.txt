@@ -120,4 +120,9 @@ foreach(it ${HUD_ITEMS})
             ${CMAKE_CURRENT_BINARY_DIR}/ui/items/${it}.png
     )
 endforeach()
+add_custom_command(TARGET sync_data POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/texture/gui/widgets.png
+        ${CMAKE_CURRENT_BINARY_DIR}/ui/widgets.png
+)
 add_dependencies(voxel_render sync_data)

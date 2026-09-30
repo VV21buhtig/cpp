@@ -1,34 +1,40 @@
-/* Хотбар: 9 слотов + рамка выбора отдельным спрайтом (как в MC).
-   Картинки — наши тайлы 16x16, NEAREST (см. LoadTexture). */
+/* Хотбар из ванильных спрайтов widgets.png (координаты замерены попиксельно).
+   Слоты 20px, иконки 16px на +3/+3, селектор 24x24 на -2/-2. */
+@spritesheet mcwidgets {
+    src: widgets.png;
+    resolution: 1x;
+    mc-hotbar: 0px 0px 182px 22px;
+    mc-hotsel: 0px 22px 24px 24px;
+}
 #hudbar {
     position: absolute;
     left: 50%;
     bottom: 8dp;
-    width: 432dp;
-    margin-left: -216dp;
+    width: 182dp;
+    height: 22dp;
+    margin-left: -91dp;
+    decorator: image(mc-hotbar);
 }
-.hslot {
-    display: inline-block;
-    vertical-align: top;
-    box-sizing: border-box;
-    width: 48dp;
-    height: 48dp;
-    padding-top: 6dp;
-    text-align: center;
-    background: rgba(0, 0, 0, 120);
-    border-width: 2dp;
-    border-color: #000000;
+.hitem {
+    position: absolute;
+    top: 3dp;
+    width: 16dp;
+    height: 16dp;
 }
-.hslot img {
-    width: 32dp;
-    height: 32dp;
-}
+#hi0 { left: 3dp; }
+#hi1 { left: 23dp; }
+#hi2 { left: 43dp; }
+#hi3 { left: 63dp; }
+#hi4 { left: 83dp; }
+#hi5 { left: 103dp; }
+#hi6 { left: 123dp; }
+#hi7 { left: 143dp; }
+#hi8 { left: 163dp; }
 #hudsel {
     position: absolute;
-    left: 0dp;
-    top: 0dp;
-    width: 48dp;
-    height: 48dp;
-    border-width: 3dp;
-    border-color: #ffffff;
+    left: -2dp;
+    top: -2dp;
+    width: 24dp;
+    height: 24dp;
+    decorator: image(mc-hotsel);
 }

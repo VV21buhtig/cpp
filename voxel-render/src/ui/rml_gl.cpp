@@ -276,7 +276,7 @@ bool RmlUI::init(GLFWwindow* window) {
     packsDoc->Hide();
     hudDoc = ctx->LoadDocument("ui/hud.rml");
     if (!hudDoc) return false;
-    hudDoc->Show(); // видимостью управляет main через showHud
+    hudDoc->Hide();
     ok = true;
     return true;
 }
@@ -397,7 +397,7 @@ void RmlUI::setHudSlot(int i) {
     if (i > 8) i = 8;
     if (Rml::Element* el = hudDoc->GetElementById("hudsel")) {
         char buf[32];
-        snprintf(buf, sizeof(buf), "%ddp", i * 48);
+        snprintf(buf, sizeof(buf), "%ddp", i * 20 - 2);
         el->SetProperty("left", Rml::String(buf));
     }
 }
