@@ -520,6 +520,7 @@ title_screen:
         // поверх всего (пауза+опции одновременно = двойная вёрстка).
         bool useRmlMenu = gRml.ok && cvar.get("ui.rml", 1.0f) > 0.5f;
         gRml.inputActive = useRmlMenu;
+        gRml.showPause(false); // пауза в титуле не живёт
         gRml.showOptions(scr == M_OPTIONS && useRmlMenu);
         gRml.showTitle(scr == M_MAIN && useRmlMenu);
         gRml.showSingle(scr == M_SINGLE && useRmlMenu);
@@ -1543,6 +1544,8 @@ title_screen:
         gRml.inputActive = gPaused && useRml;
         gRml.showPause(gPaused && useRml);
         gRml.showOptions(false); // титульные опции в игре не живут
+        gRml.showTitle(false); // титул в игре не живёт
+        gRml.showSingle(false); // одиночка в игре не живёт
         if (gPaused && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
