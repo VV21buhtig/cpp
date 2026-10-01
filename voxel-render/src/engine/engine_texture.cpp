@@ -102,7 +102,9 @@ void setTileArrayFilter(unsigned int tex, int mode) {
         } else mode = 2; // нет EXT — откат на трилиней
     }
     if (mode <= 0) {
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        // MC Fast: ближний тексел резкий, вдали усреднение мипами (без мипов —
+        // случайный тексель на пиксель, дальние склоны шумят полосами).
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     } else if (mode == 1) {
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
