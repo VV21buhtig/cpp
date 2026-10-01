@@ -93,6 +93,8 @@ uniform float      satU; // насыщенность из консоли
 uniform float      gammaU; // гамма из консоли
 uniform float      alphaU; // 1.0 opaque, 0.75 вода
 uniform float      uTime; // секунды, фликер факелов (Kaigen torch flicker)
+uniform vec3       skyAmb; // P2j небесный ambient (зенит): день голубой, ночь тёмный
+uniform vec3       gndAmb; // P2j земной ambient (отскок вниз): тёплый тёмный
 
 // =========================================================
 //  Функции расчёта для каждого типа света
@@ -100,9 +102,11 @@ uniform float      uTime; // секунды, фликер факелов (Kaigen
 vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
 {
     vec3 lightDir = normalize(-light.direction);
+    vec3 texel = vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
 
-    // ambient
-    vec3 ambient = light.ambient * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
+    // P2j hemispheric ambient (как у всех: небо сверху, земля снизу).
+    // Плоский серый давал черноту теневых склонов — MC светит туда небом.
+    vec3 ambient = mix(gndAmb, skyAmb, normal.y * 0.5 + 0.5) * texel;
 
     // diffuse БЕЗ wrap: грань от солнца — полная, против — ноль (только ambient).
     // wrap давал до 3.5x между соседними колонками зигзага стены — длинные полосы.
@@ -212,7 +216,7 @@ void main()
     // Ambient идёт мимо — как у Luanti/Kaigen, иначе в тени кромешная чернота.
     // Мягкий baked остаётся — двойной тени нет, есть мягкая + резкая.
     vec3 sunFull = CalcDirLight(dirLight, norm, viewDir);
-    vec3 sunAmb = dirLight.ambient * tileTex;
+    vec3 sunAmb = mix(gndAmb, skyAmb, norm.y * 0.5 + 0.5) * tileTex; // тот же hemispheric
     vec3 sunDirect = sunFull - sunAmb;
     vec3 sunDirW = normalize(-dirLight.direction);
     float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW, viewPos) : 1.0;
