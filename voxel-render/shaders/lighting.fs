@@ -14,12 +14,14 @@ uniform sampler2D shadowMap; // P2a карта глубины от солнца
 uniform float shadowOn;      // 0 ночью/выкл — тени не считать
 uniform vec2 shadowTexel;    // 1/размер карты
 
-// P2a PCF 2x2 Kaigen-стиль: 4 тапа ±0.5 текселя, среднее. Вне карты/сзади — свет.
-float calcShadow(vec4 sp)
+// P2b PCF 2x2 Kaigen-стиль + slope-scaled bias (у них PCSS/bias от наклона):
+// на скользящих лучах глубина гуляет — bias растёт, acne давится ценой микроподтека.
+float calcShadow(vec4 sp, vec3 norm, vec3 sunDir)
 {
     vec3 p = sp.xyz / sp.w * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
-    float bias = 0.0015;
+    float ndl = max(dot(norm, sunDir), 0.0);
+    float bias = 0.001 + 0.008 * (1.0 - ndl);
     float s = 0.0;
     s += step(p.z - bias, texture(shadowMap, p.xy + vec2(-0.5, -0.5) * shadowTexel).r);
     s += step(p.z - bias, texture(shadowMap, p.xy + vec2( 0.5, -0.5) * shadowTexel).r);
@@ -192,9 +194,15 @@ void main()
     // Пол 0.10 — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
     float s = clamp(Day / 15.0, 0.0, 1.0);
     float skyK = 0.10 + 0.90 * s * s * (0.35 + 0.65 * s);
-    // P2a резкая тень множит только солнце (мягкий baked остаётся + динамика мимо)
-    float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos) : 1.0;
-    vec3 result = CalcDirLight(dirLight, norm, viewDir) * skyK * sh;
+    // P2b резкая тень множит ТОЛЬКО прямой свет (diffuse+specular).
+    // Ambient идёт мимо — как у Luanti/Kaigen, иначе в тени кромешная чернота.
+    // Мягкий baked остаётся — двойной тени нет, есть мягкая + резкая.
+    vec3 sunFull = CalcDirLight(dirLight, norm, viewDir);
+    vec3 sunAmb = dirLight.ambient * tileTex;
+    vec3 sunDirect = sunFull - sunAmb;
+    vec3 sunDirW = normalize(-dirLight.direction);
+    float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW) : 1.0;
+    vec3 result = sunAmb * skyK + sunDirect * skyK * sh;
 
     // phase 2: point lights (лампочки)
     for (int i = 0; i < NR_POINT_LIGHTS; i++)

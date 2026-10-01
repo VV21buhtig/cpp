@@ -18,7 +18,8 @@
 <div class="brow"><button id="b_dist">Render Distance</button><button id="b_filter">Filtering</button></div>
 <div class="brow"><button id="b_vsync">VSync</button><button id="b_res">Resolution</button></div>
 <div class="brow"><button id="b_fs">Fullscreen</button><button id="b_aa">AA</button></div>
-<div class="brow"><button id="b_gscale">GUI Scale</button><button id="done">Done</button></div>
+<div class="brow"><button id="b_shadow">Shadows</button><button id="b_gscale">GUI Scale</button></div>
+<div class="brow"><button id="done">Done</button></div>
 </div>
 <button id="quit">Save and Quit to Title</button>
 </div>

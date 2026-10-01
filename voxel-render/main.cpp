@@ -270,6 +270,7 @@ int main()
     cvar.reg("view.dist", 4.0f);
     cvar.reg("gfx.filter", 0.0f);
     cvar.reg("gfx.fxaa", 0.0f);
+    cvar.reg("shadow.on", 1.0f); // P2a резкие тени от солнца (0 = только baked)
     cvar.reg("ui.rml", 1.0f); // пауза через RmlUi (0 = старый MC-оверлей)
     cvar.reg("ui.scale", 1.0f); // GUI Scale RML: 0.5..4 (как MC мелкий/крупный)
     cvar.reg("snd.vol", 0.8f);
@@ -350,6 +351,9 @@ int main()
         } else if (s == "b_aa") {
             bool v = cvar.get("gfx.fxaa", 0.0f) > 0.5f;
             cvar.set("gfx.fxaa", v ? 0.0f : 1.0f);
+        } else if (s == "b_shadow") {
+            bool v = cvar.get("shadow.on", 1.0f) > 0.5f;
+            cvar.set("shadow.on", v ? 0.0f : 1.0f);
         } else if (s == "b_gscale") {
             float v = cvar.get("ui.scale", 1.0f), ns = 1.0f;
             if (v < 0.75f) ns = 1.0f;
@@ -376,6 +380,7 @@ int main()
         }
         if (s == "b_fs") return std::string("Fullscreen: ") + (cvar.get("vid.fullscreen", 0.0f) > 0.5f ? "ON" : "OFF");
         if (s == "b_aa") return std::string("AA: ") + (cvar.get("gfx.fxaa", 0.0f) > 0.5f ? "FXAA" : "OFF");
+        if (s == "b_shadow") return std::string("Shadows: ") + (cvar.get("shadow.on", 1.0f) > 0.5f ? "ON" : "OFF");
         if (s == "b_gscale") {
             snprintf(b, sizeof(b), "GUI Scale: %gx", (double)cvar.get("ui.scale", 1.0f));
             return b;
@@ -883,6 +888,12 @@ title_screen:
             ImGui::SetCursorPos(ImVec2(fx, fy));
             if (MCButton("o_aa", (std::string("AA: ") + (faa ? "FXAA" : "OFF")).c_str(), ImVec2(bw, bh), fontUI, fs)) {
                 audio.playUI(); cvar.set("gfx.fxaa", faa ? 0.0f : 1.0f);
+            }
+            fy += bh + gap;
+            bool fsh = cvar.get("shadow.on", 1.0f) > 0.5f;
+            ImGui::SetCursorPos(ImVec2(fx, fy));
+            if (MCButton("o_shadow", (std::string("Shadows: ") + (fsh ? "ON" : "OFF")).c_str(), ImVec2(bw, bh), fontUI, fs)) {
+                audio.playUI(); cvar.set("shadow.on", fsh ? 0.0f : 1.0f);
             }
             fy += bh + gap;
             ImGui::SetCursorPos(ImVec2(fx, fy));

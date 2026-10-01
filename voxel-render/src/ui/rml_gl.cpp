@@ -652,7 +652,7 @@ static void syncDoc(Rml::ElementDocument* doc, RmlUI* ui) {
         if (sp) sp->SetInnerRML(Rml::String(buf));
     }
     if (!ui->getLabel) return;
-    const char* bids[] = {"b_dist", "b_filter", "b_vsync", "b_res", "b_fs", "b_aa", "b_gscale"};
+    const char* bids[] = {"b_dist", "b_filter", "b_vsync", "b_res", "b_fs", "b_aa", "b_shadow", "b_gscale"};
     for (auto id : bids) {
         Rml::Element* el = doc->GetElementById(id);
         if (el) el->SetInnerRML(Rml::String(ui->getLabel(id).c_str()));
