@@ -14,7 +14,10 @@ bool World::isOpaque(unsigned char id) {
 
 int World::getDay(int wx, int y, int wz) const {
     if (y >= Chunk::SY) return Chunk::LIGHT_SUN; // открытое небо
-    if (y < 0 || !inXZ(wx, wz)) return 0;
+    if (y < 0) return 0;
+    // Вне XZ — как воздух с открытым небом (getBlock там тоже воздух):
+    // иначе края карты темнеют (пробы тянут OOB-нули, d7.5 вместо 15).
+    if (!inXZ(wx, wz)) return Chunk::LIGHT_SUN;
     return at(wx / Chunk::SX, wz / Chunk::SZ).getDay(wx % Chunk::SX, y, wz % Chunk::SZ);
 }
 

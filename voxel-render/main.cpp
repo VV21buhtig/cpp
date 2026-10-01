@@ -1014,6 +1014,7 @@ title_screen:
     auto sh = [&](const char* n) { return shaderDir + "/" + n; };
     Shader lightingShader(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
     Shader shadowShader(sh("shadow.vs").c_str(), sh("shadow.fs").c_str()); // P2a глубина от солнца
+    Shader shadowDbgShader(sh("shadowdbg.vs").c_str(), sh("shadowdbg.fs").c_str()); // P2i просмотр карты
     Shader lineShader(sh("line.vs").c_str(), sh("outline.fs").c_str());
     Shader crosshairShader(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
     Shader skyShader(sh("sky.vs").c_str(), sh("sky.fs").c_str());
@@ -1028,6 +1029,7 @@ title_screen:
     auto reloadShaders = [&]() {
         lightingShader.load(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
         shadowShader.load(sh("shadow.vs").c_str(), sh("shadow.fs").c_str());
+        shadowDbgShader.load(sh("shadowdbg.vs").c_str(), sh("shadowdbg.fs").c_str());
         lineShader.load(sh("line.vs").c_str(), sh("outline.fs").c_str());
         crosshairShader.load(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
         skyShader.load(sh("sky.vs").c_str(), sh("sky.fs").c_str());
@@ -1843,6 +1845,27 @@ title_screen:
             glBindVertexArray(0);
             glDepthMask(GL_TRUE);
             glEnable(GL_DEPTH_TEST);
+        }
+
+        // P2i debug: теневая карта в углу (консоль: shadow.debug 1). Видно дыры и мусор.
+        if (cvar.get("shadow.debug", 0.0f) > 0.5f && shadowFBO) {
+            int ww, hh;
+            glfwGetFramebufferSize(window, &ww, &hh);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, 256, 256);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            shadowDbgShader.use();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, shadowMap);
+            shadowDbgShader.setInt("depthMap", 0);
+            glBindVertexArray(triVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            glBindTexture(GL_TEXTURE_2D, diffuseMap);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+            glViewport(0, 0, ww, hh);
         }
 
         // прицел поверх всего
