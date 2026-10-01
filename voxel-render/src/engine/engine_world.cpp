@@ -228,6 +228,11 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
     };
     const int S = Chunk::SX;
     int wx0 = cx * S, wz0 = cz * S;
+    // Ключ greedy: id + AO/свет 4 углов клетки. Слияние только равных —
+    // иначе градиент тянется через весь слитый квад длинными полосами
+    // (гайд-правило greedy+AO: мержить можно лишь одинаковую освещённость).
+    struct MQ { unsigned char id, ao[4], d[4], n[4]; };
+    auto sameQ = [](const MQ& a, const MQ& b) { return memcmp(&a, &b, sizeof(MQ)) == 0; };
     // corner AO: 3 клетки снаружи грани (статья 0fps). A/B — касательные, o — наружу.
     auto occ = [&](int x, int y, int z) -> int { return getBlock(x, y, z) ? 1 : 0; };
     for (int d = 0; d < 6; d++) {
@@ -236,7 +241,56 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
         int ns = (axis == 1) ? Chunk::SY : S;
         for (int s = 0; s < ns; s++) {
             int NU = S, NV = (axis == 1) ? S : Chunk::SY;
-            unsigned char mask[64][16] = {};
+            // Угловые пробы от (cu,cv)-клетки: та же математика для ключей маски
+            // одиночных клеток и для углов слитого квада (детерминирована позицией).
+            auto cornerCells = [&](int cu, int cv, int du, int dv, int& ox, int& oy, int& oz,
+                                   int& ax, int& ay, int& az,
+                                   int& bx, int& by, int& bz,
+                                   int& nx, int& ny, int& nz,
+                                   int& gx, int& gy, int& gz) {
+                int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
+                int o = (sign > 0) ? 0 : -1;
+                if (axis == 0)      { gx = wx0 + s + (sign > 0 ? 1 : 0); gy = cv + dv; gz = wz0 + cu + du;
+                                      ax = 0; ay = 0; az = 1; bx = 0; by = 1; bz = 0; nx = 1; ny = 0; nz = 0; }
+                else if (axis == 1) { gx = wx0 + cu + du; gy = s + (sign > 0 ? 1 : 0); gz = wz0 + cv + dv;
+                                      ax = 1; ay = 0; az = 0; bx = 0; by = 0; bz = 1; nx = 0; ny = 1; nz = 0; }
+                else                { gx = wx0 + cu + du; gy = cv + dv; gz = wz0 + s + (sign > 0 ? 1 : 0);
+                                      ax = 1; ay = 0; az = 0; bx = 0; by = 1; bz = 0; nx = 0; ny = 0; nz = 1; }
+                ox = nx*o + ax*a0; oy = ny*o + ay*a0; oz = nz*o + az*a0;
+            };
+            auto cornerAO = [&](int cu, int cv, int du, int dv) -> float {
+                if (axis == 1) return 3.0f; // топы плоские (иначе полосы через 16-блочный квад)
+                int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
+                cornerCells(cu, cv, du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
+                int b0 = (dv == 0) ? -1 : 0;
+                int o = (sign > 0) ? 0 : -1;
+                int s1 = occ(gx + ox, gy + oy, gz + oz);
+                int s2 = occ(gx + nx*o + bx*b0, gy + ny*o + by*b0, gz + nz*o + bz*b0);
+                int cc = occ(gx + ox + bx*b0, gy + oy + by*b0, gz + oz + bz*b0);
+                return (s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + cc));
+            };
+            // Свет угла: среднее day/night по не-opaque из 4 клеток вокруг угла.
+            // Топы тоже семплят (иначе не будет теней на земле)!
+            auto cornerLT = [&](int cu, int cv, int du, int dv, float& day, float& night) {
+                int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
+                cornerCells(cu, cv, du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
+                (void)ax; (void)ay; (void)az; // уже внутри ox/oy/oz
+                int o = (sign > 0) ? 0 : -1;
+                int b0 = (dv == 0) ? -1 : 0;
+                int px[4] = {gx, gx + ox, gx + nx*o + bx*b0, gx + ox + bx*b0};
+                int py[4] = {gy, gy + oy, gy + ny*o + by*b0, gy + oy + by*b0};
+                int pz[4] = {gz, gz + oz, gz + nz*o + bz*b0, gz + oz + bz*b0};
+                float sd = 0, sn = 0; int cnt = 0;
+                for (int k = 0; k < 4; k++) {
+                    if (isOpaque(getBlock(px[k], py[k], pz[k]))) continue;
+                    sd += (float)getDay(px[k], py[k], pz[k]);
+                    sn += (float)getNight(px[k], py[k], pz[k]);
+                    cnt++;
+                }
+                day = cnt ? sd / cnt : 0.0f;
+                night = cnt ? sn / cnt : 0.0f;
+            };
+            MQ mask[64][16] = {};
             for (int v = 0; v < NV; v++)
                 for (int u = 0; u < NU; u++) {
                     int bx, by, bz, ox = 0, oy = 0, oz = 0;
@@ -251,86 +305,43 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     const BlockDef& dd = gBlocks.get(id);
                     const BlockDef& od = gBlocks.get(ob);
                     bool oOpaque = od.solid && !(od.cutout && ob != id); // листва не закрывает чужие грани
-                    mask[v][u] = (dd.solid && !oOpaque) ? id : 0;
+                    if (!(dd.solid && !oOpaque)) continue;
+                    MQ q; q.id = id;
+                    const int DUs[4] = {0, 1, 1, 0}, DVs[4] = {0, 0, 1, 1};
+                    for (int k = 0; k < 4; k++) {
+                        q.ao[k] = (unsigned char)cornerAO(u, v, DUs[k], DVs[k]);
+                        float fd, fn;
+                        cornerLT(u, v, DUs[k], DVs[k], fd, fn);
+                        q.d[k] = (unsigned char)(fd + 0.5f);
+                        q.n[k] = (unsigned char)(fn + 0.5f);
+                    }
+                    mask[v][u] = q;
                 }
             bool done[64][16] = {};
             for (int v = 0; v < NV; v++)
                 for (int u = 0; u < NU; u++) {
-                    unsigned char id = mask[v][u];
-                    if (!id || done[v][u]) continue;
+                    MQ q0 = mask[v][u];
+                    if (!q0.id || done[v][u]) continue;
                     int w = 1;
-                    while (u + w < NU && mask[v][u + w] == id && !done[v][u + w]) w++;
+                    while (u + w < NU && sameQ(mask[v][u + w], q0) && !done[v][u + w]) w++;
                     int h = 1;
                     bool grow = true;
                     while (v + h < NV && grow) {
                         for (int k = 0; k < w; k++)
-                            if (mask[v + h][u + k] != id || done[v + h][u + k]) { grow = false; break; }
+                            if (!sameQ(mask[v + h][u + k], q0) || done[v + h][u + k]) { grow = false; break; }
                         if (grow) h++;
                     }
                     for (int dv = 0; dv < h; dv++)
                         for (int du = 0; du < w; du++) done[v + dv][u + du] = true;
                     float N[3] = {0, 0, 0};
                     N[axis] = (float)sign;
-                    float tile = tileFor(id, axis, sign);
-                    // AO четырёх углов; a0/b0: клетка снаружи прямоугольника.
-                    // Топы идут плоскими (ao=3): иначе градиент через слитый 16-блочный
-                    // квад тащит темноту от дальних обрывов на открытое место полосами.
-                    // Свет топов НЕ плоский — иначе не будет теней на земле!
-                    auto cornerCells = [&](int du, int dv, int& ox, int& oy, int& oz,
-                                           int& ax, int& ay, int& az,
-                                           int& bx, int& by, int& bz,
-                                           int& nx, int& ny, int& nz,
-                                           int& gx, int& gy, int& gz) {
-                        int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
-                        int o = (sign > 0) ? 0 : -1;
-                        if (axis == 0)      { gx = wx0 + s + (sign > 0 ? 1 : 0); gy = v + dv; gz = wz0 + u + du;
-                                              ax = 0; ay = 0; az = 1; bx = 0; by = 1; bz = 0; nx = 1; ny = 0; nz = 0; }
-                        else if (axis == 1) { gx = wx0 + u + du; gy = s + (sign > 0 ? 1 : 0); gz = wz0 + v + dv;
-                                              ax = 1; ay = 0; az = 0; bx = 0; by = 0; bz = 1; nx = 0; ny = 1; nz = 0; }
-                        else                { gx = wx0 + u + du; gy = v + dv; gz = wz0 + s + (sign > 0 ? 1 : 0);
-                                              ax = 1; ay = 0; az = 0; bx = 0; by = 1; bz = 0; nx = 0; ny = 0; nz = 1; }
-                        ox = nx*o + ax*a0; oy = ny*o + ay*a0; oz = nz*o + az*a0;
-                    };
-                    auto cornerAO = [&](int du, int dv) -> float {
-                        if (axis == 1) return 3.0f;
-                        int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
-                        cornerCells(du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
-                        int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
-                        int s1 = occ(gx + ox, gy + oy, gz + oz);
-                        int s2 = occ(gx + nx*((sign > 0) ? 0 : -1) + bx*b0,
-                                     gy + ny*((sign > 0) ? 0 : -1) + by*b0,
-                                     gz + nz*((sign > 0) ? 0 : -1) + bz*b0);
-                        int cc = occ(gx + ox + bx*b0, gy + oy + by*b0, gz + oz + bz*b0);
-                        return (s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + cc));
-                    };
-                    // Свет угла: среднее day/night по не-opaque из 4 клеток вокруг
-                    // угла (снаружи-грань + 2 боковые + диагональ). Вода свет
-                    // пропускает (не opaque), камень — нет. Топы тоже семплят!
-                    auto cornerLT = [&](int du, int dv, float& day, float& night) {
-                        int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
-                        cornerCells(du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
-                        (void)ax; (void)ay; (void)az; // уже внутри ox/oy/oz
-                        int o = (sign > 0) ? 0 : -1;
-                        int b0 = (dv == 0) ? -1 : 0;
-                        int px[4] = {gx, gx + ox, gx + nx*o + bx*b0, gx + ox + bx*b0};
-                        int py[4] = {gy, gy + oy, gy + ny*o + by*b0, gy + oy + by*b0};
-                        int pz[4] = {gz, gz + oz, gz + nz*o + bz*b0, gz + oz + bz*b0};
-                        (void)ax; (void)ay; (void)az;
-                        float sd = 0, sn = 0; int cnt = 0;
-                        for (int k = 0; k < 4; k++) {
-                            if (isOpaque(getBlock(px[k], py[k], pz[k]))) continue;
-                            sd += (float)getDay(px[k], py[k], pz[k]);
-                            sn += (float)getNight(px[k], py[k], pz[k]);
-                            cnt++;
-                        }
-                        day = cnt ? sd / cnt : 0.0f;
-                        night = cnt ? sn / cnt : 0.0f;
-                    };
-                    float a00 = cornerAO(0, 0), a10 = cornerAO(w, 0);
-                    float a11 = cornerAO(w, h), a01 = cornerAO(0, h);
+                    float tile = tileFor(q0.id, axis, sign);
+                    // Углы слитого квада — те же пробы (детерминированы позицией угла).
+                    float a00 = cornerAO(u, v, 0, 0), a10 = cornerAO(u, v, w, 0);
+                    float a11 = cornerAO(u, v, w, h), a01 = cornerAO(u, v, 0, h);
                     float d00, n00, d10, n10, d11, n11, d01, n01;
-                    cornerLT(0, 0, d00, n00); cornerLT(w, 0, d10, n10);
-                    cornerLT(w, h, d11, n11); cornerLT(0, h, d01, n01);
+                    cornerLT(u, v, 0, 0, d00, n00); cornerLT(u, v, w, 0, d10, n10);
+                    cornerLT(u, v, w, h, d11, n11); cornerLT(u, v, 0, h, d01, n01);
                     auto vert = [&](int du, int dv, float ao, float day, float night) {
                         float x, y, z, uu, vv;
                         if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
