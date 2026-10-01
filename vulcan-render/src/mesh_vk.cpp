@@ -1,22 +1,15 @@
-// mesh_vk: поквадратный мешер (см. mesh_vk.h). Winding-таблицы — дословно из
-// GL-мешера (проверены winding-тестом), flip диагонали по AO (0fps-оригинал).
-// Флуда нет и не будет (решение). Выход: 10 floats/вершина (pos3+nrm3+uv2+tile+ao),
-// 6 вертексов на грань (2 триса, без индекса).
+// mesh_vk: поквадратный мешер (см. mesh_vk.h). 1 грань = 1 запись u32
+// (биты: x4+z4+y6+face3+tile6+ao8+flip1). Топологию (углы, winding, flip)
+// разворачивает ВЕРШИННЫЙ шейдер статическими таблицами (Ch05+K-рецепт):
+// индекс-буфер не нужен, draw instanced (6 вершин x N квадов).
 #include "mesh_vk.h"
 #include "engine/world.h"
 #include "engine/blocks.h"
 #include <cstring>
 
-std::vector<float> buildChunkVK(const World& w, int cx, int cz) {
-    std::vector<float> out;
-    out.reserve(4096 * 10);
-    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz,
-                     float u, float v, float tile, float ao) {
-        out.push_back(x); out.push_back(y); out.push_back(z);
-        out.push_back(nx); out.push_back(ny); out.push_back(nz);
-        out.push_back(u); out.push_back(v);
-        out.push_back(tile); out.push_back(ao);
-    };
+std::vector<uint32_t> buildChunkVK(const World& w, int cx, int cz) {
+    std::vector<uint32_t> out;
+    out.reserve(8192);
     // направления: ось + знак. A/B — касательные (конвенция GL-мешера).
     const int AX[6] = {0, 0, 1, 1, 2, 2};
     const int SN[6] = {1, -1, 1, -1, 1, -1};
@@ -63,30 +56,17 @@ std::vector<float> buildChunkVK(const World& w, int cx, int cz) {
                         int s1 = at(c1) ? 1 : 0, s2 = at(c2) ? 1 : 0, ccm = at(cc) ? 1 : 0;
                         ca[k] = (ax == 1) ? 3.0f : ((s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + ccm)));
                     }
-                    // flip по AO (0fps-оригинал).
+                    // flip по AO (0fps-оригинал). Топологию разворачивает VS.
                     bool flip = (ca[0] + ca[2] > ca[3] + ca[1]);
-                    int tri[6];
-                    if (ax == 2) {
-                        if (sn > 0) { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
-                        else        { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
-                    } else {
-                        if (sn > 0) { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
-                        else        { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
-                    }
-                    for (int k = 0; k < 6; k++) {
-                        int c = tri[k];
-                        int du = DUs[c], dv = DVs[c];
-                        float px = (float)(wx + (sn > 0 ? n[0] : 0) + du * A[0] + dv * B[0]);
-                        float py = (float)(y + (sn > 0 ? n[1] : 0) + du * A[1] + dv * B[1]);
-                        float pz = (float)(wz + (sn > 0 ? n[2] : 0) + du * A[2] + dv * B[2]);
-                        // UV мировые как в GL (ось0: z/y; ось1: x/z; ось2: x/y)
-                        float uu, vv;
-                        if (ax == 0)      { uu = pz; vv = py; }
-                        else if (ax == 1) { uu = px; vv = pz; }
-                        else              { uu = px; vv = py; }
-                        pushV(px, py, pz, (float)n[0], (float)n[1], (float)n[2],
-                              uu, vv, tile, ca[c]);
-                    }
+                    // Пак: x4+z4+y6 (локальные!) + face3 + tile6 + ao8 + flip1 = 32 бита.
+                    uint32_t rec = (uint32_t)(x & 15) | ((uint32_t)(z & 15) << 4) |
+                                   ((uint32_t)(y & 63) << 8) |
+                                   ((uint32_t)(ax * 2 + (sn > 0 ? 0 : 1)) << 14) |
+                                   (((uint32_t)tile & 63) << 17) |
+                                   (((uint32_t)ca[0] | ((uint32_t)ca[1] << 2) |
+                                     ((uint32_t)ca[2] << 4) | ((uint32_t)ca[3] << 6)) << 23) |
+                                   ((uint32_t)(flip ? 1 : 0) << 31);
+                    out.push_back(rec);
                 }
             }
     return out;

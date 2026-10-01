@@ -477,15 +477,15 @@ int main(int argc, char** argv) {
         vmaDestroyImage(alloc, tileImg, tileAlloc);
     });
 
-    // ---- вершины чанков (поквадратный мешер, глобальные координаты) ----
-    struct ChunkVB { VkBuffer buf; VmaAllocation alloc; int verts; };
+    // ---- SSBO квадов (u32-записи, pulling в VS) ----
+    struct ChunkVB { VkBuffer buf; VmaAllocation alloc; int quads; };
     std::vector<ChunkVB> chunkVBs;
-    glm::vec3 modelOff = worldOffset;
+    glm::vec3 chunkBaseOff = worldOffset; // + cx*16/cz*16 на чанк (вершины локальные!)
     {
         for (int cz = 0; cz < 8; cz++)
             for (int cx = 0; cx < 8; cx++) {
-                std::vector<float> data = buildChunkVK(world, cx, cz);
-                ChunkVB c{nullptr, nullptr, (int)(data.size() / 10)};
+                std::vector<uint32_t> data = buildChunkVK(world, cx, cz);
+                ChunkVB c{nullptr, nullptr, (int)data.size()};
                 if (data.empty()) { chunkVBs.push_back(c); continue; }
                 VkDeviceSize sz = data.size() * sizeof(float);
                 VkBuffer staging;
@@ -515,8 +515,8 @@ int main(int argc, char** argv) {
                 chunkVBs.push_back(c);
             }
         size_t tv = 0;
-        for (auto& c : chunkVBs) tv += c.verts;
-        printf("chunks verts total %zu\n", tv);
+        for (auto& c : chunkVBs) tv += c.quads;
+        printf("chunks quads total %zu\n", tv);
     }
     del.push([&]() {
         for (auto& c : chunkVBs)
@@ -880,14 +880,16 @@ int main(int argc, char** argv) {
         VkRect2D sc{{0, 0}, swapExtent};
         vkCmdSetViewport(cmdBufs[fi], 0, 1, &vwp);
         vkCmdSetScissor(cmdBufs[fi], 0, 1, &sc);
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), modelOff);
-        vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(model), &model);
         for (int c = 0; c < 64; c++) {
             if (!chunkVBs[c].buf) continue;
+            // Вершины локальные: модель = мир + чанк. Пуш на чанк (дешево, 64Б).
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), chunkBaseOff +
+                                             glm::vec3((c % 8) * 16.0f, 0.0f, (c / 8) * 16.0f));
+            vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(model), &model);
             vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeLayout, 0, 1, &descSets[fi][c], 0, nullptr);
-            vkCmdDraw(cmdBufs[fi], (uint32_t)chunkVBs[c].verts, 1, 0, 0);
+            vkCmdDraw(cmdBufs[fi], 6, (uint32_t)chunkVBs[c].quads, 0, 0);
         }
         vkCmdEndRendering(cmdBufs[fi]);
         VkImageMemoryBarrier toPresent = toDraw;

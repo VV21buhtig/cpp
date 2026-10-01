@@ -1,7 +1,7 @@
 #version 450
-// demo-3a pulling (Ch05-рецепт): vertex-input пустой, вершины лежат в SSBO
-// плоским float-массивом (pos3+nrm3+uv2+tile+ao = 10), индекс = gl_VertexIndex.
-// Ручные оффсеты вместо struct — vec3 в std430 занял бы 16 байт и развалил пак.
+// demo-3b: 1 запись u32/грань -> 4 угла в VS (Ch05+K-рецепт). Индекс-буфера нет:
+// draw instanced (6 вершин x N), угол из статических таблиц + flip-бит.
+// Биты: x4+z4+y6 (локальные!) + face3 + tile6 + ao8 + flip1. Мир — через model.
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewProj;
     vec4 sunDir;
@@ -13,7 +13,7 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 viewPos;
 } frame;
 
-layout(set = 0, binding = 2) readonly buffer Quads { float vdata[]; } qb;
+layout(set = 0, binding = 2) readonly buffer Quads { uint qd[]; } qb;
 
 layout(push_constant) uniform Push { mat4 model; } pc;
 
@@ -23,15 +23,46 @@ layout(location = 2) out vec2 vUV;
 layout(location = 3) out float vTile;
 layout(location = 4) out float vAO;
 
+// Углы квада (те же c[4] что в мешере): 0:(0,0) 1:(1,0) 2:(1,1) 3:(0,1).
+// Таблицы обхода — дословно winding из GL-теста: [case][flip][6],
+// case: осьZ? (знак+?0:1) : (знак+?2:3).
+const int DU[4] = int[4](0, 1, 1, 0);
+const int DV[4] = int[4](0, 0, 1, 1);
+const int TRI[48] = int[48](
+    0,1,2, 0,2,3,  1,2,3, 1,3,0,   // z+
+    0,2,1, 0,3,2,  1,3,2, 1,0,3,   // z-
+    0,2,1, 0,3,2,  1,3,2, 1,0,3,   // x+/y+
+    0,1,2, 0,2,3,  1,2,3, 1,3,0);  // x-/y-
+
 void main() {
-    uint b = uint(gl_VertexIndex) * 10u;
-    vec3 p = vec3(qb.vdata[b], qb.vdata[b + 1u], qb.vdata[b + 2u]);
-    vec3 n = vec3(qb.vdata[b + 3u], qb.vdata[b + 4u], qb.vdata[b + 5u]);
-    vec4 w = pc.model * vec4(p, 1.0);
+    uint rec = qb.qd[gl_InstanceIndex];
+    uint lx = rec & 15u, lz = (rec >> 4) & 15u, ly = (rec >> 8) & 63u;
+    uint f = (rec >> 14) & 7u;
+    int ax = int(f >> 1);
+    int sn = ((f & 1u) == 0u) ? 1 : -1;
+    uint tile = (rec >> 17) & 63u;
+    uint ao4 = (rec >> 23) & 255u;
+    uint flip = (rec >> 31) & 1u;
+
+    int cs = (ax == 2) ? (sn > 0 ? 0 : 1) : (sn > 0 ? 2 : 3);
+    int ci = TRI[(cs * 2 + int(flip)) * 6 + gl_VertexIndex];
+    int du = DU[ci], dv = DV[ci];
+
+    ivec3 A = (ax == 0) ? ivec3(0,0,1) : ivec3(1,0,0);
+    ivec3 B = (ax == 0) ? ivec3(0,1,0) : ((ax == 1) ? ivec3(0,0,1) : ivec3(0,1,0));
+    ivec3 n = ivec3(0, 0, 0);
+    n[ax] = sn;
+    ivec3 base = ivec3(int(lx), int(ly), int(lz))
+               + (sn > 0 ? n : ivec3(0, 0, 0)) + du * A + dv * B;
+
+    vec4 w = pc.model * vec4(vec3(base), 1.0);
     vPos = w.xyz;
-    vNrm = mat3(pc.model) * n; // model только переносы — нормали целы
-    vUV = vec2(qb.vdata[b + 6u], qb.vdata[b + 7u]);
-    vTile = qb.vdata[b + 8u];
-    vAO = qb.vdata[b + 9u];
+    vNrm = vec3(n); // model только переносы
+    // UV мировые как в GL (ось0: z/y; ось1: x/z; ось2: x/y)
+    if (ax == 0) vUV = vec2(w.z, w.y);
+    else if (ax == 1) vUV = vec2(w.x, w.z);
+    else vUV = vec2(w.x, w.y);
+    vTile = float(tile);
+    vAO = float((ao4 >> uint(2 * ci)) & 3u);
     gl_Position = frame.viewProj * w;
 }
