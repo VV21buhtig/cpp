@@ -8,6 +8,25 @@ in float Tile;
 in float AO;
 in float Day;   // P1c baked солнце 0..15
 in float Night; // P1c baked блоки 0..14
+in vec4 ShadowPos; // P2a
+
+uniform sampler2D shadowMap; // P2a карта глубины от солнца
+uniform float shadowOn;      // 0 ночью/выкл — тени не считать
+uniform vec2 shadowTexel;    // 1/размер карты
+
+// P2a PCF 2x2 Kaigen-стиль: 4 тапа ±0.5 текселя, среднее. Вне карты/сзади — свет.
+float calcShadow(vec4 sp)
+{
+    vec3 p = sp.xyz / sp.w * 0.5 + 0.5;
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+    float bias = 0.0015;
+    float s = 0.0;
+    s += step(p.z - bias, texture(shadowMap, p.xy + vec2(-0.5, -0.5) * shadowTexel).r);
+    s += step(p.z - bias, texture(shadowMap, p.xy + vec2( 0.5, -0.5) * shadowTexel).r);
+    s += step(p.z - bias, texture(shadowMap, p.xy + vec2(-0.5,  0.5) * shadowTexel).r);
+    s += step(p.z - bias, texture(shadowMap, p.xy + vec2( 0.5,  0.5) * shadowTexel).r);
+    return s * 0.25;
+}
 
 // ========== MATERIAL ==========
 struct Material {
@@ -173,7 +192,9 @@ void main()
     // Пол 0.10 — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
     float s = clamp(Day / 15.0, 0.0, 1.0);
     float skyK = 0.10 + 0.90 * s * s * (0.35 + 0.65 * s);
-    vec3 result = CalcDirLight(dirLight, norm, viewDir) * skyK;
+    // P2a резкая тень множит только солнце (мягкий baked остаётся + динамика мимо)
+    float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos) : 1.0;
+    vec3 result = CalcDirLight(dirLight, norm, viewDir) * skyK * sh;
 
     // phase 2: point lights (лампочки)
     for (int i = 0; i < NR_POINT_LIGHTS; i++)

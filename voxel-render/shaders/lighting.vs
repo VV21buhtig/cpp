@@ -14,10 +14,12 @@ out float Tile;
 out float AO;
 out float Day;
 out float Night;
+out vec4 ShadowPos; // P2a координаты в карте теней
 
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform mat4 lightSpace; // P2a матрица солнца для теней
 
 void main()
 {
@@ -28,6 +30,8 @@ void main()
     AO        = aAO;
     Day       = aDay;
     Night     = aNight;
+    // normal-offset от acne (Luanti-идея: bias в вершинном по нормали)
+    ShadowPos = lightSpace * model * vec4(aPos + aNormal * 0.03, 1.0);
 
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }

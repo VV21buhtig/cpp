@@ -1002,6 +1002,7 @@ title_screen:
     audio.wind(true); // эмбиент только в игре, не в меню
     auto sh = [&](const char* n) { return shaderDir + "/" + n; };
     Shader lightingShader(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
+    Shader shadowShader(sh("shadow.vs").c_str(), sh("shadow.fs").c_str()); // P2a глубина от солнца
     Shader lineShader(sh("line.vs").c_str(), sh("outline.fs").c_str());
     Shader crosshairShader(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
     Shader skyShader(sh("sky.vs").c_str(), sh("sky.fs").c_str());
@@ -1015,6 +1016,7 @@ title_screen:
     Shader fxaaShader(fxaaFile("fxaa.vs").c_str(), fxaaFile("fxaa.fs").c_str());
     auto reloadShaders = [&]() {
         lightingShader.load(sh("lighting.vs").c_str(), sh("lighting.fs").c_str());
+        shadowShader.load(sh("shadow.vs").c_str(), sh("shadow.fs").c_str());
         lineShader.load(sh("line.vs").c_str(), sh("outline.fs").c_str());
         crosshairShader.load(sh("crosshair.vs").c_str(), sh("crosshair.fs").c_str());
         skyShader.load(sh("sky.vs").c_str(), sh("sky.fs").c_str());
@@ -1199,6 +1201,31 @@ title_screen:
             postFBO = 0; postTex = 0; postDepth = 0;
         }
         postW = postH = 0;
+    };
+
+    // P2a теневая карта: глубина от солнца 2048, ручной PCF в lighting.fs.
+    unsigned int shadowFBO = 0, shadowMap = 0;
+    const int SHADOW_S = 2048;
+    auto ensureShadow = [&]() {
+        if (shadowFBO) return;
+        glGenTextures(1, &shadowMap);
+        glBindTexture(GL_TEXTURE_2D, shadowMap);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, SHADOW_S, SHADOW_S, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        float border[] = {1.0f, 1.0f, 1.0f, 1.0f};
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+        glGenFramebuffers(1, &shadowFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowMap, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cout << "shadow FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     };
 
     lightingShader.use();
@@ -1541,6 +1568,40 @@ title_screen:
         glm::vec3 sunCol = glm::mix(glm::vec3(1.0f, 0.55f, 0.25f), glm::vec3(1.0f, 0.97f, 0.9f),
                                     glm::smoothstep(0.0f, 0.4f, sunVec.y));
 
+        // ---- P2a SHADOW PASS: глубина от солнца в 2048 карту (только opaque) ----
+        bool shadowOn = cvar.get("shadow.on", 1.0f) > 0.5f && sunVec.y > 0.02f;
+        glm::mat4 lightSpace(1.0f);
+        if (shadowOn) {
+            ensureShadow();
+            // орто-бокс 140 вокруг игрока, центр снапнут к текелю (меньше шиммера)
+            const float SE = 70.0f;
+            float texel = 2.0f * SE / (float)SHADOW_S;
+            glm::vec3 center = worldOffset + player.pos;
+            center.x = floor(center.x / texel) * texel;
+            center.z = floor(center.z / texel) * texel;
+            glm::vec3 up = fabs(sunVec.y) > 0.99f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+            lightSpace = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
+                         glm::lookAt(center, center + sunVec, up);
+            glViewport(0, 0, SHADOW_S, SHADOW_S);
+            glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+            glClear(GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+            shadowShader.use();
+            shadowShader.setMat4("lightSpace", lightSpace);
+            for (int cz = 0; cz < NCZ; cz++)
+                for (int cx = 0; cx < NCX; cx++) {
+                    int mi = cz * NCX + cx;
+                    if (!meshLoaded[mi]) continue;
+                    glm::vec3 off = worldOffset + glm::vec3(cx * 16.0f, 0.0f, cz * 16.0f);
+                    shadowShader.setMat4("model", glm::translate(glm::mat4(1.0f), off));
+                    meshes[mi].draw(); // opaque; вода/лава не кастуют
+                }
+            // вернуть цель кадра (пост-FBO при FXAA, иначе backbuffer)
+            if (fxaaOn) { glBindFramebuffer(GL_FRAMEBUFFER, postFBO); glViewport(0, 0, fww, fhh); }
+            else { glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, vbw, vbh); }
+        }
+
         // небо первым (без глубины)
         {
             int ww, hh;
@@ -1642,6 +1703,13 @@ title_screen:
         lightingShader.setFloat("satU", cvar.get("sun.sat", 1.8f));
         lightingShader.setFloat("gammaU", cvar.get("sun.gamma", 1.2f));
         lightingShader.setFloat("uTime", (float)glfwGetTime()); // фликер факелов
+        lightingShader.setMat4("lightSpace", lightSpace); // P2a (единичная ночью — не семплится)
+        lightingShader.setInt("shadowMap", 2);
+        lightingShader.setFloat("shadowOn", shadowOn ? 1.0f : 0.0f);
+        lightingShader.setVec2("shadowTexel", 1.0f / (float)SHADOW_S, 1.0f / (float)SHADOW_S);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, shadowOn ? shadowMap : 0);
+        glActiveTexture(GL_TEXTURE0);
 
         glm::vec3 ambDay = glm::mix(glm::vec3(0.03f, 0.035f, 0.07f), glm::vec3(0.20f), dayF);
         ambDay *= cvar.get("sun.amb", 3.0f);
