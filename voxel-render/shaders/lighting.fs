@@ -104,8 +104,9 @@ vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
     // ambient
     vec3 ambient = light.ambient * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
 
-    // diffuse (wrap: скользящий свет не даёт черноты утром, Valve-style)
-    float diff    = clamp((dot(normal, lightDir) + 0.4) / 1.4, 0.0, 1.0);
+    // diffuse БЕЗ wrap: грань от солнца — полная, против — ноль (только ambient).
+    // wrap давал до 3.5x между соседними колонками зигзага стены — длинные полосы.
+    float diff    = max(dot(normal, lightDir), 0.0);
     vec3  diffuse = light.diffuse * diff * vec3(texture(material.diffuse, vec3(TexCoords, Tile)));
 
     // specular
@@ -181,8 +182,10 @@ void main()
     vec3 norm    = normalize(Normal);
     vec3 viewDir = normalize(viewPos - FragPos);
 
-    // фейковый воксельный шейдинг граней вместо атласа: верх 1.0, бока 0.7, низ 0.55
-    float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.55) : 0.7;
+    // MC-шейдинг по осям: верх 1.0, низ 0.5, X 0.6, Z 0.8. Фикс на весь день —
+    // контраст не гуляет с азимутом солнца (было 0.7 всем бокам + wrap).
+    float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.5)
+                                     : (abs(norm.x) > abs(norm.z) ? 0.6 : 0.8);
     // вершинное AO MC-мягкое: пол 0.5 (было Kaigen 0.3 — давало 3.3x перепад
     // между соседними колонками ступеней, читалось как полосы-каша).
     float aoV = clamp(AO / 3.0, 0.0, 1.0);
