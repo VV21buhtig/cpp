@@ -208,6 +208,10 @@ void main()
     vec3 sunDirect = sunFull - sunAmb;
     vec3 sunDirW = normalize(-dirLight.direction);
     float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW) : 1.0;
+    // P2d вода резких теней не принимает — только мягкий baked (Kaigen: у воды
+    // своя карта каустики, opaque-тени ей не положены). Тень горы на дне видна
+    // сквозь alpha — этого достаточно и без акне-полос на глади.
+    if (Tile > 3.5 && Tile < 4.5) sh = 1.0;
     vec3 result = sunAmb * skyK + sunDirect * skyK * sh;
 
     // phase 2: point lights (лампочки)
