@@ -7,7 +7,7 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 find_program(GLSLC glslc REQUIRED)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-foreach(SH tri.vert tri.frag vk_terrain.vert vk_terrain.frag)
+foreach(SH tri.vert tri.frag vk_terrain.vert vk_terrain.frag cull.comp)
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SH}.spv
         COMMAND ${GLSLC} -O -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SH}.spv
                 ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${SH}

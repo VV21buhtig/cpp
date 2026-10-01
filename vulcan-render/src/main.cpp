@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/geometric.hpp>
 #include <stb/stb_image.h>
 #include "vk_mem_alloc.h"
 
@@ -194,12 +195,16 @@ int main(int argc, char** argv) {
         VkPhysicalDeviceDynamicRenderingFeatures dyn{};
         dyn.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
         dyn.dynamicRendering = VK_TRUE;
+        VkPhysicalDeviceVulkan12Features feat12{};
+        feat12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        feat12.drawIndirectCount = VK_TRUE; // demo-3c: vkCmdDrawIndirectCount
+        feat12.pNext = &dyn;
         VkPhysicalDeviceFeatures feats{};
         feats.samplerAnisotropy = VK_TRUE;
         const char* devExts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        ci.pNext = &dyn;
+        ci.pNext = &feat12;
         ci.pEnabledFeatures = &feats;
         ci.queueCreateInfoCount = 1;
         ci.pQueueCreateInfos = &qi;
@@ -493,68 +498,87 @@ int main(int argc, char** argv) {
         vmaDestroyImage(alloc, tileImg, tileAlloc);
     });
 
-    // ---- SSBO квадов (u32-записи, pulling в VS) ----
-    struct ChunkVB { VkBuffer buf; VmaAllocation alloc; int quads; };
-    std::vector<ChunkVB> chunkVBs;
-    glm::vec3 chunkBaseOff = worldOffset; // + cx*16/cz*16 на чанк (вершины локальные!)
+    // ---- gigabuffer квадов (всё в одном SSBO) + meta чанков ----
+    // demo-3c: compute-cull читает meta, пишет vis + indirect; VS тянет квады
+    // по firstInstance+instance, чанк — по gl_DrawID из vis[].
+    struct ChunkMeta { uint32_t quadOff, quadCount; float ox, oz; };
+    VkBuffer gigaBuf = nullptr;
+    VmaAllocation gigaAlloc = nullptr;
+    VkBuffer metaBuf = nullptr;
+    VmaAllocation metaAlloc = nullptr;
+    VkBuffer visBuf = nullptr;
+    VmaAllocation visAlloc = nullptr;
+    VkBuffer indBuf = nullptr; // uint count + 64 x VkDrawIndirectCommand
+    VmaAllocation indAlloc = nullptr;
+    size_t totalQuads = 0;
     {
+        std::vector<uint32_t> all;
+        std::vector<ChunkMeta> metas;
         for (int cz = 0; cz < 8; cz++)
             for (int cx = 0; cx < 8; cx++) {
                 std::vector<uint32_t> data = buildChunkVK(world, cx, cz);
-                ChunkVB c{nullptr, nullptr, (int)data.size()};
-                if (data.empty()) { chunkVBs.push_back(c); continue; }
-                VkDeviceSize sz = data.size() * sizeof(float);
-                VkBuffer staging;
-                VmaAllocation stagingAlloc;
-                VkBufferCreateInfo bi{};
-                bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                bi.size = sz;
-                bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-                VmaAllocationCreateInfo ai{};
-                ai.usage = VMA_MEMORY_USAGE_AUTO;
-                ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-                VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &staging, &stagingAlloc, nullptr));
+                if (data.size() >= (1u << 20)) { printf("chunk too big for QUADBIAS\n"); exit(1); }
+                ChunkMeta m{(uint32_t)all.size(), (uint32_t)data.size(),
+                            worldOffset.x + cx * 16.0f, worldOffset.z + cz * 16.0f};
+                metas.push_back(m);
+                all.insert(all.end(), data.begin(), data.end());
+            }
+        totalQuads = all.size();
+        printf("gigaquads total %zu\n", totalQuads);
+        auto upload = [&](const void* src, VkDeviceSize sz, VkBufferUsageFlags use,
+                          VkBuffer& out, VmaAllocation& oa) {
+            VkBuffer staging;
+            VmaAllocation stagingAlloc;
+            VkBufferCreateInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bi.size = sz ? sz : 16;
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO;
+            ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &staging, &stagingAlloc, nullptr));
+            if (sz) {
                 void* dst = nullptr;
                 VK_CHECK(vmaMapMemory(alloc, stagingAlloc, &dst));
-                memcpy(dst, data.data(), sz);
+                memcpy(dst, src, sz);
                 vmaUnmapMemory(alloc, stagingAlloc);
-                bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-                ai.flags = 0;
-                VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &c.buf, &c.alloc, nullptr));
-                immRun([&](VkCommandBuffer cb) {
-                    VkBufferCopy cp{};
-                    cp.size = sz;
-                    vkCmdCopyBuffer(cb, staging, c.buf, 1, &cp);
-                });
-                vmaDestroyBuffer(alloc, staging, stagingAlloc);
-                // барьер не нужен: fence ждёт очередь целиком перед рисованием
-                chunkVBs.push_back(c);
             }
-        size_t tv = 0;
-        for (auto& c : chunkVBs) tv += c.quads;
-        printf("chunks quads total %zu\n", tv);
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | use;
+            ai.flags = 0;
+            VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &out, &oa, nullptr));
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = sz ? sz : 16;
+                vkCmdCopyBuffer(cb, staging, out, 1, &cp);
+            });
+            vmaDestroyBuffer(alloc, staging, stagingAlloc);
+        };
+        upload(all.data(), all.size() * sizeof(uint32_t),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, gigaBuf, gigaAlloc);
+        upload(metas.data(), metas.size() * sizeof(ChunkMeta),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, metaBuf, metaAlloc);
+        std::vector<uint32_t> zero(64, 0);
+        upload(zero.data(), zero.size() * sizeof(uint32_t),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, visBuf, visAlloc);
+        std::vector<uint8_t> izero(16 + 64 * sizeof(VkDrawIndirectCommand), 0);
+        upload(izero.data(), izero.size(),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+               indBuf, indAlloc);
     }
     del.push([&]() {
-        for (auto& c : chunkVBs)
-            if (c.buf) vmaDestroyBuffer(alloc, c.buf, c.alloc);
+        vmaDestroyBuffer(alloc, gigaBuf, gigaAlloc);
+        vmaDestroyBuffer(alloc, metaBuf, metaAlloc);
+        vmaDestroyBuffer(alloc, visBuf, visAlloc);
+        vmaDestroyBuffer(alloc, indBuf, indAlloc);
     });
 
-    // ---- UBO кадра x2 + дескрипторы (набор на кадр x чанк: SSBO свой у каждого) ----
+    // ---- UBO кадра x2 + дескрипторы (1 набор на кадр: UBO свой, остальное общее) ----
     VkDescriptorSetLayout setLayout;
     VkDescriptorPool descPool;
-    VkDescriptorSet descSets[2][64];
+    VkDescriptorSet descSets[2];
     VkBuffer uboBuf[2];
     VmaAllocation uboAlloc[2];
-    VkBuffer dummySSBO;
-    VmaAllocation dummyAlloc;
     {
-        VkBufferCreateInfo dbi0{};
-        dbi0.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        dbi0.size = 16;
-        dbi0.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        VmaAllocationCreateInfo daci{};
-        daci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        VK_CHECK(vmaCreateBuffer(alloc, &dbi0, &daci, &dummySSBO, &dummyAlloc, nullptr));
         VkDescriptorSetLayoutBinding b0{};
         b0.binding = 0;
         b0.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -565,23 +589,34 @@ int main(int argc, char** argv) {
         b1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b1.descriptorCount = 1;
         b1.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutBinding b2{}; // demo-3a: вершины тянутся из SSBO
+        VkDescriptorSetLayoutBinding b2{}; // 2=gigabuffer квадов
         b2.binding = 2;
         b2.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b2.descriptorCount = 1;
         b2.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        VkDescriptorSetLayoutBinding bs[3] = {b0, b1, b2};
+        VkDescriptorSetLayoutBinding b3{}; // 3=meta чанков (origin/offset)
+        b3.binding = 3;
+        b3.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b3.descriptorCount = 1;
+        b3.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        VkDescriptorSetLayoutBinding b4{}; // 4=vis-список (compute пишет, VS читает)
+        b4.binding = 4;
+        b4.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b4.descriptorCount = 1;
+        b4.stageFlags = (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                              VK_SHADER_STAGE_COMPUTE_BIT);
+        VkDescriptorSetLayoutBinding bs[5] = {b0, b1, b2, b3, b4};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 3; li.pBindings = bs;
+        li.bindingCount = 5; li.pBindings = bs;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout));
         VkDescriptorPoolSize ps[3]{};
-        ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 128;
-        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 128;
-        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 128;
+        ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 2;
+        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2;
+        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 3;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pi.maxSets = 128;
+        pi.maxSets = 2;
         pi.poolSizeCount = 3; pi.pPoolSizes = ps;
         VK_CHECK(vkCreateDescriptorPool(device, &pi, nullptr, &descPool));
         VkDescriptorSetAllocateInfo ai{};
@@ -598,42 +633,110 @@ int main(int argc, char** argv) {
             aci.usage = VMA_MEMORY_USAGE_AUTO;
             aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
             VK_CHECK(vmaCreateBuffer(alloc, &bi, &aci, &uboBuf[i], &uboAlloc[i], nullptr));
-            for (int c = 0; c < 64; c++) {
-                VK_CHECK(vkAllocateDescriptorSets(device, &ai, &descSets[i][c]));
-                VkDescriptorBufferInfo dbi{};
-                dbi.buffer = uboBuf[i]; dbi.range = sizeof(FrameUBO);
-                VkDescriptorImageInfo dii{};
-                dii.sampler = tileSmp; dii.imageView = tileView;
-                dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                VkBuffer ssbo = chunkVBs[c].buf ? chunkVBs[c].buf : dummySSBO;
-                VkDescriptorBufferInfo sbi{};
-                sbi.buffer = ssbo; sbi.range = VK_WHOLE_SIZE;
-                VkWriteDescriptorSet w[3]{};
-                w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[0].dstSet = descSets[i][c]; w[0].dstBinding = 0;
-                w[0].descriptorCount = 1;
-                w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                w[0].pBufferInfo = &dbi;
-                w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[1].dstSet = descSets[i][c]; w[1].dstBinding = 1;
-                w[1].descriptorCount = 1;
-                w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[1].pImageInfo = &dii;
-                w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[2].dstSet = descSets[i][c]; w[2].dstBinding = 2;
-                w[2].descriptorCount = 1;
-                w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                w[2].pBufferInfo = &sbi;
-                vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+            VK_CHECK(vkAllocateDescriptorSets(device, &ai, &descSets[i]));
+            VkDescriptorBufferInfo dbi{};
+            dbi.buffer = uboBuf[i]; dbi.range = sizeof(FrameUBO);
+            VkDescriptorImageInfo dii{};
+            dii.sampler = tileSmp; dii.imageView = tileView;
+            dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorBufferInfo sbi[3]{};
+            sbi[0].buffer = gigaBuf; sbi[0].range = VK_WHOLE_SIZE;
+            sbi[1].buffer = metaBuf; sbi[1].range = VK_WHOLE_SIZE;
+            sbi[2].buffer = visBuf; sbi[2].range = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet w[5]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = descSets[i]; w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[0].pBufferInfo = &dbi;
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = descSets[i]; w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[1].pImageInfo = &dii;
+            for (int b = 2; b < 5; b++) {
+                w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[b].dstSet = descSets[i]; w[b].dstBinding = (uint32_t)b;
+                w[b].descriptorCount = 1;
+                w[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[b].pBufferInfo = &sbi[b - 2];
             }
+            vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
         }
     }
     del.push([&]() {
         for (int i = 0; i < 2; i++) vmaDestroyBuffer(alloc, uboBuf[i], uboAlloc[i]);
-        vmaDestroyBuffer(alloc, dummySSBO, dummyAlloc);
         vkDestroyDescriptorPool(device, descPool, nullptr);
         vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
     });
+    // ---- compute-cull: свой layout (meta ro, vis/indirect rw) + push плоскости ----
+    VkDescriptorSetLayout cullLayout;
+    VkDescriptorSet cullSet;
+    VkPipelineLayout cullPipeLayout;
+    VkPipeline cullPipe;
+    {
+        VkDescriptorSetLayoutBinding cb[3]{};
+        for (int b = 0; b < 3; b++) {
+            cb[b].binding = (uint32_t)b;
+            cb[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            cb[b].descriptorCount = 1;
+            cb[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 3; li.pBindings = cb;
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &cullLayout));
+        VkDescriptorPoolSize ps{};
+        ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps.descriptorCount = 3;
+        VkDescriptorPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = 1;
+        pi.poolSizeCount = 1; pi.pPoolSizes = &ps;
+        VkDescriptorPool cullPool;
+        VK_CHECK(vkCreateDescriptorPool(device, &pi, nullptr, &cullPool));
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = cullPool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &cullLayout;
+        VK_CHECK(vkAllocateDescriptorSets(device, &ai, &cullSet));
+        VkDescriptorBufferInfo bi[3]{};
+        bi[0].buffer = metaBuf; bi[0].range = VK_WHOLE_SIZE;
+        bi[1].buffer = visBuf; bi[1].range = VK_WHOLE_SIZE;
+        bi[2].buffer = indBuf; bi[2].range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[3]{};
+        for (int b = 0; b < 3; b++) {
+            w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[b].dstSet = cullSet; w[b].dstBinding = (uint32_t)b;
+            w[b].descriptorCount = 1;
+            w[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[b].pBufferInfo = &bi[b];
+        }
+        vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size = 6 * sizeof(glm::vec4); pc.offset = 0;
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 1; pli.pSetLayouts = &cullLayout;
+        pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(device, &pli, nullptr, &cullPipeLayout));
+        VkShaderModule cs = makeShader(device, SHADER_DIR "cull.comp.spv");
+        VkComputePipelineCreateInfo cpi{};
+        cpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpi.stage.module = cs; cpi.stage.pName = "main";
+        cpi.layout = cullPipeLayout;
+        VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &cullPipe));
+        vkDestroyShaderModule(device, cs, nullptr);
+        del.push([=, &device]() {
+            vkDestroyPipeline(device, cullPipe, nullptr);
+            vkDestroyPipelineLayout(device, cullPipeLayout, nullptr);
+            vkDestroyDescriptorSetLayout(device, cullLayout, nullptr);
+            vkDestroyDescriptorPool(device, cullPool, nullptr);
+        });
+    }
 
     // ---- пайплайн террейна (vertex-input 12 floats, depth, cull NONE на demo-2) ----
     VkPipelineLayout pipeLayout;
@@ -869,6 +972,54 @@ int main(int argc, char** argv) {
         vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &toDraw);
+        // demo-3c: cull compute ДО beginRendering (внутри пасса compute нельзя).
+        // 1) обнулить счётчик (fill + барьер transfer->compute).
+        vkCmdFillBuffer(cmdBufs[fi], indBuf, 0, 4, 0);
+        {
+            VkBufferMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            b.buffer = indBuf; b.offset = 0; b.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 1, &b, 0, nullptr);
+        }
+        // 2) плоскости фрустума (строки viewProj, нормированные).
+        glm::mat4 vp = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+        glm::vec4 planes[6];
+        {
+            glm::vec4 r0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
+            glm::vec4 r1(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
+            glm::vec4 r2(vp[0][2], vp[1][2], vp[2][2], vp[3][2]);
+            glm::vec4 r3(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
+            planes[0] = r3 + r0; planes[1] = r3 - r0;
+            planes[2] = r3 + r1; planes[3] = r3 - r1;
+            planes[4] = r3 + r2; planes[5] = r3 - r2;
+            for (int i = 0; i < 6; i++) planes[i] /= glm::length(glm::vec3(planes[i]));
+        }
+        vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, cullPipe);
+        vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                cullPipeLayout, 0, 1, &cullSet, 0, nullptr);
+        vkCmdPushConstants(cmdBufs[fi], cullPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(planes), planes);
+        vkCmdDispatch(cmdBufs[fi], 1, 1, 1); // 64 потока = 64 чанка
+        // 3) барьер: compute-write -> indirect-read + vertex-read.
+        {
+            VkBufferMemoryBarrier b[2]{};
+            for (int i = 0; i < 2; i++) {
+                b[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                b[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b[i].buffer = (i == 0) ? indBuf : visBuf;
+                b[i].offset = 0; b[i].size = VK_WHOLE_SIZE;
+            }
+            b[0].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            b[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                                 0, 0, nullptr, 2, b, 0, nullptr);
+        }
         VkRenderingAttachmentInfo color{};
         color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         color.imageView = swapViews[imgIdx];
@@ -896,17 +1047,11 @@ int main(int argc, char** argv) {
         VkRect2D sc{{0, 0}, swapExtent};
         vkCmdSetViewport(cmdBufs[fi], 0, 1, &vwp);
         vkCmdSetScissor(cmdBufs[fi], 0, 1, &sc);
-        for (int c = 0; c < 64; c++) {
-            if (!chunkVBs[c].buf) continue;
-            // Вершины локальные: модель = мир + чанк. Пуш на чанк (дешево, 64Б).
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), chunkBaseOff +
-                                             glm::vec3((c % 8) * 16.0f, 0.0f, (c / 8) * 16.0f));
-            vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(model), &model);
-            vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeLayout, 0, 1, &descSets[fi][c], 0, nullptr);
-            vkCmdDraw(cmdBufs[fi], 6, (uint32_t)chunkVBs[c].quads, 0, 0);
-        }
+        vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeLayout, 0, 1, &descSets[fi], 0, nullptr);
+        // 4) один indirect-count draw на всё видимое (команды пишет compute).
+        vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
+                               64, sizeof(VkDrawIndirectCommand));
         vkCmdEndRendering(cmdBufs[fi]);
         VkImageMemoryBarrier toPresent = toDraw;
         toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;

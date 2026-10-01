@@ -14,6 +14,10 @@ layout(set = 0, binding = 0) uniform Frame {
 } frame;
 
 layout(set = 0, binding = 2) readonly buffer Quads { uint qd[]; } qb;
+// demo-3c: чанк — из видимого списка compute (gl_DrawID = слот), origin из meta.
+struct ChunkMeta { uint quadOff; uint quadCount; vec2 origin; };
+layout(set = 0, binding = 3) readonly buffer MetaB { ChunkMeta metas[]; };
+layout(set = 0, binding = 4) readonly buffer VisB { uint vis[]; };
 
 layout(push_constant) uniform Push { mat4 model; } pc;
 
@@ -35,7 +39,11 @@ const int TRI[48] = int[48](
     0,1,2, 0,2,3,  1,2,3, 1,3,0);  // x-/y-
 
 void main() {
-    uint rec = qb.qd[gl_InstanceIndex];
+    // Чанк закодирован в старших битах firstInstance (см. cull.comp QUADBIAS):
+    // gl_InstanceIndex = firstInstance + i. gl_DrawID не используем (нет в glslang).
+    uint chunk = uint(gl_InstanceIndex) / 1048576u;
+    uint quad = uint(gl_InstanceIndex) - chunk * 1048576u;
+    uint rec = qb.qd[quad];
     uint lx = rec & 15u, lz = (rec >> 4) & 15u, ly = (rec >> 8) & 63u;
     uint f = (rec >> 14) & 7u;
     int ax = int(f >> 1);
@@ -55,7 +63,9 @@ void main() {
     ivec3 base = ivec3(int(lx), int(ly), int(lz))
                + (sn > 0 ? n : ivec3(0, 0, 0)) + du * A + dv * B;
 
-    vec4 w = pc.model * vec4(vec3(base), 1.0);
+    // Мир: origin чанка из meta (id чанка — из firstInstance, vis[] не нужен).
+    vec2 org = metas[chunk].origin;
+    vec4 w = vec4(vec3(base) + vec3(org.x, 0.0, org.y), 1.0);
     vPos = w.xyz;
     vNrm = vec3(n); // model только переносы
     // UV мировые как в GL (ось0: z/y; ось1: x/z; ось2: x/y)
