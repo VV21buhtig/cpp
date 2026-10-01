@@ -123,6 +123,7 @@ GameConsole console;
 bool gPaused = false; // пауза игры (ESC): тик стоит, поверх — MC-меню
 bool gInvOpen = false; // креатив-инвентарь (E): ввод в игру закрыт, мир тикает
 int gWheelAcc = 0; // колесо мыши для хотбара (копит scroll_callback, ест игровой цикл)
+double rmlMX = 0.0, rmlMY = 0.0; // последняя позиция мыши для RML (дроп по координатам)
 CVarSys* gCvar = nullptr;
 float lastX = 640.0f, lastY = 360.0f;
 bool  firstMouse = true;
@@ -498,14 +499,7 @@ int main()
             }
         }
         else if (s == "c_cancel") { audio.playUI(); scr = M_SINGLE; }
-        else if (s.compare(0, 3, "ss_") == 0 || s.compare(0, 3, "hh_") == 0) {
-            // Survival-обмен решает game-секция (там модель слотов).
-            bool isHot = s[0] == 'h';
-            int idx = atoi(s.c_str() + 3);
-            int lim = isHot ? 9 : 27;
-            if (idx >= 0 && idx < lim && gRml.onInvClick)
-                gRml.onInvClick(isHot ? 100 + idx : idx);
-        }
+        // Клики по слотам инвентаря — no-op: работает драг (down поднимает, up бросает).
         else if (s.compare(0, 5, "wrow_") == 0) {
             int idx = atoi(s.c_str() + 5);
             std::vector<std::string> ws = listWorlds();
@@ -1271,17 +1265,28 @@ title_screen:
     };
     auto slotAt = [&](int g) -> InvSlot& { return g < 100 ? store[g] : hotbar[g - 100]; };
     syncAllInv(); // старт пустой: иконки спрятаны (как в MC)
-    gRml.onInvClick = [&](int g) {
-        if (lifted < 0) {
-            if (slotAt(g).n > 0) { lifted = g; audio.playUI(); syncAllInv(); }
-        } else if (lifted == g) {
-            lifted = -1; audio.playUI(); syncAllInv();
+    gRml.onInvDown = [&](int g) {
+        if (lifted < 0 && slotAt(g).n > 0) {
+            lifted = g;
+            audio.playUI();
+            gRml.setCarryIcon(itemPng(slotAt(g).id));
+            syncAllInv();
+        }
+    };
+    gRml.onInvUp = [&]() {
+        if (lifted < 0) return;
+        int g = gRml.pickInvSlot(rmlMX, rmlMY);
+        if (g < 0 || g == lifted) {
+            lifted = -1; // мимо или тот же слот — отмена
         } else {
             InvSlot t = slotAt(lifted);
             slotAt(lifted) = slotAt(g);
             slotAt(g) = t;
-            lifted = -1; audio.playUI(); syncAllInv();
+            lifted = -1;
         }
+        audio.playUI();
+        gRml.setCarryIcon(nullptr);
+        syncAllInv();
     };
     int shPackIdx = 0;
     float tickAcc = 0.0f, tod = 0.56f;
@@ -1335,6 +1340,9 @@ title_screen:
         if (esc && !prevEsc) {
             if (gInvOpen) {
                 gInvOpen = false;
+                lifted = -1;
+                gRml.setCarryIcon(nullptr);
+                syncAllInv();
                 audio.playUI();
                 if (!gPaused && !console.open) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                 firstMouse = true;
@@ -1357,6 +1365,7 @@ title_screen:
         bool curE = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
         if (curE && !prevE && !console.open && !gPaused) {
             gInvOpen = !gInvOpen;
+            if (!gInvOpen) { lifted = -1; gRml.setCarryIcon(nullptr); syncAllInv(); }
             audio.playUI();
             glfwSetInputMode(window, GLFW_CURSOR, gInvOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
             firstMouse = true;
@@ -1779,10 +1788,15 @@ title_screen:
         if ((gPaused || gInvOpen) && useRml) {
             double mx, my;
             glfwGetCursorPos(window, &mx, &my);
+            rmlMX = mx; rmlMY = my;
             gRml.mouseMove(mx, my);
             static bool rmlL = false, rmlR = false;
             if (curL != rmlL) { gRml.mouseButton(0, curL); rmlL = curL; }
             if (curR != rmlR) { gRml.mouseButton(1, curR); rmlR = curR; }
+            if (gInvOpen && lifted >= 0) {
+                float d = cvar.get("ui.scale", 1.0f);
+                gRml.moveCarry(mx - 16.0 * d, my - 16.0 * d);
+            }
         } else if (gPaused) {
             int pww, phh;
             glfwGetFramebufferSize(window, &pww, &phh);

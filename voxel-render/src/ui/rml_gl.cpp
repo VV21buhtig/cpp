@@ -154,6 +154,21 @@ public:
             } else if (id == "quit" && gRml.onQuit) gRml.onQuit();
             else if (id.compare(0, 2, "b_") == 0 && gRml.onCycle) gRml.onCycle(id.c_str());
             else if (gRml.onAction) gRml.onAction(id.c_str());
+        } else if (type == "mousedown" || type == "mouseup") {
+            // Драг слотов инвентаря. mouseup может прийти в сам призрак под
+            // курсором — слот резолвит game по координатам (pickInvSlot).
+            int g = -1;
+            if (id.compare(0, 3, "ss_") == 0 || id.compare(0, 3, "hh_") == 0) {
+                bool isHot = id[0] == 'h';
+                int idx = atoi(id.c_str() + 3);
+                int lim = isHot ? 9 : 27;
+                if (idx >= 0 && idx < lim) g = isHot ? 100 + idx : idx;
+            }
+            if (type == "mousedown") {
+                if (g >= 0 && gRml.onInvDown) gRml.onInvDown(g);
+            } else {
+                if (gRml.onInvUp) gRml.onInvUp();
+            }
         } else if (type == "change") {
             auto* fc = static_cast<Rml::ElementFormControl*>(el);
             float v = (float)atof(fc->GetValue().c_str());
@@ -286,6 +301,8 @@ bool RmlUI::init(GLFWwindow* window) {
     invDoc = ctx->LoadDocument("ui/inv.rml");
     if (!invDoc) return false;
     invDoc->AddEventListener("click", &pauseListener);
+    invDoc->AddEventListener("mousedown", &pauseListener);
+    invDoc->AddEventListener("mouseup", &pauseListener);
     invDoc->Hide();
     ok = true;
     return true;
@@ -432,6 +449,46 @@ void RmlUI::setHudIcon(int slot, const char* src) {
         el->SetProperty("display", "inline-block");
         el->SetAttribute("src", Rml::String(src));
     }
+}
+
+void RmlUI::setCarryIcon(const char* src) {
+    if (!ok || !invDoc) return;
+    Rml::Element* el = invDoc->GetElementById("carry");
+    if (!el) return;
+    if (!src || !*src) el->SetProperty("display", "none");
+    else {
+        el->SetProperty("display", "block");
+        el->SetAttribute("src", Rml::String(src));
+    }
+}
+
+void RmlUI::moveCarry(double x, double y) {
+    if (!ok || !invDoc) return;
+    Rml::Element* el = invDoc->GetElementById("carry");
+    if (!el) return;
+    char b[32];
+    snprintf(b, sizeof(b), "%dpx", (int)x);
+    el->SetProperty("left", Rml::String(b));
+    snprintf(b, sizeof(b), "%dpx", (int)y);
+    el->SetProperty("top", Rml::String(b));
+}
+
+int RmlUI::pickInvSlot(double x, double y) {
+    if (!ok || !invDoc) return -1;
+    char id[16];
+    for (int pass = 0; pass < 2; pass++) {
+        int n = pass == 0 ? 27 : 9;
+        for (int i = 0; i < n; i++) {
+            snprintf(id, sizeof(id), pass == 0 ? "ss%d" : "hh%d", i);
+            Rml::Element* el = invDoc->GetElementById(id);
+            if (!el) continue;
+            Rml::Vector2f off = el->GetAbsoluteOffset();
+            float w = el->GetClientWidth(), h = el->GetClientHeight();
+            if (x >= off.x && x < off.x + w && y >= off.y && y < off.y + h)
+                return pass == 0 ? i : 100 + i;
+        }
+    }
+    return -1;
 }
 
 void RmlUI::syncInv(const InvView store[27], const InvView hot[9], int lifted) {

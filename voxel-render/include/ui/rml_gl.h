@@ -56,7 +56,11 @@ struct RmlUI {
     std::function<void(const char* id)> onCycle; // b_dist/b_filter/... кнопки-циклы
     std::function<std::string(const char* id)> getLabel; // текст для кнопок-циклов
     std::function<void(const char* id)> onAction; // прочие клики титульных доков (t_*)
-    std::function<void(int g)> onInvClick; // клик по слоту (swap), назначает game
+    std::function<void(int g)> onInvDown; // mousedown по слоту (поднять)
+    std::function<void()> onInvUp; // mouseup (бросить; слот резолвится по координатам)
+    int pickInvSlot(double x, double y); // хит-тест слотов inv-doc, -1 мимо
+    void setCarryIcon(const char* src); // иконка-призрак (null = спрятать)
+    void moveCarry(double x, double y); // позиция призрака (px экрана)
     void frame(); // Update + Render
 };
 
