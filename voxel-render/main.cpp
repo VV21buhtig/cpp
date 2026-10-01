@@ -1233,10 +1233,15 @@ title_screen:
     bool prev1 = false, prev2 = false, prev3 = false, prev4 = false, prev5 = false;
     bool prev6 = false, prev7 = false, prev8 = false, prev9 = false;
     int hudSlot = 0;
-    // Survival-инвентарь V1 (сессия, в сейв не пишем): 27 хранилище + 9 хотбар.
-    // Слом даёт блок (стак 64), ставка тратит. Старт пустой, как в MC.
+    // Инвентарь V1: простое перемещение блоков хотбар<->хранилище (без counts).
+    // Старт: все 9 в хотбаре. Слом/ставка счётчики не трогают.
     InvSlot store[27];
     InvSlot hotbar[9];
+    {
+        const unsigned char defHot[9] = {B_GRASS, B_DIRT, B_STONE, B_LOG, B_LEAVES,
+                                         B_COAL, B_IRON, B_GOLD, B_DIAMOND};
+        for (int i = 0; i < 9; i++) { hotbar[i].id = defHot[i]; hotbar[i].n = 1; }
+    }
     int lifted = -1; // поднятый стек: -1 нет, 0..26 store, 100+i хотбар
     // id блока -> иконка хотбара/инвентаря (имена файлов ui/items/).
     auto itemPng = [](unsigned char id) -> const char* {        switch (id) {
@@ -1562,20 +1567,6 @@ title_screen:
                 glm::vec3 bp = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
                 audio.playBreakId(bp, broken);
                 touchEdit(wx, wz);
-                if (broken != B_AIR) {
-                    // подобрать: сначала свой стак хотбара, потом хранилище, кап 64
-                    bool put = false;
-                    for (int i = 0; i < 9 && !put; i++)
-                        if (hotbar[i].id == broken && hotbar[i].n < 64) { hotbar[i].n++; put = true; }
-                    for (int i = 0; i < 27 && !put; i++) {
-                        if (store[i].id == broken && store[i].n < 64) { store[i].n++; put = true; }
-                        else if (store[i].n == 0) { store[i].id = broken; store[i].n = 1; put = true; }
-                    }
-                    for (int i = 0; i < 9 && !put; i++)
-                        if (hotbar[i].n == 0) { hotbar[i].id = broken; hotbar[i].n = 1; put = true; }
-                    if (!put) console.print("inventory full\n");
-                    syncAllInv();
-                }
             }
             if (curR && !prevR) {
                 int px = wx + (int)hitN.x, py = wy + (int)hitN.y, pz = wz + (int)hitN.z;
@@ -1584,12 +1575,10 @@ title_screen:
                                  pz + 1 > player.pos.z - player.halfW && pz < player.pos.z + player.halfW);
                 // ставить можно в воздух и во флюид (замена воды/лавы блоком)
                 unsigned char pid = hotbar[hudSlot].id;
-                if (pid != B_AIR && hotbar[hudSlot].n > 0 && !World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
+                if (pid != B_AIR && !World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
                     world->setBlock(px, py, pz, pid);
                     audio.playPlaceId(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f), pid);
                     touchEdit(px, pz);
-                    if (--hotbar[hudSlot].n <= 0) { hotbar[hudSlot].n = 0; hotbar[hudSlot].id = B_AIR; }
-                    syncAllInv();
                 }
             }
         }
