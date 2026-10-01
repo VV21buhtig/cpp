@@ -1572,7 +1572,7 @@ title_screen:
         if (hasHit && !console.open && !gPaused && !gInvOpen) {
             if (curL && !prevL) {
                 unsigned char broken = world->getBlock(wx, wy, wz);
-                world->setBlock(wx, wy, wz, 0);
+                world->editBlock(wx, wy, wz, 0); // + пересвет бокса
                 glm::vec3 bp = worldOffset + glm::vec3(wx + 0.5f, wy + 0.5f, wz + 0.5f);
                 audio.playBreakId(bp, broken);
                 touchEdit(wx, wz);
@@ -1585,7 +1585,7 @@ title_screen:
                 // ставить можно в воздух и во флюид (замена воды/лавы блоком)
                 unsigned char pid = hotbar[hudSlot].id;
                 if (pid != B_AIR && !World::isSolid(world->getBlock(px, py, pz)) && !inPlayer) {
-                    world->setBlock(px, py, pz, pid);
+                    world->editBlock(px, py, pz, pid); // + пересвет бокса
                     audio.playPlaceId(worldOffset + glm::vec3(px + 0.5f, py + 0.5f, pz + 0.5f), pid);
                     touchEdit(px, pz);
                 }

@@ -40,6 +40,17 @@ struct World {
     bool fluidsDirty() const;
     void takeFluidDirty(std::vector<int>& out); // забрать+погасить флаги (для перестройки)
     void setBlock(int wx, int y, int wz, unsigned char v);
+    // Правка игроком: set + инкрементальный пересвет бокса ±16 (свет дальше не ходит).
+    // Генерация/флюиды/лоад зовут сырой setBlock, свет целиком через rebuildLight.
+    void editBlock(int wx, int y, int wz, unsigned char v);
+    // --- Свет baked P1 (engine_light.cpp, идеи Luanti: 2 банка, SUN=15 столбом, -1/воксель)
+    static bool isOpaque(unsigned char id); // solid && !cutout — глушит оба банка
+    int getDay(int wx, int y, int wz) const;   // 0..15, над миром 15, под 0, вне XZ 0
+    int getNight(int wx, int y, int wz) const; // 0..14, эмиссия (лава)
+    void setDay(int wx, int y, int wz, int v);
+    void setNight(int wx, int y, int wz, int v);
+    void rebuildLight(); // полный: колонны солнца + эмиссия + 2 BFS. После init/load.
+    void updateLightAt(int wx, int y, int wz); // бокс ±16: чистка + ресид + BFS в боксе
     // меш одного чанка с учётом соседних чанков (без швов)
     std::vector<float> buildChunk(int cx, int cz) const;
     // флюиды отдельно: waterVerts (tile 4) + lavaVerts (tile 5), только грани к воздуху

@@ -114,6 +114,7 @@ void World::init(int ncx, int ncz, int s) {
         stampTrees(*this, sc.tree);
         stampMines(*this, sc.mine);
     }
+    rebuildLight(); // P1: солнце столбами + эмиссия + BFS (сырой setBlock свет не трогает)
 }
 
 unsigned char World::getBlock(int wx, int y, int wz) const {

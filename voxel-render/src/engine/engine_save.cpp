@@ -70,6 +70,7 @@ bool loadWorld(World& w, const char* path) {
             }
     }
     fclose(f);
+    w.rebuildLight(); // блоки перезаписаны поверх init — свет пересчитать
     return true;
 }
 

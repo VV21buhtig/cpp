@@ -50,6 +50,7 @@ add_library(engine STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_texture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_chunk.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_world.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_light.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_save.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_cvar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/engine_blocks.cpp

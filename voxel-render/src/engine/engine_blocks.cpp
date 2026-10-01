@@ -143,30 +143,30 @@ static BlockSnd parseSnd(const JVal* o, const char* k, BlockSnd dflt) {
 
 static void setDefault(BlockRegistry& r, unsigned char id, const char* name,
                        int tTop, int tSide, int tBottom,
-                       bool solid, bool fluid, bool cutout,
+                       bool solid, bool fluid, bool cutout, unsigned char emit,
                        BlockSnd brk, BlockSnd plc, int step) {
     BlockDef& d = r.defs[id];
     d.id = id;
     snprintf(d.name, sizeof(d.name), "%s", name);
     d.tileTop = tTop; d.tileSide = tSide; d.tileBottom = tBottom;
-    d.solid = solid; d.fluid = fluid; d.cutout = cutout;
+    d.solid = solid; d.fluid = fluid; d.cutout = cutout; d.emit = emit;
     d.brk = brk; d.plc = plc; d.stepSurf = step;
 }
 
 BlockRegistry::BlockRegistry() {
     for (int i = 0; i < 256; i++) { defs[i].id = (unsigned char)i; } // неизвестные: не-solid
-    setDefault(*this, B_AIR, "air", 0, 0, 0, false, false, false, BlockSnd::Dig, BlockSnd::Generic, 0);
-    setDefault(*this, B_GRASS, "grass", 0, 1, 2, true, false, false, BlockSnd::Dig, BlockSnd::Dig, 0);
-    setDefault(*this, B_DIRT, "dirt", 2, 2, 2, true, false, false, BlockSnd::Dig, BlockSnd::Dig, 0);
-    setDefault(*this, B_STONE, "stone", 3, 3, 3, true, false, false, BlockSnd::Stone, BlockSnd::Stone, 1);
-    setDefault(*this, B_LEAVES, "leaves", 6, 6, 6, true, false, true, BlockSnd::Leaves, BlockSnd::Leaves, 0);
-    setDefault(*this, B_LOG, "log", 8, 7, 8, true, false, false, BlockSnd::Wood, BlockSnd::Wood, 0);
-    setDefault(*this, B_WATER, "water", 4, 4, 4, false, true, false, BlockSnd::Dig, BlockSnd::Generic, 0);
-    setDefault(*this, B_LAVA, "lava", 5, 5, 5, false, true, false, BlockSnd::Dig, BlockSnd::Generic, 0);
-    setDefault(*this, B_COAL, "coal_ore", 9, 9, 9, true, false, false, BlockSnd::Stone, BlockSnd::Stone, 1);
-    setDefault(*this, B_IRON, "iron_ore", 10, 10, 10, true, false, false, BlockSnd::Stone, BlockSnd::Stone, 1);
-    setDefault(*this, B_GOLD, "gold_ore", 11, 11, 11, true, false, false, BlockSnd::Stone, BlockSnd::Stone, 1);
-    setDefault(*this, B_DIAMOND, "diamond_ore", 12, 12, 12, true, false, false, BlockSnd::Stone, BlockSnd::Stone, 1);
+    setDefault(*this, B_AIR, "air", 0, 0, 0, false, false, false, 0, BlockSnd::Dig, BlockSnd::Generic, 0);
+    setDefault(*this, B_GRASS, "grass", 0, 1, 2, true, false, false, 0, BlockSnd::Dig, BlockSnd::Dig, 0);
+    setDefault(*this, B_DIRT, "dirt", 2, 2, 2, true, false, false, 0, BlockSnd::Dig, BlockSnd::Dig, 0);
+    setDefault(*this, B_STONE, "stone", 3, 3, 3, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
+    setDefault(*this, B_LEAVES, "leaves", 6, 6, 6, true, false, true, 0, BlockSnd::Leaves, BlockSnd::Leaves, 0);
+    setDefault(*this, B_LOG, "log", 8, 7, 8, true, false, false, 0, BlockSnd::Wood, BlockSnd::Wood, 0);
+    setDefault(*this, B_WATER, "water", 4, 4, 4, false, true, false, 0, BlockSnd::Dig, BlockSnd::Generic, 0);
+    setDefault(*this, B_LAVA, "lava", 5, 5, 5, false, true, false, 14, BlockSnd::Dig, BlockSnd::Generic, 0);
+    setDefault(*this, B_COAL, "coal_ore", 9, 9, 9, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
+    setDefault(*this, B_IRON, "iron_ore", 10, 10, 10, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
+    setDefault(*this, B_GOLD, "gold_ore", 11, 11, 11, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
+    setDefault(*this, B_DIAMOND, "diamond_ore", 12, 12, 12, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
 }
 
 bool BlockRegistry::load(const char* path) {
@@ -208,6 +208,8 @@ bool BlockRegistry::load(const char* path) {
         d.solid = getBool(&it, "solid", d.solid);
         d.fluid = getBool(&it, "fluid", d.fluid);
         d.cutout = getBool(&it, "cutout", d.cutout);
+        d.emit = (unsigned char)getInt(&it, "emit", d.emit);
+        if (d.emit > 14) d.emit = 14;
         d.brk = parseSnd(&it, "break", d.brk);
         if (d.brk == BlockSnd::Generic) d.brk = BlockSnd::Dig;
         d.plc = parseSnd(&it, "place", d.plc);
