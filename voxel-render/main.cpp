@@ -1641,6 +1641,7 @@ title_screen:
         lightingShader.setVec2("fogRange", cvar.get("fog.near", 0.0f), cvar.get("fog.far", 260.0f));
         lightingShader.setFloat("satU", cvar.get("sun.sat", 1.8f));
         lightingShader.setFloat("gammaU", cvar.get("sun.gamma", 1.2f));
+        lightingShader.setFloat("uTime", (float)glfwGetTime()); // фликер факелов
 
         glm::vec3 ambDay = glm::mix(glm::vec3(0.03f, 0.035f, 0.07f), glm::vec3(0.20f), dayF);
         ambDay *= cvar.get("sun.amb", 3.0f);

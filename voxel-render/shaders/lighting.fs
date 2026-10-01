@@ -61,6 +61,7 @@ uniform vec2       fogRange; // near far
 uniform float      satU; // насыщенность из консоли
 uniform float      gammaU; // гамма из консоли
 uniform float      alphaU; // 1.0 opaque, 0.75 вода
+uniform float      uTime; // секунды, фликер факелов (Kaigen torch flicker)
 
 // =========================================================
 //  Функции расчёта для каждого типа света
@@ -151,8 +152,9 @@ void main()
 
     // фейковый воксельный шейдинг граней вместо атласа: верх 1.0, бока 0.7, низ 0.55
     float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.55) : 0.7;
-    // вершинное AO: 3 полный свет, 0 щель
-    float aoC = AO < 0.5 ? 0.45 : (AO < 1.5 ? 0.65 : (AO < 2.5 ? 0.82 : 1.0));
+    // вершинное AO Kaigen-кривой: 0.3+0.7v(0.5+0.5v), щели глубже чем ступенями
+    float aoV = clamp(AO / 3.0, 0.0, 1.0);
+    float aoC = 0.3 + 0.7 * aoV * (0.5 + 0.5 * aoV);
 
     vec4 tileTexA = texture(material.diffuse, vec3(TexCoords, Tile));
     if (Tile > 5.5 && Tile < 6.5 && tileTexA.a < 0.5) discard; // листва с дырками
@@ -166,11 +168,12 @@ void main()
         return;
     }
 
-    // phase 1: directional (солнце) — глушится baked-днём (тени/пещеры/нависание).
-    // 0.12 пол — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
-    float dayF = clamp(Day / 15.0, 0.0, 1.0);
-    float nightF = clamp(Night / 14.0, 0.0, 1.0);
-    vec3 result = CalcDirLight(dirLight, norm, viewDir) * (0.12 + 0.88 * dayF);
+    // phase 1: directional (солнце) — Kaigen sky_curve s²(0.35+0.65s):
+    // линейный день даёт полосатину на greedy-градиентах, кривая давит середины.
+    // Пол 0.10 — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
+    float s = clamp(Day / 15.0, 0.0, 1.0);
+    float skyK = 0.10 + 0.90 * s * s * (0.35 + 0.65 * s);
+    vec3 result = CalcDirLight(dirLight, norm, viewDir) * skyK;
 
     // phase 2: point lights (лампочки)
     for (int i = 0; i < NR_POINT_LIGHTS; i++)
@@ -179,8 +182,11 @@ void main()
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
 
-    // phase 4: baked блочный свет — тёплый (Kaigen torch 1.0/0.66/0.4)
-    result += tileTex * nightF * vec3(1.0, 0.66, 0.4) * 0.6;
+    // phase 4: baked блочный — Kaigen block_curve b^4.6*1.6 + тёплый torch с фликером
+    float b = clamp(Night / 14.0, 0.0, 1.0);
+    float blkK = pow(b, 4.6) * 1.6 + smoothstep(0.0, 6.0, b * 15.0) * 0.006;
+    float flick = 1.0 + 0.06 * sin(uTime * 11.0) + 0.04 * sin(uTime * 6.7 + 1.7);
+    result += tileTex * blkK * vec3(1.0, 0.66, 0.4) * flick;
 
     vec3 shaded = result * fshade * aoC;
     // ядовитость дня и гамма — из консоли (sun.sat/sun.gamma)
