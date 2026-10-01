@@ -49,20 +49,76 @@ void World::init(int ncx, int ncz, int s) {
         float y0v = x00+(x10-x00)*ty, y1v = x01+(x11-x01)*ty;
         return y0v+(y1v-y0v)*tz;
     };
+    // fbm на тех же hash2/hash3+noise (детерминизм тот же): lacunarity 2,
+    // persist — параметр. Возврат нормирован 0..1 (сумма/сумма амплитуд).
+    auto fbm2D = [&](float fx, float fz, int oct, float persist) {
+        float amp = 1.0f, freq = 1.0f, sum = 0.0f, norm = 0.0f;
+        for (int i = 0; i < oct; i++) {
+            sum += amp * noise2(fx * freq, fz * freq);
+            norm += amp;
+            amp *= persist;
+            freq *= 2.0f;
+        }
+        return sum / norm;
+    };
+    auto fbm3D = [&](float fx, float fy, float fz, int oct, float persist) {
+        float amp = 1.0f, freq = 1.0f, sum = 0.0f, norm = 0.0f;
+        for (int i = 0; i < oct; i++) {
+            sum += amp * noise3(fx * freq, fy * freq, fz * freq);
+            norm += amp;
+            amp *= persist;
+            freq *= 2.0f;
+        }
+        return sum / norm;
+    };
     int W = ncx * Chunk::SX, D = ncz * Chunk::SZ;
-    // 1. высота: континенты + холмы + горы по маске
+    // 1. высота по L-схеме (mapgen v7): persist-карта P -> base/alt 5 окт ->
+    // hselect 6 окт -> surface=max(base, mix). Те же единицы, что раньше
+    // (cont*10+hills*6): 8..24 до гор. Горы — 3D-полем выше hi, реки —
+    // вычитанием ниже hi. SEA=20.
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++) {
-            float cont = noise2(wx / 48.0f, wz / 48.0f);                    // континенты
-            float hills = 0.6f * noise2(wx / 11.0f, wz / 11.0f)
-                        + 0.4f * noise2(wx / 5.0f + 13.7f, wz / 5.0f + 7.3f);
-            float mraw = (noise2(wx / 31.0f + 71.0f, wz / 31.0f + 3.0f) - 0.55f) / 0.45f;
-            if (mraw < 0.0f) mraw = 0.0f; if (mraw > 1.0f) mraw = 1.0f;
-            float mount = smooth(mraw); // маска гор 0..1
-            float h = 8.0f + cont * 10.0f + hills * 6.0f + mount * mount * 26.0f;
+            float P = fbm2D(wx / 96.0f, wz / 96.0f, 3, 0.5f); // persist-карта, низкая частота
+            float pers = 0.3f + 0.6f * P;
+            float base = fbm2D(wx / 48.0f, wz / 48.0f, 5, pers);
+            float alt = fbm2D(wx / 48.0f + 37.2f, wz / 48.0f + 11.9f, 5, pers); // другой сид-офсет
+            float hsel = fbm2D(wx / 64.0f + 91.4f, wz / 64.0f + 51.7f, 6, 0.5f);
+            if (hsel < 0.0f) hsel = 0.0f; if (hsel > 1.0f) hsel = 1.0f;
+            float surf = alt * hsel + base * (1.0f - hsel);
+            if (base > surf) surf = base;
+            float h = 8.0f + surf * 16.0f;
             int hi = (int)h;
             if (hi >= Chunk::SY - 1) hi = Chunk::SY - 2;
             for (int y = 0; y <= hi; y++) setBlock(wx, y, wz, B_STONE); // пока камень
+            // 1b. горы 3D-полем: mh=max(поле mountHeight,1);
+            // solid = fbm3D(np_mountain) - (y-8)/mh >= 0, только выше hi.
+            // Склоны крутые без террас (поле 3D, а не 2D-высота). Лимит SY-2.
+            float mraw = (fbm2D(wx / 90.0f + 71.0f, wz / 90.0f + 3.0f, 4, 0.5f) - 0.60f) / 0.20f;
+            if (mraw < 0.0f) mraw = 0.0f; if (mraw > 1.0f) mraw = 1.0f;
+            float mount = smooth(mraw); // маска гор 0..1
+            if (mount > 0.0f) {
+                float mh = 1.0f + mount * 63.0f; // 1..64
+                int cap = 8 + (int)(mh * 0.8f); // выше fbm3D почти не дотягивает — не считаем
+                if (cap > Chunk::SY - 2) cap = Chunk::SY - 2;
+                for (int y = hi + 1; y <= cap; y++) {
+                    float m = fbm3D(wx / 28.0f + 5.0f, y / 20.0f + 9.0f, wz / 28.0f + 1.0f, 4, 0.5f)
+                            - (float)(y - 8) / mh;
+                    if (m >= 0.0f) setBlock(wx, y, wz, B_STONE);
+                }
+            }
+            // 1c. реки-каньоны: uw=|ridge2D-0.5|*2 (0 на русле); где uw<=0.2
+            // вычитаем камень формулой river=nr+(0.2-uw)*((y-SEA+17)/2.5)>=0.6,
+            // nr=fbm3D(ridge3D)*max(y-SEA,0)/7. Только ниже hi (небо не дырявим).
+            float uw = fabsf(fbm2D(wx / 110.0f + 17.3f, wz / 110.0f + 29.1f, 4, 0.5f) - 0.5f) * 2.0f;
+            if (uw <= 0.2f) {
+                for (int y = 3; y <= hi; y++) {
+                    float over = (y > SEA) ? (float)(y - SEA) : 0.0f;
+                    float nr = fbm3D(wx / 16.0f + 51.0f, y / 12.0f + 7.0f, wz / 16.0f + 23.0f,
+                                     3, 0.5f) * over / 7.0f;
+                    float river = nr + (0.2f - uw) * ((float)(y - SEA + 17) / 2.5f);
+                    if (river >= 0.6f) setBlock(wx, y, wz, B_AIR);
+                }
+            }
             // 2. спагетти-пещеры: тонкая зона |n-0.5| (края шума), только ниже поверхности-1
             for (int y = 1; y < hi - 1 && y < Chunk::SY; y++) {
                 float n = 0.55f * noise3(wx / 9.0f, y / 7.0f, wz / 9.0f)
