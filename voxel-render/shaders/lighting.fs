@@ -6,6 +6,8 @@ in vec3 Normal;
 in vec2 TexCoords;
 in float Tile;
 in float AO;
+in float Day;   // P1c baked солнце 0..15
+in float Night; // P1c baked блоки 0..14
 
 // ========== MATERIAL ==========
 struct Material {
@@ -164,8 +166,11 @@ void main()
         return;
     }
 
-    // phase 1: directional (солнце)
-    vec3 result = CalcDirLight(dirLight, norm, viewDir);
+    // phase 1: directional (солнце) — глушится baked-днём (тени/пещеры/нависание).
+    // 0.12 пол — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
+    float dayF = clamp(Day / 15.0, 0.0, 1.0);
+    float nightF = clamp(Night / 14.0, 0.0, 1.0);
+    vec3 result = CalcDirLight(dirLight, norm, viewDir) * (0.12 + 0.88 * dayF);
 
     // phase 2: point lights (лампочки)
     for (int i = 0; i < NR_POINT_LIGHTS; i++)
@@ -173,6 +178,9 @@ void main()
 
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
+
+    // phase 4: baked блочный свет — тёплый (Kaigen torch 1.0/0.66/0.4)
+    result += tileTex * nightF * vec3(1.0, 0.66, 0.4) * 0.6;
 
     vec3 shaded = result * fshade * aoC;
     // ядовитость дня и гамма — из консоли (sun.sat/sun.gamma)

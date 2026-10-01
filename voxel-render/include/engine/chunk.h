@@ -45,7 +45,7 @@ struct Chunk {
     }
 };
 
-// Engine: динамический VAO/VBO чанка (формат pos3+norm3+uv2+tile1+ao1).
+// Engine: динамический VAO/VBO чанка (формат pos3+norm3+uv2+tile1+ao1+day1+night1 = 12).
 class ChunkMesh {
 public:
     unsigned int VAO = 0, VBO = 0;

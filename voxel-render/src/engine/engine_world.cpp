@@ -210,13 +210,16 @@ int World::tickFluids(bool lavaTick) {
 
 std::vector<float> World::buildChunk(int cx, int cz) const {
     // Greedy + вершинное AO (0fps): маска хранит id, слияние равных,
-    // углы семплят соседей, триангуляция с flip по AO. UV мировые (REPEAT).
+    // углы семплят соседей, триангуляция с flip по AO+свету (Kaigen-идея).
+    // Свет угла = среднее day/night по не-opaque из 4 клеток вокруг угла
+    // (Luanti getSmoothLightCombined-идея). UV мировые (REPEAT).
     std::vector<float> out;
-    out.reserve(4096 * 10);
-    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile, float ao) {
+    out.reserve(4096 * 12);
+    auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile, float ao, float day, float night) {
         out.push_back(x); out.push_back(y); out.push_back(z);
         out.push_back(nx); out.push_back(ny); out.push_back(nz);
         out.push_back(u); out.push_back(v); out.push_back(tile); out.push_back(ao);
+        out.push_back(day); out.push_back(night);
     };
     auto tileFor = [](unsigned char id, int axis, int sign) -> float {
         const BlockDef& d = gBlocks.get(id); // тайлы из blocks.json
@@ -272,35 +275,76 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     // AO четырёх углов; a0/b0: клетка снаружи прямоугольника.
                     // Топы идут плоскими (ao=3): иначе градиент через слитый 16-блочный
                     // квад тащит темноту от дальних обрывов на открытое место полосами.
-                    auto cornerAO = [&](int du, int dv) -> float {
-                        if (axis == 1) return 3.0f;
+                    // Свет топов НЕ плоский — иначе не будет теней на земле!
+                    auto cornerCells = [&](int du, int dv, int& ox, int& oy, int& oz,
+                                           int& ax, int& ay, int& az,
+                                           int& bx, int& by, int& bz,
+                                           int& nx, int& ny, int& nz,
+                                           int& gx, int& gy, int& gz) {
                         int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
                         int o = (sign > 0) ? 0 : -1;
-                        int gx, gy, gz, ax, ay, az, bx, by, bz, nx, ny, nz;
                         if (axis == 0)      { gx = wx0 + s + (sign > 0 ? 1 : 0); gy = v + dv; gz = wz0 + u + du;
                                               ax = 0; ay = 0; az = 1; bx = 0; by = 1; bz = 0; nx = 1; ny = 0; nz = 0; }
                         else if (axis == 1) { gx = wx0 + u + du; gy = s + (sign > 0 ? 1 : 0); gz = wz0 + v + dv;
                                               ax = 1; ay = 0; az = 0; bx = 0; by = 0; bz = 1; nx = 0; ny = 1; nz = 0; }
                         else                { gx = wx0 + u + du; gy = v + dv; gz = wz0 + s + (sign > 0 ? 1 : 0);
                                               ax = 1; ay = 0; az = 0; bx = 0; by = 1; bz = 0; nx = 0; ny = 0; nz = 1; }
-                        int s1 = occ(gx + nx*o + ax*a0, gy + ny*o + ay*a0, gz + nz*o + az*a0);
-                        int s2 = occ(gx + nx*o + bx*b0, gy + ny*o + by*b0, gz + nz*o + bz*b0);
-                        int cc = occ(gx + nx*o + ax*a0 + bx*b0, gy + ny*o + ay*a0 + by*b0, gz + nz*o + az*a0 + bz*b0);
+                        ox = nx*o + ax*a0; oy = ny*o + ay*a0; oz = nz*o + az*a0;
+                    };
+                    auto cornerAO = [&](int du, int dv) -> float {
+                        if (axis == 1) return 3.0f;
+                        int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
+                        cornerCells(du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
+                        int a0 = (du == 0) ? -1 : 0, b0 = (dv == 0) ? -1 : 0;
+                        int s1 = occ(gx + ox, gy + oy, gz + oz);
+                        int s2 = occ(gx + nx*((sign > 0) ? 0 : -1) + bx*b0,
+                                     gy + ny*((sign > 0) ? 0 : -1) + by*b0,
+                                     gz + nz*((sign > 0) ? 0 : -1) + bz*b0);
+                        int cc = occ(gx + ox + bx*b0, gy + oy + by*b0, gz + oz + bz*b0);
                         return (s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + cc));
+                    };
+                    // Свет угла: среднее day/night по не-opaque из 4 клеток вокруг
+                    // угла (снаружи-грань + 2 боковые + диагональ). Вода свет
+                    // пропускает (не opaque), камень — нет. Топы тоже семплят!
+                    auto cornerLT = [&](int du, int dv, float& day, float& night) {
+                        int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
+                        cornerCells(du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
+                        (void)ax; (void)ay; (void)az; // уже внутри ox/oy/oz
+                        int o = (sign > 0) ? 0 : -1;
+                        int b0 = (dv == 0) ? -1 : 0;
+                        int px[4] = {gx, gx + ox, gx + nx*o + bx*b0, gx + ox + bx*b0};
+                        int py[4] = {gy, gy + oy, gy + ny*o + by*b0, gy + oy + by*b0};
+                        int pz[4] = {gz, gz + oz, gz + nz*o + bz*b0, gz + oz + bz*b0};
+                        (void)ax; (void)ay; (void)az;
+                        float sd = 0, sn = 0; int cnt = 0;
+                        for (int k = 0; k < 4; k++) {
+                            if (isOpaque(getBlock(px[k], py[k], pz[k]))) continue;
+                            sd += (float)getDay(px[k], py[k], pz[k]);
+                            sn += (float)getNight(px[k], py[k], pz[k]);
+                            cnt++;
+                        }
+                        day = cnt ? sd / cnt : 0.0f;
+                        night = cnt ? sn / cnt : 0.0f;
                     };
                     float a00 = cornerAO(0, 0), a10 = cornerAO(w, 0);
                     float a11 = cornerAO(w, h), a01 = cornerAO(0, h);
-                    auto vert = [&](int du, int dv, float ao) {
+                    float d00, n00, d10, n10, d11, n11, d01, n01;
+                    cornerLT(0, 0, d00, n00); cornerLT(w, 0, d10, n10);
+                    cornerLT(w, h, d11, n11); cornerLT(0, h, d01, n01);
+                    auto vert = [&](int du, int dv, float ao, float day, float night) {
                         float x, y, z, uu, vv;
                         if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
                         else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
                         else                { x = (float)(u + du); y = (float)(v + dv); z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)(v + dv); }
-                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile, ao);
+                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile, ao, day, night);
                     };
-                    // id угла: 0:(0,0) 1:(w,0) 2:(w,h) 3:(0,h); flip по правилу 0fps
-                    bool flip = (a00 + a11 > a01 + a10);
-                    struct C { int du, dv; float ao; };
-                    C c[4] = {{0,0,a00},{w,0,a10},{w,h,a11},{0,h,a01}};
+                    // id угла: 0:(0,0) 1:(w,0) 2:(w,h) 3:(0,h); flip по AO+свету
+                    // (Kaigen-идея: при равном AO решает свет, метрика в единицах AO)
+                    auto met = [](float a, float d, float n) { return a + (d + n) / 29.0f * 3.0f; };
+                    bool flip = (met(a00, d00, n00) + met(a11, d11, n11) >
+                                 met(a01, d01, n01) + met(a10, d10, n10));
+                    struct C { int du, dv; float ao, day, night; };
+                    C c[4] = {{0,0,a00,d00,n00},{w,0,a10,d10,n10},{w,h,a11,d11,n11},{0,h,a01,d01,n01}};
                     int tri[6];
                     if (axis == 2) {
                         if (sign > 0) { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
@@ -309,7 +353,7 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                         if (sign > 0) { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
                         else          { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
                     }
-                    for (int k = 0; k < 6; k++) vert(c[tri[k]].du, c[tri[k]].dv, c[tri[k]].ao);
+                    for (int k = 0; k < 6; k++) vert(c[tri[k]].du, c[tri[k]].dv, c[tri[k]].ao, c[tri[k]].day, c[tri[k]].night);
                 }
         }
     }
@@ -371,6 +415,9 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
         std::vector<float>& out = (id == B_WATER) ? water : lava;
         for (int f = 0; f < 6; f++) {
             if (getBlock(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]) != 0) continue;
+            // свет грани флюида — из воздушной клетки снаружи (пещеры темнеют, верх светлый)
+            float fday = (float)getDay(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]);
+            float fnight = (float)getNight(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]);
             for (int v = 0; v < 6; v++) {
                 float px = F[f][v][0] + x, pz = F[f][v][2] + z;
                 float py = (F[f][v][1] > 0.5f) ? (float)y + lvl : (float)y + F[f][v][1];
@@ -378,6 +425,7 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
                 out.push_back(F[f][v][3]); out.push_back(F[f][v][4]); out.push_back(F[f][v][5]);
                 out.push_back(F[f][v][6]); out.push_back(F[f][v][7]);
                 out.push_back(tile); out.push_back(3.0f);
+                out.push_back(fday); out.push_back(fnight);
             }
         }
     }
