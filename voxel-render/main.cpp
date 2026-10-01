@@ -271,6 +271,7 @@ int main()
     cvar.reg("gfx.filter", 0.0f);
     cvar.reg("gfx.fxaa", 0.0f);
     cvar.reg("shadow.on", 1.0f); // P2a резкие тени от солнца (0 = только baked)
+    cvar.reg("shadow.debug", 0.0f); // P2i просмотр теневой карты в углу (консоль: set shadow.debug 1)
     cvar.reg("ui.rml", 1.0f); // пауза через RmlUi (0 = старый MC-оверлей)
     cvar.reg("ui.scale", 1.0f); // GUI Scale RML: 0.5..4 (как MC мелкий/крупный)
     cvar.reg("snd.vol", 0.8f);
