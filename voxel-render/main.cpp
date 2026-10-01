@@ -250,7 +250,7 @@ int main()
     gCvar = &cvar;
     cvar.reg("sun.i", 1.0f);
     cvar.reg("sun.amb", 3.0f);
-    cvar.reg("sun.sat", 1.8f);
+    cvar.reg("sun.sat", 1.1f); // MC-нейтрально (было 1.8 — экстраполяция хромы рвала градиенты в полосы)
     cvar.reg("sun.gamma", 1.2f);
     cvar.reg("time.speed", 600.0f);
     cvar.reg("fog.near", 0.0f);
@@ -1723,7 +1723,7 @@ title_screen:
             pow(horizonColor.x, 2.2f), pow(horizonColor.y, 2.2f), pow(horizonColor.z, 2.2f));
         lightingShader.setVec3("fogColor", fogLin);
         lightingShader.setVec2("fogRange", cvar.get("fog.near", 0.0f), cvar.get("fog.far", 260.0f));
-        lightingShader.setFloat("satU", cvar.get("sun.sat", 1.8f));
+        lightingShader.setFloat("satU", cvar.get("sun.sat", 1.1f));
         lightingShader.setFloat("gammaU", cvar.get("sun.gamma", 1.2f));
         lightingShader.setFloat("uTime", (float)glfwGetTime()); // фликер факелов
         lightingShader.setMat4("lightSpace", lightSpace); // P2a (единичная ночью — не семплится)
@@ -1738,6 +1738,10 @@ title_screen:
         ambDay *= cvar.get("sun.amb", 3.0f);
         lightingShader.setVec3("dirLight.direction", -sunVec);
         lightingShader.setVec3("dirLight.ambient",   glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f));
+        // P2j hemispheric: зенит — небо (чуть голубее amb), надир — тёплая земля x0.45
+        glm::vec3 ambBase = glm::mix(ambDay, glm::vec3(0.34f, 0.25f, 0.16f), duskF * 0.6f);
+        lightingShader.setVec3("skyAmb", ambBase * glm::vec3(0.9f, 1.0f, 1.15f));
+        lightingShader.setVec3("gndAmb", ambBase * glm::vec3(0.45f, 0.40f, 0.35f));
         lightingShader.setVec3("dirLight.diffuse",   glm::mix(glm::vec3(0.015f), sunCol * (1.7f * cvar.get("sun.i", 1.0f)), sunI));
         lightingShader.setVec3("dirLight.specular",  glm::mix(glm::vec3(0.01f), sunCol * 0.3f, sunI));
 
