@@ -16,7 +16,7 @@ uniform vec2 shadowTexel;    // 1/размер карты
 
 // P2b PCF 2x2 Kaigen-стиль + slope-scaled bias (у них PCSS/bias от наклона):
 // на скользящих лучах глубина гуляет — bias растёт, acne давится ценой микроподтека.
-float calcShadow(vec4 sp, vec3 norm, vec3 sunDir)
+float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos)
 {
     vec3 p = sp.xyz / sp.w * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
@@ -33,7 +33,11 @@ float calcShadow(vec4 sp, vec3 norm, vec3 sunDir)
     float gFade = smoothstep(0.0, 0.2, ndl);
     float eFade = smoothstep(0.0, 0.05, p.x) * smoothstep(1.0, 0.95, p.x) *
                   smoothstep(0.0, 0.05, p.y) * smoothstep(1.0, 0.95, p.y);
-    return mix(1.0, s, gFade * eFade);
+    // P2e фейд по дистанции: тексель 7см издалека < пикселя → муар-пятна на склонах,
+    // вблизи чисто. Дальше 60м только baked (как у всех: резкость лишь рядом).
+    float cd = length(camPos - FragPos);
+    float dFade = 1.0 - smoothstep(25.0, 60.0, cd);
+    return mix(1.0, s, gFade * eFade * dFade);
 }
 
 // ========== MATERIAL ==========
@@ -207,7 +211,7 @@ void main()
     vec3 sunAmb = dirLight.ambient * tileTex;
     vec3 sunDirect = sunFull - sunAmb;
     vec3 sunDirW = normalize(-dirLight.direction);
-    float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW) : 1.0;
+    float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW, viewPos) : 1.0;
     // P2d вода резких теней не принимает — только мягкий baked (Kaigen: у воды
     // своя карта каустики, opaque-тени ей не положены). Тень горы на дне видна
     // сквозь alpha — этого достаточно и без акне-полос на глади.
