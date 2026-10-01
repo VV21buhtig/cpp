@@ -183,9 +183,10 @@ void main()
 
     // фейковый воксельный шейдинг граней вместо атласа: верх 1.0, бока 0.7, низ 0.55
     float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.55) : 0.7;
-    // вершинное AO Kaigen-кривой: 0.3+0.7v(0.5+0.5v), щели глубже чем ступенями
+    // вершинное AO MC-мягкое: пол 0.5 (было Kaigen 0.3 — давало 3.3x перепад
+    // между соседними колонками ступеней, читалось как полосы-каша).
     float aoV = clamp(AO / 3.0, 0.0, 1.0);
-    float aoC = 0.3 + 0.7 * aoV * (0.5 + 0.5 * aoV);
+    float aoC = 0.5 + 0.5 * aoV * aoV;
 
     vec4 tileTexA = texture(material.diffuse, vec3(TexCoords, Tile));
     if (Tile > 5.5 && Tile < 6.5 && tileTexA.a < 0.5) discard; // листва с дырками
