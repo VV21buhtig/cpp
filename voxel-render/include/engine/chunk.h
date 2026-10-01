@@ -7,7 +7,7 @@
 // Мешим только видимые грани (CCW).
 struct Chunk {
     static const int SX = 16, SY = 64, SZ = 16;
-    // Свет baked (P1, Luanti-идея): младшие 4 бита = день (солнце), старшие = ночь (блок).
+    // Свет baked (P1, L-идея): младшие 4 бита = день (солнце), старшие = ночь (блок).
     // SUN=15 идёт столбом вниз, остальное flood fill -1/воксель. В solid всегда 0.
     static const int LIGHT_MAX = 14, LIGHT_SUN = 15;
     unsigned char blocks[SX * SY * SZ] = {};

@@ -30,7 +30,7 @@ void main()
     AO        = aAO;
     Day       = aDay;
     Night     = aNight;
-    // normal-offset от acne (Luanti-идея: bias в вершинном по нормали)
+    // normal-offset от acne (L-идея: bias в вершинном по нормали)
     ShadowPos = lightSpace * model * vec4(aPos + aNormal * 0.03, 1.0);
 
     gl_Position = projection * view * vec4(FragPos, 1.0);

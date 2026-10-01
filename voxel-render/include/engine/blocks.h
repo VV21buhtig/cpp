@@ -24,7 +24,7 @@ struct BlockDef {
     bool solid = false;   // коллизии, пик, мешинг
     bool fluid = false;   // вода/лава (особый тик и рендер)
     bool cutout = false;  // листва: не закрывает чужие грани
-    unsigned char emit = 0; // 0..14 блочный свет (лава 14), Luanti light_source
+    unsigned char emit = 0; // 0..14 блочный свет (лава 14), L light_source
     BlockSnd brk = BlockSnd::Dig;
     BlockSnd plc = BlockSnd::Generic;
     int stepSurf = 0; // 0 трава 1 камень (см. playStep)

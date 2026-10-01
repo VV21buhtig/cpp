@@ -43,7 +43,7 @@ struct World {
     // Правка игроком: set + инкрементальный пересвет бокса ±16 (свет дальше не ходит).
     // Генерация/флюиды/лоад зовут сырой setBlock, свет целиком через rebuildLight.
     void editBlock(int wx, int y, int wz, unsigned char v);
-    // --- Свет baked P1 (engine_light.cpp, идеи Luanti: 2 банка, SUN=15 столбом, -1/воксель)
+    // --- Свет baked P1 (engine_light.cpp, идеи L: 2 банка, SUN=15 столбом, -1/воксель)
     static bool isOpaque(unsigned char id); // solid && !cutout — глушит оба банка
     int getDay(int wx, int y, int wz) const;   // 0..15, над миром 15, под 0, вне XZ 0
     int getNight(int wx, int y, int wz) const; // 0..14, эмиссия (лава)

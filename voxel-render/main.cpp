@@ -1587,7 +1587,7 @@ title_screen:
         glm::mat4 lightSpace(1.0f);
         if (shadowOn) {
             ensureShadow();
-            // P2c Kaigen-рецепт стабильности: (1) квантованное солнце для теней —
+            // P2c K-рецепт стабильности: (1) квантованное солнце для теней —
             // непрерывный tod ползёт и тянет тексели даже стоя на месте;
             // (2) снап центра в LIGHT-space (мир-xz снап не держит сетку при поворотах).
             float todQ = floor(tod * 1024.0f + 0.5f) / 1024.0f;
@@ -1910,7 +1910,7 @@ title_screen:
             static bool rmlL = false, rmlR = false;
             if (curL != rmlL) { gRml.mouseButton(0, curL); rmlL = curL; }
             if (curR != rmlR) { gRml.mouseButton(1, curR); rmlR = curR; }
-            // Драг слотов опросом краёв (как Luanti application-side):
+            // Драг слотов опросом краёв (как L application-side):
             // RmlUi-mousedown ненадёжен (Focus-gate), а опрос curL доказан игрой.
             static bool invL = false;
             if (gInvOpen && useRml) {
