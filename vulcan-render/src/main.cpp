@@ -390,7 +390,23 @@ int main(int argc, char** argv) {
             memcpy(&all[i * T * T * 4], d, T * T * 4);
             stbi_image_free(d);
         }
-        // Ваниль уже цветная (grass_top/листва зелёные) — тинты НЕ печём.
+        // Ванильные grass_top/листва/вода — ч/б + биомный тинт (как в MC).
+        // Печём plains-тинты сразу: трава #91BD59, листва #77AB2F, вода #3F76E4.
+        for (int p = 0; p < T * T; p++) {
+            all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 145 / 255);
+            all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 189 / 255);
+            all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 89 / 255);
+        }
+        for (int p = 6 * T * T; p < 7 * T * T; p++) {
+            all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 119 / 255);
+            all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 171 / 255);
+            all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 47 / 255);
+        }
+        for (int p = 4 * T * T; p < 5 * T * T; p++) {
+            all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 63 / 255);
+            all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 118 / 255);
+            all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 228 / 255);
+        }
         VkDeviceSize upSize = all.size();
         VkBuffer staging;
         VmaAllocation stagingAlloc;
