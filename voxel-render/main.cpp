@@ -1584,15 +1584,24 @@ title_screen:
         glm::mat4 lightSpace(1.0f);
         if (shadowOn) {
             ensureShadow();
-            // орто-бокс 140 вокруг игрока, центр снапнут к текелю (меньше шиммера)
+            // P2c Kaigen-рецепт стабильности: (1) квантованное солнце для теней —
+            // непрерывный tod ползёт и тянет тексели даже стоя на месте;
+            // (2) снап центра в LIGHT-space (мир-xz снап не держит сетку при поворотах).
+            float todQ = floor(tod * 1024.0f + 0.5f) / 1024.0f;
+            glm::vec3 sunQ = glm::normalize(glm::vec3(cos(todQ), sin(todQ), 0.35f));
             const float SE = 70.0f;
             float texel = 2.0f * SE / (float)SHADOW_S;
+            glm::vec3 L = sunQ;
+            glm::vec3 up0 = fabs(L.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+            glm::vec3 xx = glm::normalize(glm::cross(up0, L));
+            glm::vec3 yx = glm::cross(L, xx);
             glm::vec3 center = worldOffset + player.pos;
-            center.x = floor(center.x / texel) * texel;
-            center.z = floor(center.z / texel) * texel;
-            glm::vec3 up = fabs(sunVec.y) > 0.99f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+            float lx = glm::dot(center, xx), ly = glm::dot(center, yx), lz = glm::dot(center, L);
+            lx = floor(lx / texel + 0.5f) * texel;
+            ly = floor(ly / texel + 0.5f) * texel;
+            center = xx * lx + yx * ly + L * lz;
             lightSpace = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
-                         glm::lookAt(center, center + sunVec, up);
+                         glm::lookAt(center, center + L, yx);
             glViewport(0, 0, SHADOW_S, SHADOW_S);
             glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
             glClear(GL_DEPTH_BUFFER_BIT);

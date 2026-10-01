@@ -27,7 +27,13 @@ float calcShadow(vec4 sp, vec3 norm, vec3 sunDir)
     s += step(p.z - bias, texture(shadowMap, p.xy + vec2( 0.5, -0.5) * shadowTexel).r);
     s += step(p.z - bias, texture(shadowMap, p.xy + vec2(-0.5,  0.5) * shadowTexel).r);
     s += step(p.z - bias, texture(shadowMap, p.xy + vec2( 0.5,  0.5) * shadowTexel).r);
-    return s * 0.25;
+    s *= 0.25;
+    // P2c фейды: скользящие лучи (вода/полосы!) и край бокса — только мягкий baked.
+    // Иначе acne-дребезг на грани порога мигает от любого движения камеры.
+    float gFade = smoothstep(0.0, 0.2, ndl);
+    float eFade = smoothstep(0.0, 0.05, p.x) * smoothstep(1.0, 0.95, p.x) *
+                  smoothstep(0.0, 0.05, p.y) * smoothstep(1.0, 0.95, p.y);
+    return mix(1.0, s, gFade * eFade);
 }
 
 // ========== MATERIAL ==========
