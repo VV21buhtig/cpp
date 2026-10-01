@@ -210,9 +210,9 @@ int World::tickFluids(bool lavaTick) {
 
 std::vector<float> World::buildChunk(int cx, int cz) const {
     // Greedy + вершинное AO (0fps): маска хранит id, слияние равных,
-    // углы семплят соседей, триангуляция с flip по AO+свету (Kaigen-идея).
+    // углы семплят соседей, триангуляция с flip по AO+свету (K-идея).
     // Свет угла = среднее day/night по не-opaque из 4 клеток вокруг угла
-    // (Luanti getSmoothLightCombined-идея). UV мировые (REPEAT).
+    // (L getSmoothLightCombined-идея). UV мировые (REPEAT).
     std::vector<float> out;
     out.reserve(4096 * 12);
     auto pushV = [&](float x, float y, float z, float nx, float ny, float nz, float u, float v, float tile, float ao, float day, float night) {
@@ -241,8 +241,7 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
         int ns = (axis == 1) ? Chunk::SY : S;
         for (int s = 0; s < ns; s++) {
             int NU = S, NV = (axis == 1) ? S : Chunk::SY;
-            // Угловые пробы от (cu,cv)-клетки: та же математика для ключей маски
-            // одиночных клеток и для углов слитого квада (детерминирована позицией).
+            // Угловые пробы AO (флуда нет — cornerLT удалён).
             auto cornerCells = [&](int cu, int cv, int du, int dv, int& ox, int& oy, int& oz,
                                    int& ax, int& ay, int& az,
                                    int& bx, int& by, int& bz,
@@ -269,27 +268,6 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                 int cc = occ(gx + ox + bx*b0, gy + oy + by*b0, gz + oz + bz*b0);
                 return (s1 && s2) ? 0.0f : (float)(3 - (s1 + s2 + cc));
             };
-            // Свет угла: среднее day/night по не-opaque из 4 клеток вокруг угла.
-            // Топы тоже семплят (иначе не будет теней на земле)!
-            auto cornerLT = [&](int cu, int cv, int du, int dv, float& day, float& night) {
-                int ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz;
-                cornerCells(cu, cv, du, dv, ox, oy, oz, ax, ay, az, bx, by, bz, nx, ny, nz, gx, gy, gz);
-                (void)ax; (void)ay; (void)az; // уже внутри ox/oy/oz
-                int o = (sign > 0) ? 0 : -1;
-                int b0 = (dv == 0) ? -1 : 0;
-                int px[4] = {gx, gx + ox, gx + nx*o + bx*b0, gx + ox + bx*b0};
-                int py[4] = {gy, gy + oy, gy + ny*o + by*b0, gy + oy + by*b0};
-                int pz[4] = {gz, gz + oz, gz + nz*o + bz*b0, gz + oz + bz*b0};
-                float sd = 0, sn = 0; int cnt = 0;
-                for (int k = 0; k < 4; k++) {
-                    if (isOpaque(getBlock(px[k], py[k], pz[k]))) continue;
-                    sd += (float)getDay(px[k], py[k], pz[k]);
-                    sn += (float)getNight(px[k], py[k], pz[k]);
-                    cnt++;
-                }
-                day = cnt ? sd / cnt : 0.0f;
-                night = cnt ? sn / cnt : 0.0f;
-            };
             MQ mask[64][16] = {};
             for (int v = 0; v < NV; v++)
                 for (int u = 0; u < NU; u++) {
@@ -308,13 +286,9 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     if (!(dd.solid && !oOpaque)) continue;
                     MQ q; q.id = id;
                     const int DUs[4] = {0, 1, 1, 0}, DVs[4] = {0, 0, 1, 1};
-                    for (int k = 0; k < 4; k++) {
+                    // Флуда нет (решение): в ключе только id+AO. d/n поля нули.
+                    for (int k = 0; k < 4; k++)
                         q.ao[k] = (unsigned char)cornerAO(u, v, DUs[k], DVs[k]);
-                        float fd, fn;
-                        cornerLT(u, v, DUs[k], DVs[k], fd, fn);
-                        q.d[k] = (unsigned char)(fd + 0.5f);
-                        q.n[k] = (unsigned char)(fn + 0.5f);
-                    }
                     mask[v][u] = q;
                 }
             bool done[64][16] = {};
@@ -336,26 +310,20 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                     float N[3] = {0, 0, 0};
                     N[axis] = (float)sign;
                     float tile = tileFor(q0.id, axis, sign);
-                    // Углы слитого квада — те же пробы (детерминированы позицией угла).
+                    // Углы слитого квада — те же пробы. day/night константы (флуда нет).
                     float a00 = cornerAO(u, v, 0, 0), a10 = cornerAO(u, v, w, 0);
                     float a11 = cornerAO(u, v, w, h), a01 = cornerAO(u, v, 0, h);
-                    float d00, n00, d10, n10, d11, n11, d01, n01;
-                    cornerLT(u, v, 0, 0, d00, n00); cornerLT(u, v, w, 0, d10, n10);
-                    cornerLT(u, v, w, h, d11, n11); cornerLT(u, v, 0, h, d01, n01);
-                    auto vert = [&](int du, int dv, float ao, float day, float night) {
+                    auto vert = [&](int du, int dv, float ao) {
                         float x, y, z, uu, vv;
                         if (axis == 0)      { x = (float)(s + (sign > 0 ? 1 : 0)); y = (float)(v + dv); z = (float)(u + du); uu = (float)(wz0 + u + du); vv = (float)(v + dv); }
                         else if (axis == 1) { x = (float)(u + du); y = (float)(s + (sign > 0 ? 1 : 0)); z = (float)(v + dv); uu = (float)(wx0 + u + du); vv = (float)(wz0 + v + dv); }
                         else                { x = (float)(u + du); y = (float)(v + dv); z = (float)(s + (sign > 0 ? 1 : 0)); uu = (float)(wx0 + u + du); vv = (float)(v + dv); }
-                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile, ao, day, night);
+                        pushV(x, y, z, N[0], N[1], N[2], uu, vv, tile, ao, 15.0f, 0.0f);
                     };
-                    // id угла: 0:(0,0) 1:(w,0) 2:(w,h) 3:(0,h); flip по AO+свету
-                    // (Kaigen-идея: при равном AO решает свет, метрика в единицах AO)
-                    auto met = [](float a, float d, float n) { return a + (d + n) / 29.0f * 3.0f; };
-                    bool flip = (met(a00, d00, n00) + met(a11, d11, n11) >
-                                 met(a01, d01, n01) + met(a10, d10, n10));
-                    struct C { int du, dv; float ao, day, night; };
-                    C c[4] = {{0,0,a00,d00,n00},{w,0,a10,d10,n10},{w,h,a11,d11,n11},{0,h,a01,d01,n01}};
+                    // id угла: 0:(0,0) 1:(w,0) 2:(w,h) 3:(0,h); flip по AO (флуда нет).
+                    bool flip = (a00 + a11 > a01 + a10);
+                    struct C { int du, dv; float ao; };
+                    C c[4] = {{0,0,a00},{w,0,a10},{w,h,a11},{0,h,a01}};
                     int tri[6];
                     if (axis == 2) {
                         if (sign > 0) { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
@@ -364,7 +332,7 @@ std::vector<float> World::buildChunk(int cx, int cz) const {
                         if (sign > 0) { if (!flip) { int t[6]={0,2,1, 0,3,2}; memcpy(tri,t,sizeof t); } else { int t[6]={1,3,2, 1,0,3}; memcpy(tri,t,sizeof t); } }
                         else          { if (!flip) { int t[6]={0,1,2, 0,2,3}; memcpy(tri,t,sizeof t); } else { int t[6]={1,2,3, 1,3,0}; memcpy(tri,t,sizeof t); } }
                     }
-                    for (int k = 0; k < 6; k++) vert(c[tri[k]].du, c[tri[k]].dv, c[tri[k]].ao, c[tri[k]].day, c[tri[k]].night);
+                    for (int k = 0; k < 6; k++) vert(c[tri[k]].du, c[tri[k]].dv, c[tri[k]].ao);
                 }
         }
     }
@@ -426,9 +394,8 @@ void World::buildFluids(int cx, int cz, std::vector<float>& water, std::vector<f
         std::vector<float>& out = (id == B_WATER) ? water : lava;
         for (int f = 0; f < 6; f++) {
             if (getBlock(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]) != 0) continue;
-            // свет грани флюида — из воздушной клетки снаружи (пещеры темнеют, верх светлый)
-            float fday = (float)getDay(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]);
-            float fnight = (float)getNight(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]);
+            // Флуда нет: константы (страйд 12 тот же, ChunkMesh не трогаем).
+            float fday = 15.0f, fnight = 0.0f;
             for (int v = 0; v < 6; v++) {
                 float px = F[f][v][0] + x, pz = F[f][v][2] + z;
                 float py = (F[f][v][1] > 0.5f) ? (float)y + lvl : (float)y + F[f][v][1];

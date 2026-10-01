@@ -6,15 +6,13 @@ in vec3 Normal;
 in vec2 TexCoords;
 in float Tile;
 in float AO;
-in float Day;   // P1c baked солнце 0..15
-in float Night; // P1c baked блоки 0..14
-in vec4 ShadowPos; // P2a
+in vec4 ShadowPos; // карта спит (shadow.on=0), varying живёт до времён
 
 uniform sampler2D shadowMap; // P2a карта глубины от солнца
 uniform float shadowOn;      // 0 ночью/выкл — тени не считать
 uniform vec2 shadowTexel;    // 1/размер карты
 
-// P2b PCF 2x2 Kaigen-стиль + slope-scaled bias (у них PCSS/bias от наклона):
+// P2b PCF 2x2 K-стиль + slope-scaled bias (у них PCSS/bias от наклона):
 // на скользящих лучах глубина гуляет — bias растёт, acne давится ценой микроподтека.
 float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos)
 {
@@ -92,7 +90,7 @@ uniform vec2       fogRange; // near far
 uniform float      satU; // насыщенность из консоли
 uniform float      gammaU; // гамма из консоли
 uniform float      alphaU; // 1.0 opaque, 0.75 вода
-uniform float      uTime; // секунды, фликер факелов (Kaigen torch flicker)
+uniform float      uTime; // секунды, фликер факелов (K torch flicker)
 uniform vec3       skyAmb; // P2j небесный ambient (зенит): день голубой, ночь тёмный
 uniform vec3       gndAmb; // P2j земной ambient (отскок вниз): тёплый тёмный
 
@@ -190,7 +188,7 @@ void main()
     // контраст не гуляет с азимутом солнца (было 0.7 всем бокам + wrap).
     float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.5)
                                      : (abs(norm.x) > abs(norm.z) ? 0.6 : 0.8);
-    // вершинное AO MC-мягкое: пол 0.5 (было Kaigen 0.3 — давало 3.3x перепад
+    // вершинное AO MC-мягкое: пол 0.5 (было K 0.3 — давало 3.3x перепад
     // между соседними колонками ступеней, читалось как полосы-каша).
     float aoV = clamp(AO / 3.0, 0.0, 1.0);
     float aoC = 0.5 + 0.5 * aoV * aoV;
@@ -207,24 +205,15 @@ void main()
         return;
     }
 
-    // phase 1: directional (солнце) — Kaigen sky_curve s²(0.35+0.65s):
-    // линейный день даёт полосатину на greedy-градиентах, кривая давит середины.
-    // Пол 0.10 — щель не кромешная. Динамика (лампы/фонарь) ниже — без глушения.
-    float s = clamp(Day / 15.0, 0.0, 1.0);
-    float skyK = 0.10 + 0.90 * s * s * (0.35 + 0.65 * s);
-    // P2b резкая тень множит ТОЛЬКО прямой свет (diffuse+specular).
-    // Ambient идёт мимо — как у Luanti/Kaigen, иначе в тени кромешная чернота.
-    // Мягкий baked остаётся — двойной тени нет, есть мягкая + резкая.
+    // phase 1: directional (солнце). Флуда нет: ambient+direct полностью.
+    // Карта теней припаркована (shadow.on=0): sh всегда 1, код спит до времён.
     vec3 sunFull = CalcDirLight(dirLight, norm, viewDir);
     vec3 sunAmb = mix(gndAmb, skyAmb, norm.y * 0.5 + 0.5) * tileTex; // тот же hemispheric
     vec3 sunDirect = sunFull - sunAmb;
     vec3 sunDirW = normalize(-dirLight.direction);
     float sh = (shadowOn > 0.5) ? calcShadow(ShadowPos, norm, sunDirW, viewPos) : 1.0;
-    // P2d вода резких теней не принимает — только мягкий baked (Kaigen: у воды
-    // своя карта каустики, opaque-тени ей не положены). Тень горы на дне видна
-    // сквозь alpha — этого достаточно и без акне-полос на глади.
     if (Tile > 3.5 && Tile < 4.5) sh = 1.0;
-    vec3 result = sunAmb * skyK + sunDirect * skyK * sh;
+    vec3 result = sunAmb + sunDirect * sh;
 
     // phase 2: point lights (лампочки)
     for (int i = 0; i < NR_POINT_LIGHTS; i++)
@@ -232,12 +221,6 @@ void main()
 
     // phase 3: spot (фонарик)
     result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
-
-    // phase 4: baked блочный — Kaigen block_curve b^4.6*1.6 + тёплый torch с фликером
-    float b = clamp(Night / 14.0, 0.0, 1.0);
-    float blkK = pow(b, 4.6) * 1.6 + smoothstep(0.0, 6.0, b * 15.0) * 0.006;
-    float flick = 1.0 + 0.06 * sin(uTime * 11.0) + 0.04 * sin(uTime * 6.7 + 1.7);
-    result += tileTex * blkK * vec3(1.0, 0.66, 0.4) * flick;
 
     vec3 shaded = result * fshade * aoC;
     // ядовитость дня и гамма — из консоли (sun.sat/sun.gamma)
