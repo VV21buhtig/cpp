@@ -53,10 +53,6 @@
 }
 .islot:hover { border-color: #ffffff; }
 .islot.lift { border-color: #ffffa0; }
-#invhint {
-    color: #404040;
-    text-align: center;
-}
 #carry {
     position: absolute;
     width: 32dp;

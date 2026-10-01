@@ -62,6 +62,7 @@ struct RmlUI {
     void setCarryIcon(const char* src); // иконка-призрак (null = спрятать)
     void moveCarry(double x, double y); // позиция призрака (px экрана)
     void frame(); // Update + Render
+    void* debugCtx(); // тестовый доступ к Rml::Context*
 };
 
 extern RmlUI gRml;

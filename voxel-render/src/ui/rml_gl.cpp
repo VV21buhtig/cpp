@@ -133,9 +133,12 @@ public:
     void ProcessEvent(Rml::Event& ev) override {
         Rml::Element* el = ev.GetTargetElement();
         if (!el) return;
-        // Клик мог прийти во вложенный img/span: поднимаемся к именованному предку.
+        // Цель может быть вложенной иконкой/текстом (img/span без своих действий):
+        // поднимаемся к ближайшему именованному div/button/input.
         Rml::String id;
         for (Rml::Element* e = el; e; e = e->GetParentNode()) {
+            Rml::String tag = e->GetTagName();
+            if (tag == "img" || tag == "span") continue;
             id = e->GetId();
             if (!id.empty()) break;
         }
@@ -734,6 +737,8 @@ void RmlUI::dump() {
     dumpDoc("hud", hudDoc);
     dumpDoc("inv", invDoc);
 }
+
+void* RmlUI::debugCtx() { return (void*)ctx; }
 
 void gRmlScroll(double, double y) { gRml.mouseWheel(y); }
 void gRmlKey(int key, int action, int mods) {
