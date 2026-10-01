@@ -158,14 +158,16 @@ public:
             else if (id.compare(0, 2, "b_") == 0 && gRml.onCycle) gRml.onCycle(id.c_str());
             else if (gRml.onAction) gRml.onAction(id.c_str());
         } else if (type == "mousedown" || type == "mouseup") {
-            // Драг слотов инвентаря. mouseup может прийти в сам призрак под
-            // курсором — слот резолвит game по координатам (pickInvSlot).
+            // Слоты: ss0..ss26, hh0..hh8 (БЕЗ подчёркивания после ss/hh!).
             int g = -1;
-            if (id.compare(0, 3, "ss_") == 0 || id.compare(0, 3, "hh_") == 0) {
-                bool isHot = id[0] == 'h';
-                int idx = atoi(id.c_str() + 3);
-                int lim = isHot ? 9 : 27;
-                if (idx >= 0 && idx < lim) g = isHot ? 100 + idx : idx;
+            if (id.size() > 2 && id[2] >= '0' && id[2] <= '9') {
+                if (id.compare(0, 2, "ss") == 0) {
+                    int idx = atoi(id.c_str() + 2);
+                    if (idx >= 0 && idx < 27) g = idx;
+                } else if (id.compare(0, 2, "hh") == 0) {
+                    int idx = atoi(id.c_str() + 2);
+                    if (idx >= 0 && idx < 9) g = 100 + idx;
+                }
             }
             if (type == "mousedown") {
                 if (g >= 0 && gRml.onInvDown) gRml.onInvDown(g);
@@ -478,6 +480,7 @@ void RmlUI::moveCarry(double x, double y) {
 
 int RmlUI::pickInvSlot(double x, double y) {
     if (!ok || !invDoc) return -1;
+    // GetAbsoluteOffset/ClientWidth уже в px устройства — как и мышь. Без dp-конверсии!
     char id[16];
     for (int pass = 0; pass < 2; pass++) {
         int n = pass == 0 ? 27 : 9;

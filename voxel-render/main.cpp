@@ -1793,6 +1793,19 @@ title_screen:
             static bool rmlL = false, rmlR = false;
             if (curL != rmlL) { gRml.mouseButton(0, curL); rmlL = curL; }
             if (curR != rmlR) { gRml.mouseButton(1, curR); rmlR = curR; }
+            // Драг слотов опросом краёв (как Luanti application-side):
+            // RmlUi-mousedown ненадёжен (Focus-gate), а опрос curL доказан игрой.
+            static bool invL = false;
+            if (gInvOpen && useRml) {
+                if (curL && !invL) {
+                    int g = gRml.pickInvSlot(mx, my);
+                    if (g >= 0 && gRml.onInvDown) gRml.onInvDown(g);
+                }
+                if (!curL && invL) {
+                    if (gRml.onInvUp) gRml.onInvUp();
+                }
+                invL = curL;
+            } else invL = curL;
             if (gInvOpen && lifted >= 0) {
                 float d = cvar.get("ui.scale", 1.0f);
                 gRml.moveCarry(mx - 16.0 * d, my - 16.0 * d);
