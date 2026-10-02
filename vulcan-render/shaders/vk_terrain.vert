@@ -19,13 +19,14 @@ struct ChunkMeta { uint quadOff; uint quadCount; vec2 origin; };
 layout(set = 0, binding = 3) readonly buffer MetaB { ChunkMeta metas[]; };
 layout(set = 0, binding = 4) readonly buffer VisB { uint vis[]; };
 
-layout(push_constant) uniform Push { mat4 model; } pc;
+layout(push_constant) uniform Push { mat4 lightSpace; } pc;
 
 layout(location = 0) out vec3 vPos;
 layout(location = 1) out vec3 vNrm;
 layout(location = 2) out vec2 vUV;
 layout(location = 3) out float vTile;
 layout(location = 4) out float vAO;
+layout(location = 5) out vec4 vShadow;
 
 // Углы квада (те же c[4] что в мешере): 0:(0,0) 1:(1,0) 2:(1,1) 3:(0,1).
 // Таблицы обхода — дословно winding из GL-теста: [case][flip][6],
@@ -74,5 +75,6 @@ void main() {
     else vUV = vec2(w.x, w.y);
     vTile = float(tile);
     vAO = float((ao4 >> uint(2 * ci)) & 3u);
+    vShadow = pc.lightSpace * w; // координаты в карте теней (scale/bias в матрице)
     gl_Position = frame.viewProj * w;
 }
