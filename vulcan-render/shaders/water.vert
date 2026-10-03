@@ -32,14 +32,16 @@ const int TRW[24] = int[24](
     0,1,2, 0,2,3);
 
 void main() {
-    uint rec = qb.qd[gl_InstanceIndex];
+    // gl_InstanceIndex = firstInstance + i (chunk*BIAS + локальный оффсет).
+    uint chunk = uint(gl_InstanceIndex) / 1048576u;
+    uint quad = uint(gl_InstanceIndex) - chunk * 1048576u;
+    uint rec = qb.qd[quad];
     uint lx = rec & 15u, lz = (rec >> 4) & 15u, ly = (rec >> 8) & 63u;
     uint f = (rec >> 14) & 7u;
     int ax = int(f >> 1);
     int sn = ((f & 1u) == 0u) ? 1 : -1;
     float lvl = float((rec >> 17) & 15u) / 8.0;
     uint ao4 = (rec >> 21) & 255u;
-    uint chunk = uint(gl_InstanceIndex) / 1048576u;
 
     int cs = (ax == 2) ? (sn > 0 ? 0 : 1) : (sn > 0 ? 2 : 3);
     int ci = TRW[cs * 6 + gl_VertexIndex];

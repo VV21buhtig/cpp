@@ -1,6 +1,6 @@
 #version 450
-// demo-5w вода: тот же свет что террейн, БЕЗ резких теней (мутная гладь их
-// не держит — видно дно с тенью сквозь alpha), alpha 0.75. Тайл всегда вода=4.
+// demo-5x вода по глубине сцены (K-рецепт поглощения): мелко — плитка и дно,
+// глубоко — тёмная синь. Глубина из копии буфера глубины (фидбэк запрещён!).
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewProj;
     mat4 invViewProj;
@@ -14,6 +14,9 @@ layout(set = 0, binding = 0) uniform Frame {
 } frame;
 
 layout(set = 0, binding = 1) uniform sampler2DArray tiles;
+layout(set = 0, binding = 9) uniform sampler2D sceneDepth;
+
+layout(push_constant) uniform Push { vec2 res; } pc;
 
 layout(location = 0) in vec3 vPos;
 layout(location = 1) in vec3 vNrm;
@@ -29,15 +32,22 @@ void main() {
     float aoC = 0.5 + 0.5 * aoV * aoV;
 
     vec3 tileTex = vec3(texture(tiles, vec3(vUV, 4.0)));
-    // Вода плоская по природе (±3.6%): поднимаем контраст (иначе текстуры нет)
-    // + медленный дрейф UV (глаз держит только живое, течение тут ни при чём).
     tileTex = mix(vec3(dot(tileTex, vec3(0.3333))), tileTex, 1.8);
+    // Толщина воды: сцена за пикселем минус сам пиксель (линейные дистанции).
+    // Глубина в цели [0,1] от NDC[-1,1] (GLM), near 0.1 far 600.
+    float dz = texture(sceneDepth, gl_FragCoord.xy / pc.res).r * 2.0 - 1.0;
+    float sceneZ = (2.0 * 0.1 * 600.0) / (600.0 + 0.1 - dz * (600.0 - 0.1));
+    float waterZ = length(frame.viewPos.xyz - vPos);
+    float thick = clamp(sceneZ - waterZ, 0.0, 30.0);
+    // Тело воды: мелко плитка, глубоко тёмная синь (микс по глубине —
+    // поглощение K: красный дохнет первым, остаётся синь).
+    float wdeep = clamp(thick / 6.0, 0.0, 1.0);
+    vec3 deepCol = vec3(0.03, 0.12, 0.28);
+    vec3 bodyTex = mix(tileTex, deepCol, wdeep);
     vec3 sunL = normalize(frame.sunDir.xyz);
     float ndl = max(dot(norm, sunL), 0.0);
-    vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * tileTex;
-    // Вода отражает небо, а не ламберт: прямой давим x0.3, иначе полдень
-    // выбивает белую плитку в молоко (1.6 -> Uchimura в белое). Проверено рентгеном.
-    vec3 direct = frame.sunCol.rgb * ndl * tileTex * 0.3;
+    vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * bodyTex;
+    vec3 direct = frame.sunCol.rgb * ndl * bodyTex * 0.3;
     vec3 result = amb + direct;
     // Стенки мутные (иначе glass-танк): свет гаснет с глубиной, аппроксимация.
     if (abs(norm.y) < 0.9) result *= 0.55;
@@ -51,5 +61,6 @@ void main() {
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);
     vec3 col = mix(shaded, frame.fog.rgb, ff);
-    outColor = vec4(col, 0.65); // дно должно читаться (иначе кусок ткани, не вода)
+    float alpha = mix(0.55, 0.92, wdeep); // мелко прозрачнее, глубоко глухо
+    outColor = vec4(col, alpha);
 }

@@ -214,13 +214,16 @@ int main(int argc, char** argv) {
         feat12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         feat12.drawIndirectCount = VK_TRUE; // demo-3c: vkCmdDrawIndirectCount
         feat12.pNext = &dyn;
-        VkPhysicalDeviceFeatures feats{};
-        feats.samplerAnisotropy = VK_TRUE;
+        VkPhysicalDeviceFeatures2 feats2{};
+        feats2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        feats2.pNext = &feat12;
+        feats2.features.vertexPipelineStoresAndAtomics = VK_TRUE; // DEBUG VS-store
+        feats2.features.samplerAnisotropy = VK_TRUE;
         const char* devExts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        ci.pNext = &feat12;
-        ci.pEnabledFeatures = &feats;
+        ci.pNext = &feats2; // feats2 -> feat12 -> dyn (pEnabledFeatures игнорим)
+        ci.pEnabledFeatures = nullptr;
         ci.queueCreateInfoCount = 1;
         ci.pQueueCreateInfos = &qi;
         ci.enabledExtensionCount = 1;
@@ -352,7 +355,7 @@ int main(int argc, char** argv) {
         vkCmdPipelineBarrier(cb, srcS, dstS, 0, 0, nullptr, 0, nullptr, 1, &b);
     };
 
-    // ---- depth (D32F, живёт в ATTACHMENT весь кадр, чистим loadOp) ----
+    // ---- depth (D32F в GENERAL: аттачмент + сэмпл для воды + копия) ----
     VkImage depthImg;
     VmaAllocation depthAlloc;
     VkImageView depthView;
@@ -364,7 +367,8 @@ int main(int argc, char** argv) {
         ci.extent = {swapExtent.width, swapExtent.height, 1};
         ci.mipLevels = 1; ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         VmaAllocationCreateInfo ai{};
         ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         VK_CHECK(vmaCreateImage(alloc, &ci, &ai, &depthImg, &depthAlloc, nullptr));
@@ -376,8 +380,9 @@ int main(int argc, char** argv) {
         vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthView));
         immRun([&](VkCommandBuffer cb) {
+            // Глубина живёт в GENERAL всегда: и аттачмент, и сэмпл для воды.
             imgBarrier(cb, depthImg, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_GENERAL,
                        VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1,
                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
@@ -721,10 +726,12 @@ int main(int argc, char** argv) {
                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, metaBuf, metaAlloc);
         std::vector<uint32_t> zero(64, 0);
         upload(zero.data(), zero.size() * sizeof(uint32_t),
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, visBuf, visAlloc);
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+               visBuf, visAlloc); // +SRC для DEBUG-ридбэка
         std::vector<uint8_t> izero(16 + 64 * sizeof(VkDrawIndirectCommand), 0);
         upload(izero.data(), izero.size(),
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                indBuf, indAlloc);
     }
     del.push([&]() {
@@ -750,7 +757,56 @@ int main(int argc, char** argv) {
     }
     del.push([&]() { vmaDestroyBuffer(alloc, shotBuf, shotAlloc); });
 
-    // ---- demo-5w вода: свой gigabuffer/meta/indirect (путь параллельный opaque) ----
+    // ---- отладка indirect: маленький host-буфер для чтения счётчиков (VK_WATERDBG=1) ----
+    bool waterDbg = getenv("VK_WATERDBG") != nullptr;
+    VkBuffer dbgReadBuf = nullptr;
+    VmaAllocation dbgReadAlloc = nullptr;
+    if (waterDbg) {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = 2048;
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &dbgReadBuf, &dbgReadAlloc, nullptr));
+        del.push([&]() { vmaDestroyBuffer(alloc, dbgReadBuf, dbgReadAlloc); });
+    }
+
+    // ---- demo-5x копия глубины для воды (фидбэк-луп запрещён: читать ту же
+    // картинку что пишешь нельзя — копируем после террейна, вода читает копию).
+    VkImage depthCopyImg = nullptr;
+    VmaAllocation depthCopyAlloc = nullptr;
+    VkImageView depthCopyView = nullptr;
+    {
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_D32_SFLOAT;
+        ci.extent = {swapExtent.width, swapExtent.height, 1};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(alloc, &ci, &ai, &depthCopyImg, &depthCopyAlloc, nullptr));
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = depthCopyImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_D32_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthCopyView));
+        immRun([&](VkCommandBuffer cb) {
+            imgBarrier(cb, depthCopyImg, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                       VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        });
+    }
+    del.push([&]() {
+        vkDestroyImageView(device, depthCopyView, nullptr);
+        vmaDestroyImage(alloc, depthCopyImg, depthCopyAlloc);
+    });
     struct WaterMeta { uint32_t quadOff, quadCount; float ox, oz; };
     VkBuffer waterGigaBuf = nullptr, waterMetaBuf = nullptr, waterIndBuf = nullptr;
     VmaAllocation waterGigaAlloc = nullptr, waterMetaAlloc = nullptr, waterIndAlloc = nullptr;
@@ -798,10 +854,12 @@ int main(int argc, char** argv) {
         upload(all.data(), all.size() * sizeof(uint32_t),
                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, waterGigaBuf, waterGigaAlloc);
         upload(metas.data(), metas.size() * sizeof(WaterMeta),
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, waterMetaBuf, waterMetaAlloc);
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+               waterMetaBuf, waterMetaAlloc);
         std::vector<uint8_t> izero(16 + 64 * sizeof(VkDrawIndirectCommand), 0);
         upload(izero.data(), izero.size(),
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                waterIndBuf, waterIndAlloc);
     }
     del.push([&]() {
@@ -863,14 +921,19 @@ int main(int argc, char** argv) {
         b8.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b8.descriptorCount = 1;
         b8.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        VkDescriptorSetLayoutBinding bs[9] = {b0, b1, b2, b3, b4, b5, b6, b7, b8};
+        VkDescriptorSetLayoutBinding b9{}; // 9=глубина сцены для воды (поглощение)
+        b9.binding = 9;
+        b9.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b9.descriptorCount = 1;
+        b9.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding bs[10] = {b0, b1, b2, b3, b4, b5, b6, b7, b8, b9};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 9; li.pBindings = bs;
+        li.bindingCount = 10; li.pBindings = bs;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout));
         VkDescriptorPoolSize ps[3]{};
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 2;
-        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 3;
+        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 4;
         ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 5;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -938,8 +1001,8 @@ int main(int argc, char** argv) {
             w[6].descriptorCount = 1;
             w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[6].pImageInfo = &shraw;
-            // дописываем воду 7,8 отдельным апдейтом (w[] было на 7 слотов):
-            VkWriteDescriptorSet wx[2]{};
+            // дописываем воду 7,8 + глубину 9 отдельным апдейтом:
+            VkWriteDescriptorSet wx[3]{};
             wx[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             wx[0].dstSet = descSets[i]; wx[0].dstBinding = 7;
             wx[0].descriptorCount = 1;
@@ -950,8 +1013,16 @@ int main(int argc, char** argv) {
             wx[1].descriptorCount = 1;
             wx[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             wx[1].pBufferInfo = &wbi[1];
+            VkDescriptorImageInfo ddi{};
+            ddi.sampler = shadowRawSmp; ddi.imageView = depthCopyView; // копия!
+            ddi.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            wx[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wx[2].dstSet = descSets[i]; wx[2].dstBinding = 9;
+            wx[2].descriptorCount = 1;
+            wx[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wx[2].pImageInfo = &ddi;
             vkUpdateDescriptorSets(device, 7, w, 0, nullptr);
-            vkUpdateDescriptorSets(device, 2, wx, 0, nullptr);
+            vkUpdateDescriptorSets(device, 3, wx, 0, nullptr);
         }
     }
     del.push([&]() {
@@ -1350,8 +1421,9 @@ int main(int argc, char** argv) {
         dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
         dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
         VkPushConstantRange pc{};
-        pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        pc.size = sizeof(glm::mat4); pc.offset = 0; // demo-4: lightSpace (была model)
+        pc.stageFlags = (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                             VK_SHADER_STAGE_FRAGMENT_BIT); // lightSpace VS + res FS
+        pc.size = sizeof(glm::mat4); pc.offset = 0;
         VkPipelineLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         li.setLayoutCount = 1; li.pSetLayouts = &setLayout;
@@ -1985,7 +2057,9 @@ int main(int argc, char** argv) {
         }
         vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeLayout, 0, 1, &descSets[fi], 0, nullptr);
-        vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(cmdBufs[fi], pipeLayout,
+                           (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                VK_SHADER_STAGE_FRAGMENT_BIT),
                            0, sizeof(lightSpace), &lightSpace);
         vkCmdSetDepthBias(cmdBufs[fi], 1.1f, 0.0f, 2.0f); // const/slope из книги
         vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
@@ -2063,9 +2137,9 @@ int main(int argc, char** argv) {
         VkRenderingAttachmentInfo depth{};
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         depth.imageView = depthView;
-        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL; // + сэмпл воды там же
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // читает вода следующим пассом
         depth.clearValue.depthStencil = {1.0f, 0};
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -2083,15 +2157,96 @@ int main(int argc, char** argv) {
         vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeLayout, 0, 1, &descSets[fi], 0, nullptr);
         // 4) один indirect-count draw на всё видимое (команды пишет compute).
-        vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
+        vkCmdPushConstants(cmdBufs[fi], pipeLayout,
+                           (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                VK_SHADER_STAGE_FRAGMENT_BIT),
                            0, sizeof(lightSpace), &lightSpace);
         vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
-        // demo-5w вода поверх (тот же HDR+глубина LOAD, бленд, глубину не пишет).
-        vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe);
-        vkCmdDrawIndirectCount(cmdBufs[fi], waterIndBuf, sizeof(uint32_t) * 4, waterIndBuf, 0,
-                               64, sizeof(VkDrawIndirectCommand));
         vkCmdEndRendering(cmdBufs[fi]);
+        // demo-5x копия глубины для воды + барьеры (всё в GENERAL, только доступ).
+        {
+            VkImageMemoryBarrier b[2]{};
+            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[0].image = depthImg;
+            b[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            b[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[1].image = depthCopyImg;
+            b[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 2, b);
+            VkImageCopy cp{};
+            cp.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+            cp.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+            cp.extent = {swapExtent.width, swapExtent.height, 1};
+            vkCmdCopyImage(cmdBufs[fi], depthImg, VK_IMAGE_LAYOUT_GENERAL,
+                           depthCopyImg, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+            VkImageMemoryBarrier b2[2]{};
+            b2[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b2[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b2[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b2[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[0].image = depthCopyImg;
+            b2[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            b2[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b2[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b2[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b2[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[1].image = depthImg;
+            b2[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 2, b2);
+        }
+        {
+            VkRenderingAttachmentInfo wcol{};
+            wcol.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            wcol.imageView = hdrView;
+            wcol.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            wcol.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            wcol.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingAttachmentInfo wdep{};
+            wdep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            wdep.imageView = depthView;
+            wdep.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            wdep.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            wdep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            VkRenderingInfo wri{};
+            wri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            wri.renderArea = {{0, 0}, swapExtent};
+            wri.layerCount = 1;
+            wri.colorAttachmentCount = 1;
+            wri.pColorAttachments = &wcol;
+            wri.pDepthAttachment = &wdep;
+            vkCmdBeginRendering(cmdBufs[fi], &wri);
+            vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe);
+            vkCmdSetViewport(cmdBufs[fi], 0, 1, &vwp);
+            vkCmdSetScissor(cmdBufs[fi], 0, 1, &sc);
+            vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeLayout, 0, 1, &descSets[fi], 0, nullptr);
+            glm::vec2 wres((float)swapExtent.width, (float)swapExtent.height);
+            vkCmdPushConstants(cmdBufs[fi], pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               0, sizeof(wres), &wres);
+            vkCmdDrawIndirectCount(cmdBufs[fi], waterIndBuf, sizeof(uint32_t) * 4, waterIndBuf, 0,
+                                   64, sizeof(VkDrawIndirectCommand));
+            vkCmdEndRendering(cmdBufs[fi]);
+        }
         // demo-5a пост: HDR -> lum -> adapt -> тонемэппинг в своп.
         {
             VkImageMemoryBarrier b{};
@@ -2312,6 +2467,58 @@ int main(int argc, char** argv) {
                 printf("shot saved frame %d\n", frame);
             }
             vmaUnmapMemory(alloc, shotAlloc);
+        }
+        if (waterDbg && frame == 5) {
+            vkDeviceWaitIdle(device);
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 16 + 64 * 16;
+                vkCmdCopyBuffer(cb, waterIndBuf, dbgReadBuf, 1, &cp);
+            });
+            void* dpx = nullptr;
+            VK_CHECK(vmaMapMemory(alloc, dbgReadAlloc, &dpx));
+            uint32_t* u = (uint32_t*)dpx;
+            printf("WATERDBG waterInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
+            {
+                uint32_t total = 0;
+                printf("WATERDBG slots:");
+                for (int s = 0; s < 64; s++) {
+                    uint32_t inst = u[4 + s * 4 + 1], fi_ = u[4 + s * 4 + 3];
+                    total += inst;
+                    if (inst) printf(" [%d]i=%u,fi=%u", s, inst, fi_);
+                }
+                printf(" totalInst=%u\n", total);
+            }
+            vmaUnmapMemory(alloc, dbgReadAlloc);
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, visBuf, dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(alloc, dbgReadAlloc, &dpx));
+            u = (uint32_t*)dpx;
+            printf("WATERDBG vis0-7: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                   u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+            vmaUnmapMemory(alloc, dbgReadAlloc);
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, waterMetaBuf, dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(alloc, dbgReadAlloc, &dpx));
+            u = (uint32_t*)dpx;
+            printf("WATERDBG wmeta0-3: off=%u cnt=%u ox=%f oz=%f | off=%u cnt=%u\n",
+                   u[0], u[1], *(float*)&u[2], *(float*)&u[3], u[4], u[5]);
+            vmaUnmapMemory(alloc, dbgReadAlloc);
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, indBuf, dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(alloc, dbgReadAlloc, &dpx));
+            u = (uint32_t*)dpx;
+            printf("WATERDBG terrainInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
+            vmaUnmapMemory(alloc, dbgReadAlloc);
         }
         frame++; drawn++; fpsN++;
         if (now - fpsT >= 2.0) {
