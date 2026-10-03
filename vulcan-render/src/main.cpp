@@ -59,8 +59,22 @@ struct FrameUBO {
 
 int main(int argc, char** argv) {
     int maxFrames = -1;
-    for (int i = 1; i < argc; i++)
+    int shotFrame = -1; // --shot K: сохранить кадр K в shot.tga (свой рентген)
+    bool camOverride = false;
+    glm::vec3 camPosOvr(0.0f);
+    float yawOvr = 0.0f, pitchOvr = 0.0f;
+    for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = atoi(argv[++i]);
+        if (!strcmp(argv[i], "--shot") && i + 1 < argc) shotFrame = atoi(argv[++i]);
+        if (!strcmp(argv[i], "--cam") && i + 5 < argc) {
+            camOverride = true;
+            camPosOvr = glm::vec3((float)atof(argv[i+1]), (float)atof(argv[i+2]),
+                                  (float)atof(argv[i+3]));
+            yawOvr = (float)atof(argv[i+4]);
+            pitchOvr = (float)atof(argv[i+5]);
+            i += 5;
+        }
+    }
 
     // ---- мир (та же генерация что в игре, сид 1337) ----
     World world;
@@ -254,7 +268,7 @@ int main(int argc, char** argv) {
         ci.imageColorSpace = picked.colorSpace;
         ci.imageExtent = swapExtent;
         ci.imageArrayLayers = 1;
-        ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         ci.preTransform = caps.currentTransform;
         ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -718,6 +732,22 @@ int main(int argc, char** argv) {
         vmaDestroyBuffer(alloc, visBuf, visAlloc);
         vmaDestroyBuffer(alloc, indBuf, indAlloc);
     });
+
+    // ---- demo-5w2 ридбэк: стейджинг под скриншот (--shot K -> shot.tga) ----
+    VkBuffer shotBuf = nullptr;
+    VmaAllocation shotAlloc = nullptr;
+    VkDeviceSize shotSize = (VkDeviceSize)swapExtent.width * swapExtent.height * 4;
+    {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = shotSize;
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+        VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &shotBuf, &shotAlloc, nullptr));
+    }
+    del.push([&]() { vmaDestroyBuffer(alloc, shotBuf, shotAlloc); });
 
     // ---- demo-5w вода: свой gigabuffer/meta/indirect (путь параллельный opaque) ----
     struct WaterMeta { uint32_t quadOff, quadCount; float ox, oz; };
@@ -1667,6 +1697,30 @@ int main(int argc, char** argv) {
         ctl.yaw = glm::degrees(atan2(camFront.z, camFront.x));
         ctl.pitch = glm::degrees(asin(camFront.y));
         printf("hill (%d,%d,%d)\n", hx, top, hz);
+        // Вода для прицела: самая большая гладь (для --cam).
+        {
+            int bx = 64, bz = 64, bn = 0;
+            for (int z = 4; z < 124; z += 4)
+                for (int x = 4; x < 124; x += 4) {
+                    int n = 0;
+                    for (int dz = 0; dz < 4; dz++)
+                        for (int dx = 0; dx < 4; dx++)
+                            if (world.getBlock(x + dx, 20, z + dz) == B_WATER) n++;
+                    if (n > bn) { bn = n; bx = x; bz = z; }
+                }
+            printf("water (%d,%d) n=%d/16\n", bx, bz, bn);
+        }
+        if (camOverride) {
+            camPos = camPosOvr;
+            ctl.yaw = yawOvr;
+            ctl.pitch = pitchOvr;
+            camFront.x = cos(glm::radians(ctl.yaw)) * cos(glm::radians(ctl.pitch));
+            camFront.y = sin(glm::radians(ctl.pitch));
+            camFront.z = sin(glm::radians(ctl.yaw)) * cos(glm::radians(ctl.pitch));
+            camFront = glm::normalize(camFront);
+            printf("cam override (%g,%g,%g) yaw %g pitch %g\n",
+                   camPos.x, camPos.y, camPos.z, ctl.yaw, ctl.pitch);
+        }
     }
     auto updFront = [&]() {
         camFront.x = cos(glm::radians(ctl.yaw)) * cos(glm::radians(ctl.pitch));
@@ -2182,14 +2236,43 @@ int main(int argc, char** argv) {
             vkCmdDraw(cmdBufs[fi], 3, 1, 0, 0);
             vkCmdEndRendering(cmdBufs[fi]);
         }
-        VkImageMemoryBarrier toPresent = toDraw;
-        toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        toPresent.dstAccessMask = 0;
-        toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &toPresent);
+        bool wantShot = (shotFrame >= 0 && frame == shotFrame);
+        if (wantShot) {
+            // Ридбэк вместо present-перехода: ATTACHMENT -> TRANSFER_SRC, копия, -> PRESENT.
+            VkImageMemoryBarrier b[2]{};
+            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[0].image = swapImages[imgIdx];
+            b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b[0]);
+            VkBufferImageCopy cp{};
+            cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cp.imageExtent = {swapExtent.width, swapExtent.height, 1};
+            vkCmdCopyImageToBuffer(cmdBufs[fi], swapImages[imgIdx],
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shotBuf, 1, &cp);
+            b[1] = b[0];
+            b[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[1].dstAccessMask = 0;
+            b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b[1]);
+        } else {
+            VkImageMemoryBarrier toPresent = toDraw;
+            toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            toPresent.dstAccessMask = 0;
+            toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toPresent);
+        }
         VK_CHECK(vkEndCommandBuffer(cmdBufs[fi]));
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo sub{};
@@ -2211,6 +2294,23 @@ int main(int argc, char** argv) {
         pr.pSwapchains = &swapchain;
         pr.pImageIndices = &imgIdx;
         VK_CHECK(vkQueuePresentKHR(gfxQueue, &pr));
+        if (wantShot) {
+            VK_CHECK(vkWaitForFences(device, 1, &frameFence[fi], VK_TRUE, 1000000000ull));
+            void* px = nullptr;
+            VK_CHECK(vmaMapMemory(alloc, shotAlloc, &px));
+            FILE* f = fopen("shot.tga", "wb");
+            if (f) {
+                int W = (int)swapExtent.width, H = (int)swapExtent.height;
+                unsigned char hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    (unsigned char)(W & 255), (unsigned char)(W >> 8),
+                    (unsigned char)(H & 255), (unsigned char)(H >> 8), 32, 0x20};
+                fwrite(hdr, 1, 18, f);
+                fwrite(px, 1, (size_t)W * H * 4, f); // BGRA сверху вниз (0x20)
+                fclose(f);
+                printf("shot saved frame %d\n", frame);
+            }
+            vmaUnmapMemory(alloc, shotAlloc);
+        }
         frame++; drawn++; fpsN++;
         if (now - fpsT >= 2.0) {
             printf("fps %.0f (%.2f ms)\n", fpsN / (now - fpsT), (now - fpsT) * 1000.0 / fpsN);
