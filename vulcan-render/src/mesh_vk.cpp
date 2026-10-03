@@ -20,7 +20,8 @@ std::vector<uint32_t> buildChunkVK(const World& w, int cx, int cz) {
             for (int y = 0; y < 64; y++) {
                 int wx = cx * 16 + x, wz = cz * 16 + z;
                 unsigned char id = w.getBlock(wx, y, wz);
-                if (!id || !w.isSolid(id)) continue; // флюиды/воздух — позже
+                // Лава идёт opaque-путём (emissive в шейдере); вода — отдельно (buildWaterVK).
+                if (!id || (w.isFluid(id) && id != B_LAVA)) continue;
                 const BlockDef& dd = gBlocks.get(id);
                 for (int f = 0; f < 6; f++) {
                     int ax = AX[f], sn = SN[f];
@@ -66,6 +67,36 @@ std::vector<uint32_t> buildChunkVK(const World& w, int cx, int cz) {
                                    (((uint32_t)ca[0] | ((uint32_t)ca[1] << 2) |
                                      ((uint32_t)ca[2] << 4) | ((uint32_t)ca[3] << 6)) << 23) |
                                    ((uint32_t)(flip ? 1 : 0) << 31);
+                    out.push_back(rec);
+                }
+            }
+    return out;
+}
+
+// buildWaterVK: грани воды к воздуху (как GL buildFluids). AO flat 3.
+// Формат: x4+z4+y6+face3+flow4+ao8 (tile всегда вода=4, уровень из flow 0..8).
+std::vector<uint32_t> buildWaterVK(const World& w, int cx, int cz) {
+    std::vector<uint32_t> out;
+    out.reserve(1024);
+    for (int x = 0; x < 16; x++)
+        for (int z = 0; z < 16; z++)
+            for (int y = 0; y < 64; y++) {
+                int wx = cx * 16 + x, wz = cz * 16 + z;
+                if (w.getBlock(wx, y, wz) != B_WATER) continue;
+                int flow = w.getFlow(wx, y, wz);
+                if (flow <= 0) flow = 8;
+                if (flow > 8) flow = 8;
+                static const int NB[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+                static const int AX[6] = {0, 0, 1, 1, 2, 2};
+                static const int SN[6] = {1, -1, 1, -1, 1, -1};
+                for (int f = 0; f < 6; f++) {
+                    if (w.getBlock(wx + NB[f][0], y + NB[f][1], wz + NB[f][2]) != 0) continue;
+                    int ax = AX[f], sn = SN[f];
+                    uint32_t rec = (uint32_t)(x & 15) | ((uint32_t)(z & 15) << 4) |
+                                   ((uint32_t)(y & 63) << 8) |
+                                   ((uint32_t)(ax * 2 + (sn > 0 ? 0 : 1)) << 14) |
+                                   ((uint32_t)(flow & 15) << 17) |
+                                   (0xFFu << 23); // ao 3 во всех углах
                     out.push_back(rec);
                 }
             }

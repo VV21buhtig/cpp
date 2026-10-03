@@ -10,6 +10,10 @@ layout(set = 0, binding = 0) readonly buffer MetaB { Meta metas[]; };
 layout(set = 0, binding = 1) buffer VisB { uint vis[]; };
 struct Draw { uint vCount; uint instCount; uint firstVtx; uint firstInst; };
 layout(set = 0, binding = 2) buffer IndB { uint count; uint pad[3]; Draw cmds[]; };
+// demo-5w: вода тем же тестом видимости (свои meta/indirect).
+struct WMeta { uint quadOff; uint quadCount; vec2 origin; };
+layout(set = 0, binding = 3) readonly buffer WMetaB { WMeta wmetas[]; };
+layout(set = 0, binding = 4) buffer WIndB { uint wcount; uint wpad[3]; Draw wcmds[]; };
 
 layout(push_constant) uniform P { vec4 planes[6]; } pc;
 
@@ -30,4 +34,7 @@ void main() {
     uint s = atomicAdd(count, 1u);
     vis[s] = idx; // отладка/запас; VS чанк берёт из firstInstance, не отсюда
     cmds[s] = Draw(6u, metas[idx].quadCount, 0u, idx * 1048576u + metas[idx].quadOff);
+    // Вода: та же видимость чанка, свои оффсеты (instanceCount 0 = пропуск GPU).
+    uint ws = atomicAdd(wcount, 1u);
+    wcmds[ws] = Draw(6u, wmetas[idx].quadCount, 0u, idx * 1048576u + wmetas[idx].quadOff);
 }

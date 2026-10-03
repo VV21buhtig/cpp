@@ -719,6 +719,66 @@ int main(int argc, char** argv) {
         vmaDestroyBuffer(alloc, indBuf, indAlloc);
     });
 
+    // ---- demo-5w вода: свой gigabuffer/meta/indirect (путь параллельный opaque) ----
+    struct WaterMeta { uint32_t quadOff, quadCount; float ox, oz; };
+    VkBuffer waterGigaBuf = nullptr, waterMetaBuf = nullptr, waterIndBuf = nullptr;
+    VmaAllocation waterGigaAlloc = nullptr, waterMetaAlloc = nullptr, waterIndAlloc = nullptr;
+    {
+        std::vector<uint32_t> all;
+        std::vector<WaterMeta> metas;
+        for (int cz = 0; cz < 8; cz++)
+            for (int cx = 0; cx < 8; cx++) {
+                std::vector<uint32_t> data = buildWaterVK(world, cx, cz);
+                if (data.size() >= (1u << 20)) { printf("water chunk too big\n"); exit(1); }
+                WaterMeta m{(uint32_t)all.size(), (uint32_t)data.size(),
+                            worldOffset.x + cx * 16.0f, worldOffset.z + cz * 16.0f};
+                metas.push_back(m);
+                all.insert(all.end(), data.begin(), data.end());
+            }
+        printf("water quads total %zu\n", all.size());
+        auto upload = [&](const void* src, VkDeviceSize sz, VkBufferUsageFlags use,
+                          VkBuffer& out, VmaAllocation& oa) {
+            VkBuffer staging;
+            VmaAllocation stagingAlloc;
+            VkBufferCreateInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bi.size = sz ? sz : 16;
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO;
+            ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &staging, &stagingAlloc, nullptr));
+            if (sz) {
+                void* dst = nullptr;
+                VK_CHECK(vmaMapMemory(alloc, stagingAlloc, &dst));
+                memcpy(dst, src, sz);
+                vmaUnmapMemory(alloc, stagingAlloc);
+            }
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | use;
+            ai.flags = 0;
+            VK_CHECK(vmaCreateBuffer(alloc, &bi, &ai, &out, &oa, nullptr));
+            immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = sz ? sz : 16;
+                vkCmdCopyBuffer(cb, staging, out, 1, &cp);
+            });
+            vmaDestroyBuffer(alloc, staging, stagingAlloc);
+        };
+        upload(all.data(), all.size() * sizeof(uint32_t),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, waterGigaBuf, waterGigaAlloc);
+        upload(metas.data(), metas.size() * sizeof(WaterMeta),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, waterMetaBuf, waterMetaAlloc);
+        std::vector<uint8_t> izero(16 + 64 * sizeof(VkDrawIndirectCommand), 0);
+        upload(izero.data(), izero.size(),
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+               waterIndBuf, waterIndAlloc);
+    }
+    del.push([&]() {
+        vmaDestroyBuffer(alloc, waterGigaBuf, waterGigaAlloc);
+        vmaDestroyBuffer(alloc, waterMetaBuf, waterMetaAlloc);
+        vmaDestroyBuffer(alloc, waterIndBuf, waterIndAlloc);
+    });
+
     // ---- UBO кадра x2 + дескрипторы (1 набор на кадр: UBO свой, остальное общее) ----
     VkDescriptorSetLayout setLayout;
     VkDescriptorPool descPool;
@@ -762,15 +822,25 @@ int main(int argc, char** argv) {
         b6.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b6.descriptorCount = 1;
         b6.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutBinding bs[7] = {b0, b1, b2, b3, b4, b5, b6};
+        VkDescriptorSetLayoutBinding b7{}; // 7=вода gigabuffer (demo-5w)
+        b7.binding = 7;
+        b7.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b7.descriptorCount = 1;
+        b7.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        VkDescriptorSetLayoutBinding b8{}; // 8=вода meta (demo-5w)
+        b8.binding = 8;
+        b8.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b8.descriptorCount = 1;
+        b8.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        VkDescriptorSetLayoutBinding bs[9] = {b0, b1, b2, b3, b4, b5, b6, b7, b8};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 7; li.pBindings = bs;
+        li.bindingCount = 9; li.pBindings = bs;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout));
         VkDescriptorPoolSize ps[3]{};
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 2;
         ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 3;
-        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 3;
+        ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 5;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = 2;
@@ -800,6 +870,9 @@ int main(int argc, char** argv) {
             sbi[0].buffer = gigaBuf; sbi[0].range = VK_WHOLE_SIZE;
             sbi[1].buffer = metaBuf; sbi[1].range = VK_WHOLE_SIZE;
             sbi[2].buffer = visBuf; sbi[2].range = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo wbi[2]{};
+            wbi[0].buffer = waterGigaBuf; wbi[0].range = VK_WHOLE_SIZE;
+            wbi[1].buffer = waterMetaBuf; wbi[1].range = VK_WHOLE_SIZE;
             VkDescriptorImageInfo shdi{};
             shdi.sampler = shadowSmp; shdi.imageView = shadowView;
             shdi.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -834,7 +907,20 @@ int main(int argc, char** argv) {
             w[6].descriptorCount = 1;
             w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[6].pImageInfo = &shraw;
+            // дописываем воду 7,8 отдельным апдейтом (w[] было на 7 слотов):
+            VkWriteDescriptorSet wx[2]{};
+            wx[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wx[0].dstSet = descSets[i]; wx[0].dstBinding = 7;
+            wx[0].descriptorCount = 1;
+            wx[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wx[0].pBufferInfo = &wbi[0];
+            wx[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wx[1].dstSet = descSets[i]; wx[1].dstBinding = 8;
+            wx[1].descriptorCount = 1;
+            wx[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wx[1].pBufferInfo = &wbi[1];
             vkUpdateDescriptorSets(device, 7, w, 0, nullptr);
+            vkUpdateDescriptorSets(device, 2, wx, 0, nullptr);
         }
     }
     del.push([&]() {
@@ -842,14 +928,14 @@ int main(int argc, char** argv) {
         vkDestroyDescriptorPool(device, descPool, nullptr);
         vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
     });
-    // ---- compute-cull: свой layout (meta ro, vis/indirect rw) + push плоскости ----
+    // ---- compute-cull: свой layout (meta/vis/indirect + вода meta/indirect) ----
     VkDescriptorSetLayout cullLayout;
     VkDescriptorSet cullSet;
     VkPipelineLayout cullPipeLayout;
     VkPipeline cullPipe;
     {
-        VkDescriptorSetLayoutBinding cb[3]{};
-        for (int b = 0; b < 3; b++) {
+        VkDescriptorSetLayoutBinding cb[5]{};
+        for (int b = 0; b < 5; b++) {
             cb[b].binding = (uint32_t)b;
             cb[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             cb[b].descriptorCount = 1;
@@ -857,10 +943,10 @@ int main(int argc, char** argv) {
         }
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 3; li.pBindings = cb;
+        li.bindingCount = 5; li.pBindings = cb;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &cullLayout));
         VkDescriptorPoolSize ps{};
-        ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps.descriptorCount = 3;
+        ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps.descriptorCount = 5;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = 1;
@@ -873,19 +959,21 @@ int main(int argc, char** argv) {
         ai.descriptorSetCount = 1;
         ai.pSetLayouts = &cullLayout;
         VK_CHECK(vkAllocateDescriptorSets(device, &ai, &cullSet));
-        VkDescriptorBufferInfo bi[3]{};
+        VkDescriptorBufferInfo bi[5]{};
         bi[0].buffer = metaBuf; bi[0].range = VK_WHOLE_SIZE;
         bi[1].buffer = visBuf; bi[1].range = VK_WHOLE_SIZE;
         bi[2].buffer = indBuf; bi[2].range = VK_WHOLE_SIZE;
-        VkWriteDescriptorSet w[3]{};
-        for (int b = 0; b < 3; b++) {
+        bi[3].buffer = waterMetaBuf; bi[3].range = VK_WHOLE_SIZE;
+        bi[4].buffer = waterIndBuf; bi[4].range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w[5]{};
+        for (int b = 0; b < 5; b++) {
             w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[b].dstSet = cullSet; w[b].dstBinding = (uint32_t)b;
             w[b].descriptorCount = 1;
             w[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[b].pBufferInfo = &bi[b];
         }
-        vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+        vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.size = 6 * sizeof(glm::vec4); pc.offset = 0;
@@ -1332,6 +1420,80 @@ int main(int argc, char** argv) {
     }
     del.push([&]() { vkDestroyPipeline(device, shadowPipe, nullptr); });
 
+    // ---- demo-5w вода: тот же layout (superset), бленд ON, глубину только читаем ----
+    VkPipeline waterPipe;
+    {
+        VkShaderModule vs = makeShader(device, SHADER_DIR "water.vert.spv");
+        VkShaderModule fs = makeShader(device, SHADER_DIR "water.frag.spv");
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vs; stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fs; stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1; vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.blendEnable = VK_TRUE; // прозрачная гладь поверх террейна
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        ba.colorBlendOp = VK_BLEND_OP_ADD;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        ba.alphaBlendOp = VK_BLEND_OP_ADD;
+        ba.colorWriteMask = 0xF;
+        VkPipelineColorBlendStateCreateInfo cb{};
+        cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        cb.attachmentCount = 1; cb.pAttachments = &ba;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_FALSE; // гладь не пишет глубину
+        ds.depthCompareOp = VK_COMPARE_OP_LESS;
+        VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{};
+        dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+        VkPipelineRenderingCreateInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        VkFormat whdrFmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &whdrFmt;
+        ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        VkGraphicsPipelineCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pi.pNext = &ri;
+        pi.stageCount = 2; pi.pStages = stages;
+        pi.pVertexInputState = &vi;
+        pi.pInputAssemblyState = &ia;
+        pi.pViewportState = &vp;
+        pi.pRasterizationState = &rs;
+        pi.pMultisampleState = &ms;
+        pi.pColorBlendState = &cb;
+        pi.pDepthStencilState = &ds;
+        pi.pDynamicState = &dyn;
+        pi.layout = pipeLayout; // superset: вода берёт биндинги 0,1,7,8
+        VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &waterPipe));
+        vkDestroyShaderModule(device, vs, nullptr);
+        vkDestroyShaderModule(device, fs, nullptr);
+    }
+    del.push([&]() { vkDestroyPipeline(device, waterPipe, nullptr); });
+
     // ---- demo-4b рентген: фулскрин-три в угол 256x256 (F1), тот же setLayout ----
     VkPipeline dbgPipe;
     {
@@ -1650,18 +1812,21 @@ int main(int argc, char** argv) {
         vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &toDraw);
-        // demo-3c: cull compute ДО beginRendering (внутри пасса compute нельзя).
-        // 1) обнулить счётчик (fill + барьер transfer->compute).
+        // demo-3c + вода: обнулить оба счётчика (fill + барьер transfer->compute).
         vkCmdFillBuffer(cmdBufs[fi], indBuf, 0, 4, 0);
+        vkCmdFillBuffer(cmdBufs[fi], waterIndBuf, 0, 4, 0);
         {
-            VkBufferMemoryBarrier b{};
-            b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            b.buffer = indBuf; b.offset = 0; b.size = VK_WHOLE_SIZE;
+            VkBufferMemoryBarrier b[2]{};
+            VkBuffer bbs[2] = {indBuf, waterIndBuf};
+            for (int i = 0; i < 2; i++) {
+                b[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                b[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                b[i].buffer = bbs[i]; b[i].offset = 0; b[i].size = VK_WHOLE_SIZE;
+            }
             vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 1, &b, 0, nullptr);
+                                 0, 0, nullptr, 2, b, 0, nullptr);
         }
         // 2) плоскости фрустума (строки viewProj, нормированные).
         glm::mat4 vp = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
@@ -1682,21 +1847,23 @@ int main(int argc, char** argv) {
         vkCmdPushConstants(cmdBufs[fi], cullPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(planes), planes);
         vkCmdDispatch(cmdBufs[fi], 1, 1, 1); // 64 потока = 64 чанка
-        // 3) барьер: compute-write -> indirect-read + vertex-read.
+        // 3) барьер: compute-write -> indirect-read + vertex-read (оба indirect!).
         {
-            VkBufferMemoryBarrier b[2]{};
-            for (int i = 0; i < 2; i++) {
+            VkBufferMemoryBarrier b[3]{};
+            VkBuffer bbs[3] = {indBuf, visBuf, waterIndBuf};
+            for (int i = 0; i < 3; i++) {
                 b[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                 b[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                b[i].buffer = (i == 0) ? indBuf : visBuf;
+                b[i].buffer = bbs[i];
                 b[i].offset = 0; b[i].size = VK_WHOLE_SIZE;
             }
             b[0].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
             b[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b[2].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
             vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
-                                 0, 0, nullptr, 2, b, 0, nullptr);
+                                 0, 0, nullptr, 3, b, 0, nullptr);
         }
         // demo-4: матрица солнца (снап в light-space + scale/bias fold, GL-рецепт).
         // Солнце фикс-полдень; квант не нужен (нет цикла дня), снап нужен (камера едет).
@@ -1863,6 +2030,10 @@ int main(int argc, char** argv) {
         vkCmdPushConstants(cmdBufs[fi], pipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(lightSpace), &lightSpace);
         vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
+                               64, sizeof(VkDrawIndirectCommand));
+        // demo-5w вода поверх (тот же HDR+глубина LOAD, бленд, глубину не пишет).
+        vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe);
+        vkCmdDrawIndirectCount(cmdBufs[fi], waterIndBuf, sizeof(uint32_t) * 4, waterIndBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
         vkCmdEndRendering(cmdBufs[fi]);
         // demo-5a пост: HDR -> lum -> adapt -> тонемэппинг в своп.
