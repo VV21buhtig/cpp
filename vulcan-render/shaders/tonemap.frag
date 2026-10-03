@@ -23,6 +23,7 @@ void main() {
     vec2 uv = gl_FragCoord.xy / pc.res;
     vec3 col = texture(hdrImg, uv).rgb;
     float e = max(texture(expImg, vec2(0.5)).r, 1e-3);
+    e = max(e, 0.33); // потолок буста x1.5: иначе тёмный центр кадра выбеливает песок
     col *= 0.5 / e;
     col += texture(bloomImg, uv).rgb * 0.05; // demo-5b: аддитивный bloom
     o = vec4(uchimura(max(col, vec3(0.0))), 1.0);

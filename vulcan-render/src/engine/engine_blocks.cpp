@@ -163,6 +163,7 @@ BlockRegistry::BlockRegistry() {
     setDefault(*this, B_LOG, "log", 8, 7, 8, true, false, false, 0, BlockSnd::Wood, BlockSnd::Wood, 0);
     setDefault(*this, B_WATER, "water", 4, 4, 4, false, true, false, 0, BlockSnd::Dig, BlockSnd::Generic, 0);
     setDefault(*this, B_LAVA, "lava", 5, 5, 5, false, true, false, 14, BlockSnd::Dig, BlockSnd::Generic, 0);
+    setDefault(*this, B_SAND, "sand", 13, 13, 13, true, false, false, 0, BlockSnd::Dig, BlockSnd::Dig, 0);
     setDefault(*this, B_COAL, "coal_ore", 9, 9, 9, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
     setDefault(*this, B_IRON, "iron_ore", 10, 10, 10, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);
     setDefault(*this, B_GOLD, "gold_ore", 11, 11, 11, true, false, false, 0, BlockSnd::Stone, BlockSnd::Stone, 1);

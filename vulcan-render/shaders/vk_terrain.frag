@@ -70,6 +70,11 @@ void main() {
     vec3 result = amb + direct * sh;
 
     vec3 shaded = result * fshade * aoC;
+    // Под водой темнее и синее (SEA=20 константа мира): иначе песок светит
+    // сквозь воду белым. Пещеры с воздухом ниже моря тоже темнеют — как в MC.
+    float uw = clamp((20.0 - vPos.y) / 8.0, 0.0, 1.0);
+    shaded *= 1.0 - uw * 0.55;
+    shaded = mix(shaded, shaded * vec3(0.45, 0.75, 1.1), uw);
     shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, frame.misc.y);
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);

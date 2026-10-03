@@ -86,7 +86,11 @@ void World::init(int ncx, int ncz, int s) {
             if (hsel < 0.0f) hsel = 0.0f; if (hsel > 1.0f) hsel = 1.0f;
             float surf = alt * hsel + base * (1.0f - hsel);
             if (base > surf) surf = base;
-            float h = 8.0f + surf * 16.0f;
+            // Континенты (L): низкая частота тянет регионы в океан/сушу.
+            // Амплитуда с запасом: впадины под глубокий океан, суша выше пляжа.
+            // Иначе всё жмётся к SEA и выходят лужи-плёнки вместо океана.
+            float cont = fbm2D(wx / 190.0f + 3.1f, wz / 190.0f + 8.7f, 2, 0.5f);
+            float h = 2.0f + cont * 30.0f + (surf - 0.5f) * 12.0f;
             int hi = (int)h;
             if (hi >= Chunk::SY - 1) hi = Chunk::SY - 2;
             for (int y = 0; y <= hi; y++) setBlock(wx, y, wz, B_STONE); // пока камень
@@ -158,7 +162,8 @@ void World::init(int ncx, int ncz, int s) {
             for (int y = top; y >= 0 && y >= top - 3; y--) {
                 unsigned char cur = getBlock(wx, y, wz);
                 if (cur != B_STONE) continue;
-                if (y == top) setBlock(wx, y, wz, top <= SEA ? B_DIRT : B_GRASS);
+                // Берег и дно — песок (блока 8 раньше не было!), суша выше — трава.
+                if (y == top) setBlock(wx, y, wz, top <= SEA + 1 ? B_SAND : B_GRASS);
                 else setBlock(wx, y, wz, B_DIRT);
             }
         }

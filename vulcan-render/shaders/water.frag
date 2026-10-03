@@ -40,6 +40,10 @@ void main() {
     if (abs(norm.y) < 0.9) result *= 0.55;
 
     vec3 shaded = result * fshade * aoC;
+    // Под водой темнее и синее (как террейн): глубина гасит свет.
+    float uw = clamp((20.0 - vPos.y) / 8.0, 0.0, 1.0);
+    shaded *= 1.0 - uw * 0.55;
+    shaded = mix(shaded, shaded * vec3(0.45, 0.75, 1.1), uw);
     shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, frame.misc.y);
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);

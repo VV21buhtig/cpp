@@ -6,7 +6,7 @@
 // свойства: тайлы, solid/fluid/cutout, звуки, шаги. Нет файла — built-in defaults.
 enum BlockId : unsigned char {
     B_AIR = 0, B_GRASS = 1, B_DIRT = 2, B_STONE = 3, B_LEAVES = 4, B_LOG = 5,
-    B_WATER = 6, B_LAVA = 7, B_COAL = 9, B_IRON = 10, B_GOLD = 11, B_DIAMOND = 12
+    B_WATER = 6, B_LAVA = 7, B_SAND = 8, B_COAL = 9, B_IRON = 10, B_GOLD = 11, B_DIAMOND = 12
 };
 
 enum class BlockSnd : unsigned char {
