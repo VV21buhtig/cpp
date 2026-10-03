@@ -380,6 +380,7 @@ int main(int argc, char** argv) {
     VmaAllocation shadowAlloc = nullptr;
     VkImageView shadowView = nullptr;
     VkSampler shadowSmp = nullptr;
+    VkSampler shadowRawSmp = nullptr; // рентген без compare (F1)
     VkImageLayout shadowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     {
         VkImageCreateInfo ci{};
@@ -410,8 +411,13 @@ int main(int argc, char** argv) {
         si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
         si.minLod = 0.0f; si.maxLod = 0.0f;
         VK_CHECK(vkCreateSampler(device, &si, nullptr, &shadowSmp));
+        si.compareEnable = VK_FALSE; // сырая глубина для рентгена
+        si.magFilter = VK_FILTER_NEAREST;
+        si.minFilter = VK_FILTER_NEAREST;
+        VK_CHECK(vkCreateSampler(device, &si, nullptr, &shadowRawSmp));
     }
     del.push([&]() {
+        vkDestroySampler(device, shadowRawSmp, nullptr);
         vkDestroySampler(device, shadowSmp, nullptr);
         vkDestroyImageView(device, shadowView, nullptr);
         vmaDestroyImage(alloc, shadowImg, shadowAlloc);
@@ -653,14 +659,19 @@ int main(int argc, char** argv) {
         b5.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b5.descriptorCount = 1;
         b5.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutBinding bs[6] = {b0, b1, b2, b3, b4, b5};
+        VkDescriptorSetLayoutBinding b6{}; // 6=тень сырьём для рентгена (F1)
+        b6.binding = 6;
+        b6.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b6.descriptorCount = 1;
+        b6.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding bs[7] = {b0, b1, b2, b3, b4, b5, b6};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 6; li.pBindings = bs;
+        li.bindingCount = 7; li.pBindings = bs;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &setLayout));
         VkDescriptorPoolSize ps[3]{};
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 2;
-        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 2;
+        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 3;
         ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 3;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -694,7 +705,7 @@ int main(int argc, char** argv) {
             VkDescriptorImageInfo shdi{};
             shdi.sampler = shadowSmp; shdi.imageView = shadowView;
             shdi.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            VkWriteDescriptorSet w[6]{};
+            VkWriteDescriptorSet w[7]{};
             w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[0].dstSet = descSets[i]; w[0].dstBinding = 0;
             w[0].descriptorCount = 1;
@@ -717,7 +728,15 @@ int main(int argc, char** argv) {
             w[5].descriptorCount = 1;
             w[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[5].pImageInfo = &shdi;
-            vkUpdateDescriptorSets(device, 6, w, 0, nullptr);
+            VkDescriptorImageInfo shraw{};
+            shraw.sampler = shadowRawSmp; shraw.imageView = shadowView;
+            shraw.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            w[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[6].dstSet = descSets[i]; w[6].dstBinding = 6;
+            w[6].descriptorCount = 1;
+            w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[6].pImageInfo = &shraw;
+            vkUpdateDescriptorSets(device, 7, w, 0, nullptr);
         }
     }
     del.push([&]() {
@@ -941,6 +960,71 @@ int main(int argc, char** argv) {
     }
     del.push([&]() { vkDestroyPipeline(device, shadowPipe, nullptr); });
 
+    // ---- demo-4b рентген: фулскрин-три в угол 256x256 (F1), тот же setLayout ----
+    VkPipeline dbgPipe;
+    {
+        VkShaderModule vs = makeShader(device, SHADER_DIR "tri.vert.spv");
+        VkShaderModule fs = makeShader(device, SHADER_DIR "dbg.frag.spv");
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vs; stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fs; stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1; vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth = 1.0f;
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineColorBlendAttachmentState ba{};
+        ba.colorWriteMask = 0xF;
+        VkPipelineColorBlendStateCreateInfo cb{};
+        cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        cb.attachmentCount = 1; cb.pAttachments = &ba;
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable = VK_FALSE;
+        ds.depthWriteEnable = VK_FALSE;
+        VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{};
+        dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+        VkGraphicsPipelineCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        VkPipelineRenderingCreateInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &swapFormat;
+        ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        pi.pNext = &ri;
+        pi.stageCount = 2; pi.pStages = stages;
+        pi.pVertexInputState = &vi;
+        pi.pInputAssemblyState = &ia;
+        pi.pViewportState = &vp;
+        pi.pRasterizationState = &rs;
+        pi.pMultisampleState = &ms;
+        pi.pColorBlendState = &cb;
+        pi.pDepthStencilState = &ds;
+        pi.pDynamicState = &dyn;
+        pi.layout = pipeLayout; // тот же set (binding 6 с сырой глубиной)
+        VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &dbgPipe));
+        vkDestroyShaderModule(device, vs, nullptr);
+        vkDestroyShaderModule(device, fs, nullptr);
+    }
+    del.push([&]() { vkDestroyPipeline(device, dbgPipe, nullptr); });
+
     // ---- камера: старт у холма, WASD+мышь+стрелки, Space/C, ESC выход ----
     glm::vec3 camPos, camFront;
     {
@@ -1021,7 +1105,8 @@ int main(int argc, char** argv) {
     glm::mat4 proj = glm::perspective(glm::radians(70.0f),
         (float)swapExtent.width / (float)swapExtent.height, 0.1f, 600.0f);
     proj[1][1] *= -1.0f; // Y-flip под Vulkan (идиома vkguide)
-    float tod = 1.5707f; // полдень
+    float tod = 1.5707f; // полдень (1/2/3 утро/день/вечер, F1 рентген карты)
+    bool dbgShadow = false, prevF1 = false;
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -1051,6 +1136,12 @@ int main(int argc, char** argv) {
             if (ctl.pitch < -89.0f) ctl.pitch = -89.0f;
             updFront();
             if (glfwGetKey(window, GLFW_KEY_ESCAPE)) glfwSetWindowShouldClose(window, 1);
+            if (glfwGetKey(window, GLFW_KEY_1)) tod = 0.5f;   // утро: длинные тени
+            if (glfwGetKey(window, GLFW_KEY_2)) tod = 1.5707f; // полдень
+            if (glfwGetKey(window, GLFW_KEY_3)) tod = 2.6f;    // вечер: длинные тени
+            bool f1 = glfwGetKey(window, GLFW_KEY_F1) != 0;
+            if (f1 && !prevF1) { dbgShadow = !dbgShadow; printf("shadow xray %d\n", dbgShadow); }
+            prevF1 = f1;
         }
         int fi = frame % FRAMES;
         uint32_t imgIdx = 0;
@@ -1261,6 +1352,15 @@ int main(int argc, char** argv) {
                            0, sizeof(lightSpace), &lightSpace);
         vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
+        // 5) рентген карты в угол (F1): тот же сет, вьюпорт 256 (шейдер по gl_FragCoord).
+        if (dbgShadow) {
+            vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, dbgPipe);
+            VkViewport dvp{0, 0, 256, 256, 0.0f, 1.0f};
+            VkRect2D dsc{{0, 0}, {256, 256}};
+            vkCmdSetViewport(cmdBufs[fi], 0, 1, &dvp);
+            vkCmdSetScissor(cmdBufs[fi], 0, 1, &dsc);
+            vkCmdDraw(cmdBufs[fi], 3, 1, 0, 0);
+        }
         vkCmdEndRendering(cmdBufs[fi]);
         VkImageMemoryBarrier toPresent = toDraw;
         toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
