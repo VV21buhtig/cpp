@@ -2,6 +2,7 @@
 // demo-5a tonemap: HDR * key/exp + Uchimura (дефолт книги, не AgX).
 layout(set = 0, binding = 0) uniform sampler2D hdrImg;
 layout(set = 0, binding = 1) uniform sampler2D expImg;
+layout(set = 0, binding = 5) uniform sampler2D bloomImg; // demo-5b
 layout(push_constant) uniform Push { vec2 res; vec2 pad; } pc;
 layout(location = 0) out vec4 o;
 
@@ -23,5 +24,6 @@ void main() {
     vec3 col = texture(hdrImg, uv).rgb;
     float e = max(texture(expImg, vec2(0.5)).r, 1e-3);
     col *= 0.5 / e;
+    col += texture(bloomImg, uv).rgb * 0.05; // demo-5b: аддитивный bloom
     o = vec4(uchimura(max(col, vec3(0.0))), 1.0);
 }

@@ -911,13 +911,65 @@ int main(int argc, char** argv) {
         });
     }
 
+    // ---- demo-5b bloom-цели (GENERAL навсегда): A половина, B четверть, A2 половина-финал ----
+    VkImage bloomImg[3] = {nullptr, nullptr, nullptr};
+    VmaAllocation bloomAlloc[3] = {nullptr, nullptr, nullptr};
+    VkImageView bloomView[3] = {nullptr, nullptr, nullptr};
+    VkSampler bloomSmp = nullptr;
+    {
+        uint32_t bw[3] = {(swapExtent.width + 1) / 2, (swapExtent.width + 3) / 4,
+                          (swapExtent.width + 1) / 2};
+        uint32_t bh[3] = {(swapExtent.height + 1) / 2, (swapExtent.height + 3) / 4,
+                          (swapExtent.height + 1) / 2};
+        for (int i = 0; i < 3; i++) {
+            VkImageCreateInfo ci{};
+            ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ci.imageType = VK_IMAGE_TYPE_2D;
+            ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            ci.extent = {bw[i], bh[i], 1};
+            ci.mipLevels = 1; ci.arrayLayers = 1;
+            ci.samples = VK_SAMPLE_COUNT_1_BIT;
+            ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VK_CHECK(vmaCreateImage(alloc, &ci, &ai, &bloomImg[i], &bloomAlloc[i], nullptr));
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = bloomImg[i];
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VK_CHECK(vkCreateImageView(device, &vi, nullptr, &bloomView[i]));
+            immRun([&](VkCommandBuffer cb) {
+                imgBarrier(cb, bloomImg[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            });
+        }
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_LINEAR;
+        si.minFilter = VK_FILTER_LINEAR;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        VK_CHECK(vkCreateSampler(device, &si, nullptr, &bloomSmp));
+    }
+    del.push([&]() {
+        vkDestroySampler(device, bloomSmp, nullptr);
+        for (int i = 0; i < 3; i++) {
+            vkDestroyImageView(device, bloomView[i], nullptr);
+            vmaDestroyImage(alloc, bloomImg[i], bloomAlloc[i]);
+        }
+    });
+
     // ---- demo-5a пост: 2 набора (на кадр: exp ping-pong; апдейт до бинда = безопасно) ----
     VkDescriptorSetLayout postLayout;
     VkDescriptorSet postSet[2];
     VkPipelineLayout postComputeLayout; // lum+adapt делят (push dt/parity)
     VkPipeline lumPipe, adaptPipe;
     {
-        VkDescriptorSetLayoutBinding pb[5]{};
+        VkDescriptorSetLayoutBinding pb[6]{};
         pb[0].binding = 0;
         pb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         pb[0].descriptorCount = 1;
@@ -933,12 +985,17 @@ int main(int argc, char** argv) {
             pb[b].descriptorCount = 1;
             pb[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
+        pb[5].binding = 5; // demo-5b: bloom для тонемэппа
+        pb[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        pb[5].descriptorCount = 1;
+        pb[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding pball[6] = {pb[0], pb[1], pb[2], pb[3], pb[4], pb[5]};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 5; li.pBindings = pb;
+        li.bindingCount = 6; li.pBindings = pball;
         VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &postLayout));
         VkDescriptorPoolSize ps[2]{};
-        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 4;
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 6;
         ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; ps[1].descriptorCount = 6;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -964,7 +1021,10 @@ int main(int argc, char** argv) {
                 si[b].sampler = VK_NULL_HANDLE; si[b].imageView = siv[b];
                 si[b].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
-            VkWriteDescriptorSet w[5]{};
+            VkDescriptorImageInfo bi5{};
+            bi5.sampler = bloomSmp; bi5.imageView = bloomView[2];
+            bi5.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w[6]{};
             w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[0].dstSet = postSet[i]; w[0].dstBinding = 0;
             w[0].descriptorCount = 1;
@@ -982,7 +1042,12 @@ int main(int argc, char** argv) {
                 w[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 w[b].pImageInfo = &si[b - 2];
             }
-            vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
+            w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[5].dstSet = postSet[i]; w[5].dstBinding = 5;
+            w[5].descriptorCount = 1;
+            w[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[5].pImageInfo = &bi5;
+            vkUpdateDescriptorSets(device, 6, w, 0, nullptr);
         }
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1014,6 +1079,108 @@ int main(int argc, char** argv) {
             vkDestroyPipelineLayout(device, postComputeLayout, nullptr);
             vkDestroyDescriptorSetLayout(device, postLayout, nullptr);
             vkDestroyDescriptorPool(device, postPool, nullptr);
+        });
+    }
+
+    // ---- demo-5b bloom-наборы: 3 прохода (bright/down/up), картинки статичны ----
+    VkDescriptorSetLayout bloomLayout;
+    VkDescriptorSet bloomSet[3];
+    VkPipelineLayout bloomPipeLayout;
+    VkPipeline brightPipe, kdownPipe, kupPipe;
+    {
+        VkDescriptorSetLayoutBinding bb[3]{};
+        bb[0].binding = 0;
+        bb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bb[0].descriptorCount = 1;
+        bb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bb[1].binding = 1;
+        bb[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bb[1].descriptorCount = 1;
+        bb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bb[2].binding = 2; // только up (база); down игнорирует
+        bb[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bb[2].descriptorCount = 1;
+        bb[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 3; li.pBindings = bb;
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &bloomLayout));
+        VkDescriptorPoolSize ps[2]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 3 * 2;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; ps[1].descriptorCount = 3;
+        VkDescriptorPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = 3;
+        pi.poolSizeCount = 2; pi.pPoolSizes = ps;
+        VkDescriptorPool bloomPool;
+        VK_CHECK(vkCreateDescriptorPool(device, &pi, nullptr, &bloomPool));
+        // проходы: 0 bright HDR->A, 1 down A->B, 2 up B->A2 (+base A)
+        VkImage srcs[3] = {hdrImg, bloomImg[0], bloomImg[1]};
+        VkImageView srcv[3] = {hdrView, bloomView[0], bloomView[1]};
+        VkSampler srcsmp[3] = {hdrSmp, bloomSmp, bloomSmp};
+        VkImage dsts[3] = {bloomImg[0], bloomImg[1], bloomImg[2]};
+        VkImageView dstv[3] = {bloomView[0], bloomView[1], bloomView[2]};
+        for (int i = 0; i < 3; i++) {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = bloomPool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &bloomLayout;
+            VK_CHECK(vkAllocateDescriptorSets(device, &ai, &bloomSet[i]));
+            VkDescriptorImageInfo ii[3]{};
+            ii[0].sampler = srcsmp[i]; ii[0].imageView = srcv[i];
+            ii[0].imageLayout = (i == 0) ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                         : VK_IMAGE_LAYOUT_GENERAL;
+            ii[1].sampler = VK_NULL_HANDLE; ii[1].imageView = dstv[i];
+            ii[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            ii[2].sampler = bloomSmp; ii[2].imageView = bloomView[0];
+            ii[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w[3]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = bloomSet[i]; w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[0].pImageInfo = &ii[0];
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = bloomSet[i]; w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[1].pImageInfo = &ii[1];
+            w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[2].dstSet = bloomSet[i]; w[2].dstBinding = 2;
+            w[2].descriptorCount = 1;
+            w[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[2].pImageInfo = &ii[2];
+            vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+        }
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 1; pli.pSetLayouts = &bloomLayout;
+        pli.pushConstantRangeCount = 0; pli.pPushConstantRanges = nullptr;
+        VK_CHECK(vkCreatePipelineLayout(device, &pli, nullptr, &bloomPipeLayout));
+        auto mkBCompute = [&](const char* name, VkPipeline& out) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s%s.spv", SHADER_DIR, name);
+            VkShaderModule cs = makeShader(device, p);
+            VkComputePipelineCreateInfo cpi{};
+            cpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            cpi.stage.module = cs; cpi.stage.pName = "main";
+            cpi.layout = bloomPipeLayout;
+            VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &out));
+            vkDestroyShaderModule(device, cs, nullptr);
+        };
+        mkBCompute("bright.comp", brightPipe);
+        mkBCompute("kdown.comp", kdownPipe);
+        mkBCompute("kup.comp", kupPipe);
+        del.push([=, &device]() {
+            vkDestroyPipeline(device, brightPipe, nullptr);
+            vkDestroyPipeline(device, kdownPipe, nullptr);
+            vkDestroyPipeline(device, kupPipe, nullptr);
+            vkDestroyPipelineLayout(device, bloomPipeLayout, nullptr);
+            vkDestroyDescriptorSetLayout(device, bloomLayout, nullptr);
+            vkDestroyDescriptorPool(device, bloomPool, nullptr);
         });
     }
 
@@ -1728,6 +1895,33 @@ int main(int argc, char** argv) {
             w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo = &ei;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        }
+        // demo-5b bloom-цепочка: bright HDR->A, down A->B, up B->A2(+base A).
+        {
+            struct BloomPass { VkPipeline pipe; VkDescriptorSet set; uint32_t w, h; };
+            uint32_t hw = (swapExtent.width + 1) / 2, hh = (swapExtent.height + 1) / 2;
+            uint32_t qw = (swapExtent.width + 3) / 4, qh = (swapExtent.height + 3) / 4;
+            BloomPass ps[3] = {{brightPipe, bloomSet[0], hw, hh},
+                               {kdownPipe, bloomSet[1], qw, qh},
+                               {kupPipe, bloomSet[2], hw, hh}};
+            for (int i = 0; i < 3; i++) {
+                vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, ps[i].pipe);
+                vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        bloomPipeLayout, 0, 1, &ps[i].set, 0, nullptr);
+                vkCmdDispatch(cmdBufs[fi], (ps[i].w + 7) / 8, (ps[i].h + 7) / 8, 1);
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = (i == 0) ? bloomImg[0] : ((i == 1) ? bloomImg[1] : bloomImg[2]);
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     (i == 2) ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                              : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &b);
+            }
         }
         vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, lumPipe);
         vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
