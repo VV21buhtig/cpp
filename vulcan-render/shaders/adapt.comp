@@ -8,11 +8,18 @@ layout(set = 0, binding = 4, r16f) uniform image2D expB;
 layout(push_constant) uniform P { float dt; float parity; float pad0; float pad1; } pc;
 
 void main() {
-    float sum = 0.0;
+    // Центрально-взвешенное среднее: яркое небо по краям не должно гасить
+    // землю (иначе трава серая). Вес — гауссиана от центра кадра.
+    float sum = 0.0, wsum = 0.0;
     for (int y = 0; y < 36; y++)
-        for (int x = 0; x < 64; x++)
-            sum += imageLoad(lumImg, ivec2(x, y)).r;
-    float avg = sum / 2304.0;
+        for (int x = 0; x < 64; x++) {
+            float dx = (x + 0.5 - 32.0) / 32.0;
+            float dy = (y + 0.5 - 18.0) / 18.0;
+            float w = exp(-(dx * dx + dy * dy) * 1.5);
+            sum += imageLoad(lumImg, ivec2(x, y)).r * w;
+            wsum += w;
+        }
+    float avg = sum / max(wsum, 1e-3);
     float prev = (pc.parity < 0.5) ? imageLoad(expA, ivec2(0, 0)).r
                                    : imageLoad(expB, ivec2(0, 0)).r;
     float f = 1.0 - exp(-pc.dt * 3.0);
