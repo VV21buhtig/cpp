@@ -1,0 +1,22 @@
+#version 450
+// demo-5a adapt: 64x36 -> 1x1 средняя + exp-сглаживание (пинг-понг A<->B).
+// new = prev + (avg-prev)*(1-exp(-dt*speed)). Рецепт Ch10 (init 1.0, clamp).
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 2, r16f) readonly uniform image2D lumImg;
+layout(set = 0, binding = 3, r16f) uniform image2D expA;
+layout(set = 0, binding = 4, r16f) uniform image2D expB;
+layout(push_constant) uniform P { float dt; float parity; float pad0; float pad1; } pc;
+
+void main() {
+    float sum = 0.0;
+    for (int y = 0; y < 36; y++)
+        for (int x = 0; x < 64; x++)
+            sum += imageLoad(lumImg, ivec2(x, y)).r;
+    float avg = sum / 2304.0;
+    float prev = (pc.parity < 0.5) ? imageLoad(expA, ivec2(0, 0)).r
+                                   : imageLoad(expB, ivec2(0, 0)).r;
+    float f = 1.0 - exp(-pc.dt * 3.0);
+    float ne = clamp(prev + (avg - prev) * f, 0.05, 8.0);
+    if (pc.parity < 0.5) imageStore(expB, ivec2(0, 0), vec4(ne, 0.0, 0.0, 0.0));
+    else imageStore(expA, ivec2(0, 0), vec4(ne, 0.0, 0.0, 0.0));
+}

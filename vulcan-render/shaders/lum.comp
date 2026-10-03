@@ -1,0 +1,24 @@
+#version 450
+// demo-5a lum: HDR -> 64x36 частичных яркостей (рецепт Ch10: bright->мипы->1x1,
+// упрощено до 2 compute-пассов). Каждый тред суммирует свой тайл HDR.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D hdrImg;
+layout(set = 0, binding = 2, r16f) writeonly uniform image2D lumImg;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (t.x >= 64 || t.y >= 36) return;
+    ivec2 hsz = textureSize(hdrImg, 0);
+    ivec2 base = (t * hsz) / ivec2(64, 36);
+    ivec2 step = hsz / ivec2(64, 36);
+    vec3 acc = vec3(0.0);
+    int n = 0;
+    for (int j = 0; j < step.y; j++)
+        for (int i = 0; i < step.x; i++) {
+            acc += texelFetch(hdrImg, base + ivec2(i, j), 0).rgb;
+            n++;
+        }
+    acc /= float(max(n, 1));
+    float lum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
+    imageStore(lumImg, t, vec4(lum, 0.0, 0.0, 0.0));
+}

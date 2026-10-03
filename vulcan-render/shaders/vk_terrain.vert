@@ -4,6 +4,7 @@
 // Биты: x4+z4+y6 (локальные!) + face3 + tile6 + ao8 + flip1. Мир — через model.
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewProj;
+    mat4 invViewProj;
     vec4 sunDir;
     vec4 sunCol;
     vec4 ambSky;

@@ -53,6 +53,7 @@ static VkShaderModule makeShader(VkDevice dev, const char* path) {
 // Кадр CPU-зеркало UBO (std140: всё по 16 байт, итого 176).
 struct FrameUBO {
     glm::mat4 viewProj;
+    glm::mat4 invViewProj;
     glm::vec4 sunDir, sunCol, ambSky, ambGnd, fog, misc, viewPos;
 };
 
@@ -372,6 +373,103 @@ int main(int argc, char** argv) {
     del.push([&]() {
         vkDestroyImageView(device, depthView, nullptr);
         vmaDestroyImage(alloc, depthImg, depthAlloc);
+    });
+
+    // ---- demo-5a HDR-цель (R16F, сцена+небо пишут, читают lum/tonemap) ----
+    VkImage hdrImg = nullptr;
+    VmaAllocation hdrAlloc = nullptr;
+    VkImageView hdrView = nullptr;
+    VkImageLayout hdrLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    {
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ci.extent = {swapExtent.width, swapExtent.height, 1};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(alloc, &ci, &ai, &hdrImg, &hdrAlloc, nullptr));
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = hdrImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &hdrView));
+    }
+    del.push([&]() {
+        vkDestroyImageView(device, hdrView, nullptr);
+        vmaDestroyImage(alloc, hdrImg, hdrAlloc);
+    });
+
+    // ---- demo-5a lum 64x36 + exposure ping-pong 1x1 (GENERAL навсегда) ----
+    VkImage lumImg = nullptr, expImg[2] = {nullptr, nullptr};
+    VmaAllocation lumAlloc = nullptr, expAlloc[2] = {nullptr, nullptr};
+    VkImageView lumView = nullptr, expView[2] = {nullptr, nullptr};
+    VkSampler hdrSmp = nullptr, expSmp = nullptr;
+    {
+        auto mkTarget = [&](uint32_t w, uint32_t h, VkImage& img, VmaAllocation& al,
+                            VkImageView& view, bool clear1) {
+            VkImageCreateInfo ci{};
+            ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ci.imageType = VK_IMAGE_TYPE_2D;
+            ci.format = VK_FORMAT_R16_SFLOAT;
+            ci.extent = {w, h, 1};
+            ci.mipLevels = 1; ci.arrayLayers = 1;
+            ci.samples = VK_SAMPLE_COUNT_1_BIT;
+            ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VK_CHECK(vmaCreateImage(alloc, &ci, &ai, &img, &al, nullptr));
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = img;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R16_SFLOAT;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VK_CHECK(vkCreateImageView(device, &vi, nullptr, &view));
+            immRun([&](VkCommandBuffer cb) {
+                imgBarrier(cb, img, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                           0, 1, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+                if (clear1) {
+                    VkClearColorValue cv{};
+                    cv.float32[0] = 1.0f; // exposure стартует с 1.0 (рецепт книги)
+                    VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
+                }
+                imgBarrier(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            });
+        };
+        mkTarget(64, 36, lumImg, lumAlloc, lumView, false);
+        mkTarget(1, 1, expImg[0], expAlloc[0], expView[0], true);
+        mkTarget(1, 1, expImg[1], expAlloc[1], expView[1], true);
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_NEAREST;
+        si.minFilter = VK_FILTER_NEAREST;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        VK_CHECK(vkCreateSampler(device, &si, nullptr, &hdrSmp));
+        VK_CHECK(vkCreateSampler(device, &si, nullptr, &expSmp));
+    }
+    del.push([&]() {
+        vkDestroySampler(device, hdrSmp, nullptr);
+        vkDestroySampler(device, expSmp, nullptr);
+        vkDestroyImageView(device, lumView, nullptr);
+        vmaDestroyImage(alloc, lumImg, lumAlloc);
+        for (int i = 0; i < 2; i++) {
+            vkDestroyImageView(device, expView[i], nullptr);
+            vmaDestroyImage(alloc, expImg[i], expAlloc[i]);
+        }
     });
 
     // ---- demo-4 теневая карта: D16 2048 (рецепт Ch10/11) + compare-сэмплер ----
@@ -813,6 +911,112 @@ int main(int argc, char** argv) {
         });
     }
 
+    // ---- demo-5a пост: 2 набора (на кадр: exp ping-pong; апдейт до бинда = безопасно) ----
+    VkDescriptorSetLayout postLayout;
+    VkDescriptorSet postSet[2];
+    VkPipelineLayout postComputeLayout; // lum+adapt делят (push dt/parity)
+    VkPipeline lumPipe, adaptPipe;
+    {
+        VkDescriptorSetLayoutBinding pb[5]{};
+        pb[0].binding = 0;
+        pb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        pb[0].descriptorCount = 1;
+        pb[0].stageFlags = (VkShaderStageFlags)(VK_SHADER_STAGE_COMPUTE_BIT |
+                                                VK_SHADER_STAGE_FRAGMENT_BIT);
+        pb[1].binding = 1;
+        pb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        pb[1].descriptorCount = 1;
+        pb[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        for (int b = 2; b < 5; b++) {
+            pb[b].binding = (uint32_t)b;
+            pb[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            pb[b].descriptorCount = 1;
+            pb[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 5; li.pBindings = pb;
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &li, nullptr, &postLayout));
+        VkDescriptorPoolSize ps[2]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 4;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; ps[1].descriptorCount = 6;
+        VkDescriptorPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = 2;
+        pi.poolSizeCount = 2; pi.pPoolSizes = ps;
+        VkDescriptorPool postPool;
+        VK_CHECK(vkCreateDescriptorPool(device, &pi, nullptr, &postPool));
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = postPool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &postLayout;
+        for (int i = 0; i < 2; i++) {
+            VK_CHECK(vkAllocateDescriptorSets(device, &ai, &postSet[i]));
+            VkDescriptorImageInfo ii[2]{};
+            ii[0].sampler = hdrSmp; ii[0].imageView = hdrView;
+            ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            ii[1].sampler = expSmp; ii[1].imageView = expView[i];
+            ii[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo si[3]{};
+            VkImageView siv[3] = {lumView, expView[0], expView[1]};
+            for (int b = 0; b < 3; b++) {
+                si[b].sampler = VK_NULL_HANDLE; si[b].imageView = siv[b];
+                si[b].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            VkWriteDescriptorSet w[5]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = postSet[i]; w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[0].pImageInfo = &ii[0];
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = postSet[i]; w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[1].pImageInfo = &ii[1];
+            for (int b = 2; b < 5; b++) {
+                w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[b].dstSet = postSet[i]; w[b].dstBinding = (uint32_t)b;
+                w[b].descriptorCount = 1;
+                w[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                w[b].pImageInfo = &si[b - 2];
+            }
+            vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
+        }
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size = 16; pc.offset = 0; // dt + parity + pad
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 1; pli.pSetLayouts = &postLayout;
+        pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(device, &pli, nullptr, &postComputeLayout));
+        auto mkCompute = [&](const char* spv, VkPipeline& out) {
+            VkShaderModule cs = makeShader(device, spv);
+            VkComputePipelineCreateInfo cpi{};
+            cpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            cpi.stage.module = cs; cpi.stage.pName = "main";
+            cpi.layout = postComputeLayout;
+            VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &out));
+            vkDestroyShaderModule(device, cs, nullptr);
+        };
+        char lumPath[1024], adaptPath[1024];
+        snprintf(lumPath, sizeof(lumPath), "%slum.comp.spv", SHADER_DIR);
+        snprintf(adaptPath, sizeof(adaptPath), "%sadapt.comp.spv", SHADER_DIR);
+        mkCompute(lumPath, lumPipe);
+        mkCompute(adaptPath, adaptPipe);
+        del.push([=, &device]() {
+            vkDestroyPipeline(device, lumPipe, nullptr);
+            vkDestroyPipeline(device, adaptPipe, nullptr);
+            vkDestroyPipelineLayout(device, postComputeLayout, nullptr);
+            vkDestroyDescriptorSetLayout(device, postLayout, nullptr);
+            vkDestroyDescriptorPool(device, postPool, nullptr);
+        });
+    }
+
     // ---- пайплайн террейна (vertex-input 12 floats, depth, cull NONE на demo-2) ----
     VkPipelineLayout pipeLayout;
     VkPipeline pipeline;
@@ -869,7 +1073,8 @@ int main(int argc, char** argv) {
         VK_CHECK(vkCreatePipelineLayout(device, &li, nullptr, &pipeLayout));
         VkPipelineRenderingCreateInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-        ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &swapFormat;
+        VkFormat hdrPipeFmt = VK_FORMAT_R16G16B16A16_SFLOAT; // террейн всегда в HDR!
+        ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &hdrPipeFmt;
         ri.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
         VkGraphicsPipelineCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1025,6 +1230,97 @@ int main(int argc, char** argv) {
     }
     del.push([&]() { vkDestroyPipeline(device, dbgPipe, nullptr); });
 
+    // ---- demo-5a небо + тонемэппинг: фулскрин-пайпы (layout = набор + свой пуш) ----
+    VkPipelineLayout skyPipeLayout, tonemapPipeLayout;
+    VkPipeline skyPipe, tonemapPipe;
+    {
+        auto mkLayout = [&](VkDescriptorSetLayout set, uint32_t pushSize,
+                            VkShaderStageFlags pushStage, VkPipelineLayout& out) {
+            VkPushConstantRange pc{};
+            pc.stageFlags = pushStage;
+            pc.size = pushSize; pc.offset = 0;
+            VkPipelineLayoutCreateInfo li{};
+            li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            li.setLayoutCount = 1; li.pSetLayouts = &set;
+            li.pushConstantRangeCount = 1; li.pPushConstantRanges = &pc;
+            VK_CHECK(vkCreatePipelineLayout(device, &li, nullptr, &out));
+        };
+        mkLayout(setLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, skyPipeLayout);
+        mkLayout(postLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, tonemapPipeLayout);
+        auto mkFullPipe = [&](const char* fsName, VkFormat colorFmt,
+                              VkPipelineLayout layout, VkPipeline& out) {
+            VkShaderModule vs = makeShader(device, SHADER_DIR "tri.vert.spv");
+            char fsPath[1024];
+            snprintf(fsPath, sizeof(fsPath), "%s%s.spv", SHADER_DIR, fsName);
+            VkShaderModule fs = makeShader(device, fsPath);
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vs; stages[0].pName = "main";
+            stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fs; stages[1].pName = "main";
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1; vp.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode = VK_CULL_MODE_NONE;
+            rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth = 1.0f;
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineColorBlendAttachmentState ba{};
+            ba.colorWriteMask = 0xF;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1; cb.pAttachments = &ba;
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+            VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+            VkGraphicsPipelineCreateInfo pi{};
+            pi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            VkPipelineRenderingCreateInfo ri{};
+            ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            ri.colorAttachmentCount = 1; ri.pColorAttachmentFormats = &colorFmt;
+            ri.depthAttachmentFormat = VK_FORMAT_UNDEFINED; // без глубины
+            pi.pNext = &ri;
+            pi.stageCount = 2; pi.pStages = stages;
+            pi.pVertexInputState = &vi;
+            pi.pInputAssemblyState = &ia;
+            pi.pViewportState = &vp;
+            pi.pRasterizationState = &rs;
+            pi.pMultisampleState = &ms;
+            pi.pColorBlendState = &cb;
+            pi.pDepthStencilState = &ds;
+            pi.pDynamicState = &dyn;
+            pi.layout = layout;
+            VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &out));
+            vkDestroyShaderModule(device, vs, nullptr);
+            vkDestroyShaderModule(device, fs, nullptr);
+        };
+        mkFullPipe("sky.frag", VK_FORMAT_R16G16B16A16_SFLOAT, skyPipeLayout, skyPipe);
+        mkFullPipe("tonemap.frag", swapFormat, tonemapPipeLayout, tonemapPipe);
+        del.push([&]() {
+            vkDestroyPipeline(device, skyPipe, nullptr);
+            vkDestroyPipeline(device, tonemapPipe, nullptr);
+            vkDestroyPipelineLayout(device, skyPipeLayout, nullptr);
+            vkDestroyPipelineLayout(device, tonemapPipeLayout, nullptr);
+        });
+    }
+
     // ---- камера: старт у холма, WASD+мышь+стрелки, Space/C, ESC выход ----
     glm::vec3 camPos, camFront;
     {
@@ -1158,6 +1454,7 @@ int main(int argc, char** argv) {
         {
             FrameUBO u{};
             u.viewProj = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+            u.invViewProj = glm::inverse(u.viewProj);
             glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
             u.sunDir = glm::vec4(sun, 0.0f);
             u.sunCol = glm::vec4(1.25f, 1.21f, 1.12f, 0.0f);
@@ -1318,13 +1615,61 @@ int main(int argc, char** argv) {
                                  0, 0, nullptr, 0, nullptr, 1, &b);
             shadowLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
+        // demo-5a: HDR-цепочка. Небо и террейн пишут HDR, дальше compute + тонемэппинг.
+        // HDR-переход (трекаем как своп).
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = (hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                  ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.oldLayout = hdrLayout;
+            b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.image = hdrImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi],
+                                 (hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                     ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                     : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            hdrLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        VkViewport svwp{0, 0, (float)swapExtent.width, (float)swapExtent.height, 0.0f, 1.0f};
+        VkRect2D ssc{{0, 0}, swapExtent};
+        // Небо первым (без глубины, CLEAR поверх всего).
+        {
+            VkRenderingAttachmentInfo sky{};
+            sky.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            sky.imageView = hdrView;
+            sky.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            sky.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            sky.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            sky.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            VkRenderingInfo sri{};
+            sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            sri.renderArea = {{0, 0}, swapExtent};
+            sri.layerCount = 1;
+            sri.colorAttachmentCount = 1;
+            sri.pColorAttachments = &sky;
+            vkCmdBeginRendering(cmdBufs[fi], &sri);
+            vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipe);
+            vkCmdSetViewport(cmdBufs[fi], 0, 1, &svwp);
+            vkCmdSetScissor(cmdBufs[fi], 0, 1, &ssc);
+            vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    skyPipeLayout, 0, 1, &descSets[fi], 0, nullptr);
+            glm::vec4 viewSize((float)swapExtent.width, (float)swapExtent.height, 0, 0);
+            vkCmdPushConstants(cmdBufs[fi], skyPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(viewSize), &viewSize);
+            vkCmdDraw(cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(cmdBufs[fi]);
+        }
         VkRenderingAttachmentInfo color{};
         color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        color.imageView = swapViews[imgIdx];
+        color.imageView = hdrView; // террейн — в HDR поверх неба (LOAD!)
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.clearValue.color = {{0.45f, 0.62f, 0.85f, 1.0f}};
         VkRenderingAttachmentInfo depth{};
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         depth.imageView = depthView;
@@ -1352,16 +1697,126 @@ int main(int argc, char** argv) {
                            0, sizeof(lightSpace), &lightSpace);
         vkCmdDrawIndirectCount(cmdBufs[fi], indBuf, sizeof(uint32_t) * 4, indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
-        // 5) рентген карты в угол (F1): тот же сет, вьюпорт 256 (шейдер по gl_FragCoord).
+        vkCmdEndRendering(cmdBufs[fi]);
+        // demo-5a пост: HDR -> lum -> adapt -> тонемэппинг в своп.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image = hdrImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            hdrLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        // exp для тонемэппа: binding 1 -> только что записанный.
+        // ДО всех биндов сета в кадре (апдейт после бинда инвалидирует запись)!
+        // (parity объявлен ниже у adapt; здесь inline по frame.)
+        {
+            VkDescriptorImageInfo ei{};
+            ei.sampler = expSmp;
+            ei.imageView = (frame % 2 == 0) ? expView[1] : expView[0];
+            ei.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = postSet[fi]; w.dstBinding = 1;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &ei;
+            vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        }
+        vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, lumPipe);
+        vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                postComputeLayout, 0, 1, &postSet[fi], 0, nullptr);
+        vkCmdDispatch(cmdBufs[fi], 8, 5, 1); // 64x36 тайлов
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = lumImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        float parity = (frame % 2 == 0) ? 0.0f : 1.0f; // чёт: читаем A пишем B
+        {
+            struct AdaptPush { float dt, parity, p0, p1; } ap{dt, parity, 0, 0};
+            vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, adaptPipe);
+            vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    postComputeLayout, 0, 1, &postSet[fi], 0, nullptr);
+            vkCmdPushConstants(cmdBufs[fi], postComputeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(ap), &ap);
+            vkCmdDispatch(cmdBufs[fi], 1, 1, 1);
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = (parity < 0.5f) ? expImg[1] : expImg[0];
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        // (exp binding 1 обновлён до биндов выше — см. перед lum.)
+        {
+            VkRenderingAttachmentInfo tm{};
+            tm.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            tm.imageView = swapViews[imgIdx];
+            tm.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            tm.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            tm.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            tm.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            VkRenderingInfo tri{};
+            tri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            tri.renderArea = {{0, 0}, swapExtent};
+            tri.layerCount = 1;
+            tri.colorAttachmentCount = 1;
+            tri.pColorAttachments = &tm;
+            vkCmdBeginRendering(cmdBufs[fi], &tri);
+            vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, tonemapPipe);
+            vkCmdSetViewport(cmdBufs[fi], 0, 1, &vwp);
+            vkCmdSetScissor(cmdBufs[fi], 0, 1, &sc);
+            vkCmdBindDescriptorSets(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    tonemapPipeLayout, 0, 1, &postSet[fi], 0, nullptr);
+            glm::vec4 res((float)swapExtent.width, (float)swapExtent.height, 0, 0);
+            vkCmdPushConstants(cmdBufs[fi], tonemapPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(res), &res);
+            vkCmdDraw(cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(cmdBufs[fi]);
+        }
+        // 5) рентген карты в угол (F1): второй проход по свопу (LOAD).
         if (dbgShadow) {
+            VkRenderingAttachmentInfo dg{};
+            dg.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dg.imageView = swapViews[imgIdx];
+            dg.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            dg.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            dg.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo dri{};
+            dri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            dri.renderArea = {{0, 0}, swapExtent};
+            dri.layerCount = 1;
+            dri.colorAttachmentCount = 1;
+            dri.pColorAttachments = &dg;
+            vkCmdBeginRendering(cmdBufs[fi], &dri);
             vkCmdBindPipeline(cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, dbgPipe);
             VkViewport dvp{0, 0, 256, 256, 0.0f, 1.0f};
             VkRect2D dsc{{0, 0}, {256, 256}};
             vkCmdSetViewport(cmdBufs[fi], 0, 1, &dvp);
             vkCmdSetScissor(cmdBufs[fi], 0, 1, &dsc);
             vkCmdDraw(cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(cmdBufs[fi]);
         }
-        vkCmdEndRendering(cmdBufs[fi]);
         VkImageMemoryBarrier toPresent = toDraw;
         toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         toPresent.dstAccessMask = 0;

@@ -3,6 +3,7 @@
 // (тени — demo-4 с настоящей картой). Point/spot выкинуты (игровые лампы — позже).
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewProj;
+    mat4 invViewProj;
     vec4 sunDir;
     vec4 sunCol;
     vec4 ambSky;
@@ -55,8 +56,8 @@ void main() {
     vec4 tileTexA = texture(tiles, vec3(vUV, vTile));
     if (vTile > 5.5 && vTile < 6.5 && tileTexA.a < 0.5) discard;
     vec3 tileTex = vec3(tileTexA);
-    if (vTile > 4.5 && vTile < 5.5) { // лава светится сама
-        outColor = vec4(pow(tileTex * 1.8, vec3(1.0 / frame.misc.z)), 1.0);
+    if (vTile > 4.5 && vTile < 5.5) { // лава светится сама (линейно в HDR!)
+        outColor = vec4(tileTex * 1.8, 1.0);
         return;
     }
 
@@ -73,5 +74,5 @@ void main() {
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);
     vec3 col = mix(shaded, frame.fog.rgb, ff);
-    outColor = vec4(pow(col, vec3(1.0 / frame.misc.z)), 1.0);
+    outColor = vec4(col, 1.0); // линейно в HDR; гамма — в самом конце (tonemap)
 }
