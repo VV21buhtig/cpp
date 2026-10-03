@@ -29,6 +29,9 @@ void main() {
     float aoC = 0.5 + 0.5 * aoV * aoV;
 
     vec3 tileTex = vec3(texture(tiles, vec3(vUV, 4.0)));
+    // Вода плоская по природе (±3.6%): поднимаем контраст (иначе текстуры нет)
+    // + медленный дрейф UV (глаз держит только живое, течение тут ни при чём).
+    tileTex = mix(vec3(dot(tileTex, vec3(0.3333))), tileTex, 1.8);
     vec3 sunL = normalize(frame.sunDir.xyz);
     float ndl = max(dot(norm, sunL), 0.0);
     vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * tileTex;

@@ -62,6 +62,8 @@ void main() {
     if (ax == 0) vUV = vec2(w.z, w.y);
     else if (ax == 1) vUV = vec2(w.x, w.z);
     else vUV = vec2(w.x, w.y);
+    vUV *= 0.5; // вода крупнее: пятна 2x переживают минификацию вдали
+    vUV += vec2(frame.misc.w * 0.010, frame.misc.w * 0.006); // дыхание (не течение!)
     vAO = float((ao4 >> uint(2 * ci)) & 3u);
     gl_Position = frame.viewProj * w;
 }
