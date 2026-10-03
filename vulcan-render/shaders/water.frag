@@ -36,11 +36,13 @@ void main() {
     // выбивает белую плитку в молоко (1.6 -> Uchimura в белое). Проверено рентгеном.
     vec3 direct = frame.sunCol.rgb * ndl * tileTex * 0.3;
     vec3 result = amb + direct;
+    // Стенки мутные (иначе glass-танк): свет гаснет с глубиной, аппроксимация.
+    if (abs(norm.y) < 0.9) result *= 0.55;
 
     vec3 shaded = result * fshade * aoC;
     shaded = mix(vec3(dot(shaded, vec3(0.3333))), shaded, frame.misc.y);
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);
     vec3 col = mix(shaded, frame.fog.rgb, ff);
-    outColor = vec4(col, 0.85); // песок снизу белит (проверено рентгеном) — глубже alpha
+    outColor = vec4(col, 0.65); // дно должно читаться (иначе кусок ткани, не вода)
 }

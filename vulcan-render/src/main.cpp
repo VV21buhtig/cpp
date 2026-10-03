@@ -541,10 +541,10 @@ int main(int argc, char** argv) {
     VkImageView tileView;
     VkSampler tileSmp;
     {
-        const char* names[13] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png",
+        const char* names[14] = {"grass_top.png", "grass_side.png", "dirt.png", "stone.png",
             "water.png", "lava.png", "leaves.png", "log_side.png", "log_top.png",
-            "ore_coal.png", "ore_iron.png", "ore_gold.png", "ore_diamond.png"};
-        const int T = 16, NL = 13, MIPS = 5;
+            "ore_coal.png", "ore_iron.png", "ore_gold.png", "ore_diamond.png", "sand.png"};
+        const int T = 16, NL = 14, MIPS = 5;
         std::vector<unsigned char> all(T * T * 4 * NL);
         stbi_set_flip_vertically_on_load(true);
         for (int i = 0; i < NL; i++) {
@@ -568,10 +568,11 @@ int main(int argc, char** argv) {
             all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 171 / 255);
             all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 47 / 255);
         }
+        // Вода глубокая (замер 0.54R: белила): тинт #2050A0 вместо #3F76E4.
         for (int p = 4 * T * T; p < 5 * T * T; p++) {
-            all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 63 / 255);
-            all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 118 / 255);
-            all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 228 / 255);
+            all[p * 4 + 0] = (unsigned char)(all[p * 4 + 0] * 32 / 255);
+            all[p * 4 + 1] = (unsigned char)(all[p * 4 + 1] * 80 / 255);
+            all[p * 4 + 2] = (unsigned char)(all[p * 4 + 2] * 160 / 255);
         }
         VkDeviceSize upSize = all.size();
         VkBuffer staging;
@@ -1494,8 +1495,8 @@ int main(int argc, char** argv) {
         VkPipelineDepthStencilStateCreateInfo ds{};
         ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         ds.depthTestEnable = VK_TRUE;
-        ds.depthWriteEnable = VK_FALSE; // гладь не пишет глубину
-        ds.depthCompareOp = VK_COMPARE_OP_LESS;
+        ds.depthWriteEnable = VK_TRUE; // вода пишет глубину: перекрытия одной
+        ds.depthCompareOp = VK_COMPARE_OP_LESS; // среды решает depth, не порядок бленда
         VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dyn{};
         dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -1785,6 +1786,7 @@ int main(int argc, char** argv) {
         (float)swapExtent.width / (float)swapExtent.height, 0.1f, 600.0f);
     proj[1][1] *= -1.0f; // Y-flip под Vulkan (идиома vkguide)
     float tod = 1.5707f; // полдень (1/2/3 утро/день/вечер, F1 рентген карты)
+    if (getenv("VK_TOD")) tod = (float)atof(getenv("VK_TOD")); // рентген: фикс солнца
     bool dbgShadow = false, prevF1 = false;
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
