@@ -135,7 +135,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
-    bool noShadow = getenv("VK_NOSHADOW") != nullptr, prevF6 = false; // F6: карта теней выкл (диагностика!)
+    bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -494,7 +494,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         depth.clearValue.depthStencil = {1.0f, 0};
         depth.resolveImageView = tg.depthCopyView;
         depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depth.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        depth.resolveMode = VK_RESOLVE_MODE_MIN_BIT; // ближний побеждает (края для TAA)
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ri.renderArea = {{0, 0}, core.swapExtent};
@@ -885,7 +885,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             VK_CHECK(vkWaitForFences(core.device, 1, &sy.frameFence[fi], VK_TRUE, 1000000000ull));
             void* px = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, tg.shotAlloc, &px));
-            FILE* f = fopen("shot.tga", "wb");
+                FILE* f = fopen("shot.tga", "wb");
             if (f) {
                 int W = (int)core.swapExtent.width, H = (int)core.swapExtent.height;
                 unsigned char hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
