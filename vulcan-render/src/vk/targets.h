@@ -11,13 +11,16 @@ struct Targets;
 constexpr int SHADOW_S = 2048; // теневая карта D16 (рецепт Ch10/11)
 
 struct Targets {
-    VkImage depthImg = nullptr;
-    VmaAllocation depthAlloc = nullptr;
-    VkImageView depthView = nullptr;
     VkImage hdrImg = nullptr;
     VmaAllocation hdrAlloc = nullptr;
     VkImageView hdrView = nullptr;
     VkImageLayout hdrLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImage hdrMsImg = nullptr; // demo-9: MSAA4 цвет (резолв в hdrView)
+    VmaAllocation hdrMsAlloc = nullptr;
+    VkImageView hdrMsView = nullptr;
+    VkImage depthMsImg = nullptr; // demo-9: MSAA4 глубина (резолв в depthCopyView)
+    VmaAllocation depthMsAlloc = nullptr;
+    VkImageView depthMsView = nullptr;
     VkImage lumImg = nullptr, expImg[2] = {nullptr, nullptr};
     VmaAllocation lumAlloc = nullptr, expAlloc[2] = {nullptr, nullptr};
     VkImageView lumView = nullptr, expView[2] = {nullptr, nullptr};
@@ -49,7 +52,7 @@ struct Targets {
     VmaAllocation dbgReadAlloc = nullptr;
     VkImage depthCopyImg = nullptr;
     VmaAllocation depthCopyAlloc = nullptr;
-    VkImageView depthCopyView = nullptr;
+    VkImageView depthCopyView = nullptr; // demo-9: ещё и цель резолва глубины
     VkBuffer waterGigaBuf = nullptr, waterMetaBuf = nullptr, waterIndBuf = nullptr;
     VmaAllocation waterGigaAlloc = nullptr, waterMetaAlloc = nullptr, waterIndAlloc = nullptr;
     VkImage occImg = nullptr; // demo-8: воксели плотности под RT AO (R8 3D, статика до EditStore)

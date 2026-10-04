@@ -7,42 +7,6 @@
 #include <cstring>
 
 void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset, Targets& t) {
-    // ---- depth (D32F в GENERAL: аттачмент + сэмпл для воды + копия) ----
-    {
-        VkImageCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_D32_SFLOAT;
-        ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
-        ci.mipLevels = 1; ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.depthImg, &t.depthAlloc, nullptr));
-        VkImageViewCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image = t.depthImg;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_D32_SFLOAT;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.depthView));
-        core.immRun([&](VkCommandBuffer cb) {
-            // Глубина живёт в GENERAL всегда: и аттачмент, и сэмпл для воды.
-            imgBarrier(cb, t.depthImg, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_GENERAL,
-                       VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1,
-                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-        });
-    }
-    core.del.push([corep = &core, tp = &t]() {
-        vkDestroyImageView(corep->device, tp->depthView, nullptr);
-        vmaDestroyImage(corep->alloc, tp->depthImg, tp->depthAlloc);
-    });
-
     // ---- demo-5a HDR-цель (R16F, сцена+небо пишут, читают lum/tonemap) ----
     t.hdrImg = nullptr;
     t.hdrAlloc = nullptr;
@@ -72,6 +36,49 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
     core.del.push([corep = &core, tp = &t]() {
         vkDestroyImageView(corep->device, tp->hdrView, nullptr);
         vmaDestroyImage(corep->alloc, tp->hdrImg, tp->hdrAlloc);
+    });
+
+    // ---- demo-9 MSAA4 цели (DONT_CARE: всё уходит резолвом) ----
+    {
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_4_BIT;
+        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
+        if (vmaCreateImage(core.alloc, &ci, &ai, &t.hdrMsImg, &t.hdrMsAlloc, nullptr) != VK_SUCCESS) {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE; // нет lazy — обычная
+            VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.hdrMsImg, &t.hdrMsAlloc, nullptr));
+        }
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = t.hdrMsImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.hdrMsView));
+        ci.format = VK_FORMAT_D32_SFLOAT;
+        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        ai.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
+        if (vmaCreateImage(core.alloc, &ci, &ai, &t.depthMsImg, &t.depthMsAlloc, nullptr) != VK_SUCCESS) {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.depthMsImg, &t.depthMsAlloc, nullptr));
+        }
+        vi.image = t.depthMsImg;
+        vi.format = VK_FORMAT_D32_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.depthMsView));
+    }
+    core.del.push([corep = &core, tp = &t]() {
+        vkDestroyImageView(corep->device, tp->depthMsView, nullptr);
+        vmaDestroyImage(corep->alloc, tp->depthMsImg, tp->depthMsAlloc);
+        vkDestroyImageView(corep->device, tp->hdrMsView, nullptr);
+        vmaDestroyImage(corep->alloc, tp->hdrMsImg, tp->hdrMsAlloc);
     });
 
     // ---- demo-5a lum 64x36 + exposure ping-pong 1x1 (GENERAL навсегда) ----
@@ -438,7 +445,8 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
         ci.mipLevels = 1; ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT; // demo-9: цель резолва
         VmaAllocationCreateInfo ai{};
         ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.depthCopyImg, &t.depthCopyAlloc, nullptr));

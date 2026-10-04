@@ -88,12 +88,13 @@ void main() {
     aoC *= mix(1.0, rt, occ.volMinK.w); // demo-8 RT AO поверх вершинного (F4)
 
     vec4 tileTexA = texture(tiles, vec3(vUV, vTile));
-    if (vTile > 5.5 && vTile < 6.5 && tileTexA.a < 0.5) discard;
     vec3 tileTex = vec3(tileTexA);
     if (vTile > 4.5 && vTile < 5.5) { // лава светится сама (линейно в HDR!)
         outColor = vec4(tileTex * 1.8, 1.0);
         return;
     }
+    // demo-9 A2C: листва пишет альфу дырок (MSAA режет край), discard убран.
+    float alpha = (vTile > 5.5 && vTile < 6.5) ? tileTexA.a : 1.0;
 
     float ndl = max(dot(norm, sunL), 0.0);
     vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * tileTex;
@@ -113,5 +114,5 @@ void main() {
     float fd = length(frame.viewPos.xyz - vPos);
     float ff = clamp((fd - frame.misc.x) / (frame.fog.w - frame.misc.x), 0.0, 1.0);
     vec3 col = mix(shaded, frame.fog.rgb, ff);
-    outColor = vec4(col, 1.0); // линейно в HDR; гамма — в самом конце (tonemap)
+    outColor = vec4(col, alpha); // линейно в HDR; гамма — в самом конце (tonemap)
 }

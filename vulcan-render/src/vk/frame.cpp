@@ -394,36 +394,70 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             tg.shadowLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         // demo-5a: HDR-цепочка. Небо и террейн пишут HDR, дальше compute + тонемэппинг.
-        // HDR-переход (трекаем как своп).
+        // HDR-переход (трекаем как своп) + MSAA-цели + копия глубины в аттачмент.
         {
-            VkImageMemoryBarrier b{};
-            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcAccessMask = (tg.hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+            VkImageMemoryBarrier b[3]{};
+            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[0].srcAccessMask = (tg.hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
                                   ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            b.oldLayout = tg.hdrLayout;
-            b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            b.image = tg.hdrImg;
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[0].oldLayout = tg.hdrLayout;
+            b[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[0].image = tg.hdrImg;
+            b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[1].srcAccessMask = (drawn == 0) ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[1].oldLayout = (drawn == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
+                                          : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[1].image = tg.hdrMsImg;
+            b[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[2].srcAccessMask = VK_ACCESS_SHADER_READ_BIT; // прошлый кадр сэмплил
+            b[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b[2].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[2].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b[2].image = tg.depthCopyImg;
+            b[2].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier b3{};
+            b3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b3.srcAccessMask = (drawn == 0) ? VkAccessFlags(0)
+                                            : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b3.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b3.oldLayout = (drawn == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
+                                        : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b3.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b3.image = tg.depthMsImg;
+            b3.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(sy.cmdBufs[fi],
-                                 (tg.hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
-                                     ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                     : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &b);
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT),
+                                 0, 0, nullptr, 0, nullptr, 3, b);
+            vkCmdPipelineBarrier(sy.cmdBufs[fi],
+                                 (drawn == 0) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                              : VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b3);
             tg.hdrLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
         VkViewport svwp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
         VkRect2D ssc{{0, 0}, core.swapExtent};
-        // Небо первым (без глубины, CLEAR поверх всего).
+        // Небо первым (MSAA CLEAR + резолв в HDR).
         {
             VkRenderingAttachmentInfo sky{};
             sky.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            sky.imageView = tg.hdrView;
+            sky.imageView = tg.hdrMsView;
             sky.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             sky.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            sky.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            sky.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // всё уходит резолвом
             sky.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            sky.resolveImageView = tg.hdrView;
+            sky.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            sky.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
             VkRenderingInfo sri{};
             sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
             sri.renderArea = {{0, 0}, core.swapExtent};
@@ -444,17 +478,23 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         }
         VkRenderingAttachmentInfo color{};
         color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        color.imageView = tg.hdrView; // террейн — в HDR поверх неба (LOAD!)
+        color.imageView = tg.hdrMsView; // террейн — в MSAA поверх неба (LOAD!)
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // всё уходит резолвом
+        color.resolveImageView = tg.hdrView;
+        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
         VkRenderingAttachmentInfo depth{};
         depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth.imageView = tg.depthView;
-        depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL; // + сэмпл воды там же
+        depth.imageView = tg.depthMsView;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // читает вода следующим пассом
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // уходит резолвом в копию
         depth.clearValue.depthStencil = {1.0f, 0};
+        depth.resolveImageView = tg.depthCopyView;
+        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ri.renderArea = {{0, 0}, core.swapExtent};
@@ -494,53 +534,20 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
         vkCmdEndRendering(sy.cmdBufs[fi]);
-        // demo-5x копия глубины для воды + барьеры (всё в GENERAL, только доступ).
+        // demo-9: глубина уже в копии (резолв террейна) — отдать в сэмпл воде/SSAO.
         {
-            VkImageMemoryBarrier b[2]{};
-            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            b[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b[0].image = tg.depthImg;
-            b[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            b[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b[1].image = tg.depthCopyImg;
-            b[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 2, b);
-            VkImageCopy cp{};
-            cp.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-            cp.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-            cp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
-            vkCmdCopyImage(sy.cmdBufs[fi], tg.depthImg, VK_IMAGE_LAYOUT_GENERAL,
-                           tg.depthCopyImg, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
-            VkImageMemoryBarrier b2[2]{};
-            b2[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b2[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b2[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b2[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[0].image = tg.depthCopyImg;
-            b2[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            b2[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b2[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            b2[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            b2[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[1].image = tg.depthImg;
-            b2[1].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                                 0, 0, nullptr, 0, nullptr, 2, b2);
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = tg.depthCopyImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
         }
         // demo-6 SSAO по копии глубины террейна (вода depth ещё не писала — ей AO
         // ложится от рельефа за ней, малозаметно). Барьер transfer->compute,
@@ -548,15 +555,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         {
             VkImageMemoryBarrier b{};
             b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b.image = tg.depthCopyImg;
-            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            (void)b; // барьер выше уже отдал копию в SHADER_READ (FRAGMENT|COMPUTE)
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.ssaoPipe);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                     st.ssaoPipeLayout, 0, 1, &st.ssaoSet, 0, nullptr);
@@ -583,14 +582,17 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         {
             VkRenderingAttachmentInfo wcol{};
             wcol.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            wcol.imageView = tg.hdrView;
+            wcol.imageView = tg.hdrMsView; // вода в MSAA поверх террейна (LOAD!)
             wcol.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             wcol.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            wcol.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            wcol.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // уходит резолвом
+            wcol.resolveImageView = tg.hdrView;
+            wcol.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            wcol.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
             VkRenderingAttachmentInfo wdep{};
             wdep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            wdep.imageView = tg.depthView;
-            wdep.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            wdep.imageView = tg.depthMsView; // LOAD террейна, резолва нет (копия уже снята)
+            wdep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
             wdep.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             wdep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             VkRenderingInfo wri{};

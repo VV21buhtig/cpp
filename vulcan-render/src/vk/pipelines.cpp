@@ -33,7 +33,8 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         rs.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT; // demo-9: MSAA под A2C
+        ms.alphaToCoverageEnable = VK_TRUE; // demo-9: листва без discard
         VkPipelineColorBlendAttachmentState ba{};
         ba.colorWriteMask = 0xF;
         VkPipelineColorBlendStateCreateInfo cb{};
@@ -179,7 +180,7 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         rs.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT; // demo-9: вода в том же MSAA-таргете
         VkPipelineColorBlendAttachmentState ba{};
         ba.blendEnable = VK_TRUE; // прозрачная гладь поверх террейна
         ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -307,7 +308,8 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         mkLayout(st.skyLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, p.skyPipeLayout);
         mkLayout(st.postLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, p.tonemapPipeLayout);
         auto mkFullPipe = [&](const char* fsName, VkFormat colorFmt,
-                              VkPipelineLayout layout, VkPipeline& out) {
+                              VkPipelineLayout layout, VkPipeline& out,
+                              VkSampleCountFlagBits samples) {
             VkShaderModule vs = makeShader(core.device, SHADER_DIR "tri.vert.spv");
             char fsPath[1024];
             snprintf(fsPath, sizeof(fsPath), "%s%s.spv", SHADER_DIR, fsName);
@@ -335,7 +337,7 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
             rs.lineWidth = 1.0f;
             VkPipelineMultisampleStateCreateInfo ms{};
             ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            ms.rasterizationSamples = samples; // demo-9: небо в MSAA, тонемэпп в своп
             VkPipelineColorBlendAttachmentState ba{};
             ba.colorWriteMask = 0xF;
             VkPipelineColorBlendStateCreateInfo cb{};
@@ -370,8 +372,10 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
             vkDestroyShaderModule(core.device, vs, nullptr);
             vkDestroyShaderModule(core.device, fs, nullptr);
         };
-        mkFullPipe("sky.frag", VK_FORMAT_R16G16B16A16_SFLOAT, p.skyPipeLayout, p.skyPipe);
-        mkFullPipe("tonemap.frag", core.swapFormat, p.tonemapPipeLayout, p.tonemapPipe);
+        mkFullPipe("sky.frag", VK_FORMAT_R16G16B16A16_SFLOAT, p.skyPipeLayout, p.skyPipe,
+                   VK_SAMPLE_COUNT_4_BIT);
+        mkFullPipe("tonemap.frag", core.swapFormat, p.tonemapPipeLayout, p.tonemapPipe,
+                   VK_SAMPLE_COUNT_1_BIT);
         core.del.push([corep = &core, pp = &p]() {
             vkDestroyPipeline(corep->device, pp->skyPipe, nullptr);
             vkDestroyPipeline(corep->device, pp->tonemapPipe, nullptr);
