@@ -134,6 +134,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
     bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
+    bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -181,6 +182,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f4 = glfwGetKey(core.window, GLFW_KEY_F4) != 0;
             if (f4 && !prevF4) { useRtAo = !useRtAo; printf("rtao %d\n", useRtAo); }
             prevF4 = f4;
+            bool f5 = glfwGetKey(core.window, GLFW_KEY_F5) != 0;
+            if (f5 && !prevF5) { dbgNdl = !dbgNdl; printf("sundir view %d\n", dbgNdl); }
+            prevF5 = f5;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -465,9 +469,10 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                            0, sizeof(lightSpace), &lightSpace);
         // demo-8 объём RT AO: min+k, size (мир статичен — World.sizeX/Z, SY).
         {
-            struct OccPush { float mix, miy, miz, k, sx, sy, sz, p; } op{
+            struct OccPush { float mix, miy, miz, k, sx, sy, sz, dbg; } op{
                 worldOffset.x, 0.0f, worldOffset.z, useRtAo ? 1.0f : 0.0f,
-                (float)world.sizeX(), (float)Chunk::SY, (float)world.sizeZ(), 0};
+                (float)world.sizeX(), (float)Chunk::SY, (float)world.sizeZ(),
+                dbgNdl ? 1.0f : 0.0f};
             vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                64, sizeof(op), &op);
         }

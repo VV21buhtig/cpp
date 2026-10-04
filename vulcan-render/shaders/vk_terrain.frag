@@ -72,6 +72,11 @@ float rtAO(vec3 pos, vec3 n) {
 
 void main() {
     vec3 norm = normalize(vNrm);
+    vec3 sunL = normalize(frame.sunDir.xyz);
+    if (occ.volSize.w > 0.5) { // F5: куда светит солнце (не освещение!)
+        outColor = vec4(dot(norm, sunL) > 0.0 ? vec3(0.1, 0.8, 0.1) : vec3(0.9, 0.1, 0.1), 1.0);
+        return;
+    }
     vec3 viewDir = normalize(frame.viewPos.xyz - vPos);
     // MC-шейдинг по осям: верх 1.0, низ 0.5, X 0.6, Z 0.8
     float fshade = abs(norm.y) > 0.9 ? (norm.y > 0.0 ? 1.0 : 0.5)
@@ -89,7 +94,6 @@ void main() {
         return;
     }
 
-    vec3 sunL = normalize(frame.sunDir.xyz);
     float ndl = max(dot(norm, sunL), 0.0);
     vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * tileTex;
     vec3 direct = frame.sunCol.rgb * ndl * tileTex;
