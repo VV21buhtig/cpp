@@ -29,6 +29,16 @@ void StructConfigs::load(const char* path) {
             }
         }
         else if (!strcmp(name, "mine")) mine = PlacementConfig{sp, se, sa, ch};
+        else if (!strcmp(name, "pine")) {
+            pine.spacing = sp; pine.separation = se; pine.salt = sa; pine.chance = ch;
+            if (got >= 8) {
+                if (tb < 1) tb = 1; if (tb > 12) tb = 12;
+                if (tr < 0) tr = 0; if (tr > 12) tr = 12;
+                if (hc < 0) hc = 0; if (hc > 1) hc = 1;
+                pine.trunkBase = tb; pine.trunkRand = tr; pine.holeChance = hc;
+            }
+        }
+        else if (!strcmp(name, "rock")) rock = PlacementConfig{sp, se, sa, ch};
         n++;
     }
     fclose(f);

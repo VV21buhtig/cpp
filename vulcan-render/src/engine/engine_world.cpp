@@ -1,6 +1,7 @@
 #include "engine/world.h"
 #include "engine/struct/config.h"
 #include "engine/struct/tree.h"
+#include "engine/struct/rock.h"
 #include "engine/struct/mine.h"
 
 void loadStructConfigs(StructConfigs& c) { c.load("structures.cfg"); }
@@ -123,11 +124,22 @@ void World::init(int ncx, int ncz, int s) {
                     if (river >= 0.6f) setBlock(wx, y, wz, B_AIR);
                 }
             }
-            // 2. спагетти-пещеры: тонкая зона |n-0.5| (края шума), только ниже поверхности-1
+            // 2. спагетти-пещеры: тонкая зона |n-0.5| (края шума), только ниже поверхности-1.
+            // Taper: ширина душится pinch-полем (тоннели сходят на нет) + глубинным
+            // сужением (внизу уже). Без этого везде одинаковые дудки.
+            float pinch = fbm2D(wx / 40.0f + 3.7f, wz / 40.0f + 9.2f, 2, 0.5f);
+            float pw = (pinch - 0.3f) / 0.4f;
+            if (pw < 0.0f) pw = 0.0f; if (pw > 1.0f) pw = 1.0f;
+            pw = smooth(pw);
+            if (pw <= 0.0f) continue;
             for (int y = 1; y < hi - 1 && y < Chunk::SY; y++) {
+                float depthT = 0.5f + 0.5f * ((float)(y - 2) / 12.0f);
+                if (depthT > 1.0f) depthT = 1.0f;
+                float thr = 0.012f * pw * depthT;
+                if (thr < 0.002f) continue;
                 float n = 0.55f * noise3(wx / 9.0f, y / 7.0f, wz / 9.0f)
                         + 0.45f * noise3(wx / 23.0f + 5.0f, y / 17.0f, wz / 23.0f + 9.0f);
-                if (fabs(n - 0.5f) < 0.012f) setBlock(wx, y, wz, B_AIR); // спагетти-тоннели
+                if (fabs(n - 0.5f) < thr) setBlock(wx, y, wz, B_AIR); // спагетти-тоннели
             }
         }
     // 3. флюиды: сначала лава на дне (иначе вода займёт низ), потом море
@@ -139,32 +151,50 @@ void World::init(int ncx, int ncz, int s) {
         for (int wx = 0; wx < W; wx++)
             for (int y = 0; y <= SEA && y < Chunk::SY; y++)
                 if (getBlock(wx, y, wz) == B_AIR) { setBlock(wx, y, wz, B_WATER); setFlow(wx, y, wz, 8); } // вода
-    // 3b. руды в камне по глубине (детерминированно)
-    for (int wz = 0; wz < D; wz++)
-        for (int wx = 0; wx < W; wx++)
-            for (int y = 0; y < Chunk::SY; y++) {
-                if (getBlock(wx, y, wz) != B_STONE) continue;
-                float r = hash2(wx * 7 + y * 131, wz * 11 - y * 57);
-                unsigned char ore = 0;
-                if (y < 10 && r < 0.006f) ore = B_DIAMOND;
-                else if (y < 16 && r < 0.008f) ore = B_GOLD;
-                else if (y < 32 && r < 0.015f) ore = B_IRON;
-                else if (y < 48 && r < 0.020f) ore = B_COAL;
-                if (ore) setBlock(wx, y, wz, ore);
+    // 3b. Scatter-руды (L-идея): не поштучно, а блобы-кластеры random walk'ом.
+    // Только в камень, детерминированно от сида (свой LCG, мир тот же при том же сиде).
+    {
+        struct Vein { unsigned char id; int count, size, ymin, ymax; unsigned salt; };
+        Vein veins[4] = {{B_COAL, 600, 5, 2, 48, 101}, {B_IRON, 400, 4, 2, 32, 202},
+                         {B_GOLD, 120, 4, 2, 16, 303}, {B_DIAMOND, 80, 4, 2, 10, 404}};
+        for (auto& vn : veins) {
+            unsigned rng = (unsigned)(s * 7919 + vn.salt * 104729 + 1);
+            auto next = [&]() { rng = rng * 1664525u + 1013904223u; return rng >> 8; };
+            for (int i = 0; i < vn.count; i++) {
+                int x = (int)(next() % (unsigned)W);
+                int y = vn.ymin + (int)(next() % (unsigned)(vn.ymax - vn.ymin + 1));
+                int z = (int)(next() % (unsigned)D);
+                for (int b = 0; b < vn.size; b++) {
+                    if (getBlock(x, y, z) == B_STONE) setBlock(x, y, z, vn.id);
+                    x += (int)(next() % 3) - 1;
+                    y += (int)(next() % 3) - 1;
+                    z += (int)(next() % 3) - 1;
+                    if (x < 0) x = 0; if (x >= W) x = W - 1;
+                    if (z < 0) z = 0; if (z >= D) z = D - 1;
+                    if (y < vn.ymin) y = vn.ymin; if (y > vn.ymax) y = vn.ymax;
+                }
             }
-    // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень
+        }
+    }
+    // 4. поверхность: верх трава (под водой земля), -3 земля, глубже камень.
+    // Биомы по heat/humidity-картам: жарко+сухо = пустыня (песок вместо травы/земли).
+    // Пляж у воды остаётся песком в любом биоме. Деревья пустыню пропускают сами
+    // (только на траве), валуны — везде.
     for (int wz = 0; wz < D; wz++)
         for (int wx = 0; wx < W; wx++) {
             int top = -1;
             for (int y = Chunk::SY - 1; y >= 0; y--)
                 if (isSolid(getBlock(wx, y, wz))) { top = y; break; }
             if (top < 0) continue;
+            float heat = fbm2D(wx / 140.0f + 51.7f, wz / 140.0f + 13.3f, 2, 0.5f);
+            float humid = fbm2D(wx / 140.0f + 7.9f, wz / 140.0f + 71.1f, 2, 0.5f);
+            bool desert = heat > 0.52f && humid < 0.48f;
             for (int y = top; y >= 0 && y >= top - 3; y--) {
                 unsigned char cur = getBlock(wx, y, wz);
                 if (cur != B_STONE) continue;
                 // Берег и дно — песок (блока 8 раньше не было!), суша выше — трава.
-                if (y == top) setBlock(wx, y, wz, top <= SEA + 1 ? B_SAND : B_GRASS);
-                else setBlock(wx, y, wz, B_DIRT);
+                if (y == top) setBlock(wx, y, wz, (top <= SEA + 1 || desert) ? B_SAND : B_GRASS);
+                else setBlock(wx, y, wz, desert ? B_SAND : B_DIRT);
             }
         }
     for (auto& d : flowDirty_) d = 0; // сгенерированное стабильно
@@ -172,7 +202,9 @@ void World::init(int ncx, int ncz, int s) {
     {
         StructConfigs sc;
         loadStructConfigs(sc);
+        stampPines(*this, sc.pine); // сосны ПЕРЕД дубами: редкие, иначе дубы занимают клетки
         stampTrees(*this, sc.tree);
+        stampRocks(*this, sc.rock);
         stampMines(*this, sc.mine);
     }
     rebuildLight(); // P1: солнце столбами + эмиссия + BFS (сырой setBlock свет не трогает)

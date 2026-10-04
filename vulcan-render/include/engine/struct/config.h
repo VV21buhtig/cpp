@@ -17,9 +17,13 @@ struct TreeConfig : PlacementConfig {
 
 struct StructConfigs {
     TreeConfig tree{}; // chance правим ниже в structures.cfg
+    TreeConfig pine{{3, 1, 4451, 0.5f}, 5, 1, 0.4f}; // сосна: реже дуба, ствол 5..6
     PlacementConfig mine{6, 2, 777, 0.9f};
+    PlacementConfig rock{4, 2, 9182, 0.6f}; // валуны
     // structures.cfg рядом с бинарником (копируется при сборке, правится локально):
     //   tree 2 1 1337 0.5 4 2 0.6
+    //   pine 3 1 4451 0.5 5 1 0.4
+    //   rock 4 2 9182 0.6
     //   mine 6 2 777 0.9
     void load(const char* path);
 };

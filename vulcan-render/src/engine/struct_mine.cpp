@@ -24,6 +24,15 @@ void stampMines(World& w, const PlacementConfig& cfg) {
                 // камера 1x2: роем только opaque (воду/лаву не трогаем — не топим)
                 if (World::isSolid(w.getBlock(x, y, z))) w.setBlock(x, y, z, 0);
                 if (World::isSolid(w.getBlock(x, y + 1, z))) w.setBlock(x, y + 1, z, 0);
+                // Комната 3x2x3 каждые 15 шагов: только solid (флюиды не вскрываем).
+                if (s % 15 == 14) {
+                    for (int ax = -1; ax <= 1; ax++)
+                        for (int az = -1; az <= 1; az++)
+                            for (int ay = 0; ay <= 1; ay++) {
+                                unsigned char b = w.getBlock(x + ax, y + ay, z + az);
+                                if (World::isSolid(b)) w.setBlock(x + ax, y + ay, z + az, 0);
+                            }
+                }
                 float r = cellRand(w.seed_, cfg.salt + 100 + s, rx * 7 + s, rz * 13 - s);
                 if (r < 0.25f) dir = (dir + 1) % 4;
                 else if (r < 0.35f) dir = (dir + 3) % 4;
