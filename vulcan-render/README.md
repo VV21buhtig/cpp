@@ -58,23 +58,4 @@ cmake --build build --config Release -j
   `lum/adapt`, `tonemap` (Uchimura), `bright/kdown/kup` (bloom), `water`,
   `ssao`, `taa`, `dbg` (рентген).
 
-Правило пункта: билд + `--frames 120` чисто (ноль VALIDATION) + скрин глазами.
 
-## Дорожка эффектов (готово)
-
-SSAO (depth-only 8 тапов, книга Ch10/04) → TAA (Halton-джиттер, closest-depth
-репроекция, YCoCg-clip, билинейная история; небо direction-only) → RT AO
-(6 лучей x 3 шага по R8-объёму, F4) → MSAA4 + A2C (листва fwidth-sharpened
-coverage, книга Ch10/03). Дальше по плану: стриминг, игра, RT на RT-ядрах.
-
-## Референсы (идеи+математика, не код)
-
-- Kaigen/WebCraft (`kaigen-minecraft-opus-5-5-master` рядом): квады 5xu32 + развёртка
-  в VS, GPU-каллинг, стрим-план, небо Брюнетона (T/MS LUT), exposure/bloom/TAA/SSAO,
-  ветер листвы `wave_leaves`/`wave_plant` (`wc_common.glsl`), Halton-джиттер.
-- Luanti (`luanti-stable-5` рядом): свет (param1 night:4|day:4, BFS -1/воксель,
-  encode_light), post-DAG (bloom extract/down/up, exposure 1x1, Hable), инвентарь
-  (held-модель, shift-move, double-click).
-- Книга 3D-Graphics-Rendering-Cookbook 2nd ed.: Ch05 pulling/cull, Ch10/11
-  тени (D16, depthBias, PCF3x3)/SSAO/HDR, Ch10/03 MSAA+A2C (coverage через
-  `fwidth`, minSampleShading), Uchimura.
