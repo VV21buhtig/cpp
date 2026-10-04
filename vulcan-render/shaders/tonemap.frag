@@ -4,7 +4,7 @@ layout(set = 0, binding = 0) uniform sampler2D hdrImg;
 layout(set = 0, binding = 1) uniform sampler2D expImg;
 layout(set = 0, binding = 5) uniform sampler2D bloomImg; // demo-5b
 layout(set = 0, binding = 6) uniform sampler2D ssaoImg; // demo-6
-layout(push_constant) uniform Push { vec2 res; vec2 pad; } pc;
+layout(push_constant) uniform Push { vec2 res; float aoK; float pad; } pc;
 layout(location = 0) out vec4 o;
 
 vec3 uchimura(vec3 x) {
@@ -23,7 +23,7 @@ vec3 uchimura(vec3 x) {
 void main() {
     vec2 uv = gl_FragCoord.xy / pc.res;
     vec3 col = texture(hdrImg, uv).rgb;
-    col *= mix(1.0, clamp(texture(ssaoImg, uv).r, 0.0, 1.0), 0.65); // demo-6 AO
+    col *= mix(1.0, clamp(texture(ssaoImg, uv).r, 0.0, 1.0), pc.aoK); // demo-6 AO (F2)
     float e = max(texture(expImg, vec2(0.5)).r, 1e-3);
     e = max(e, 0.33); // потолок буста x1.5: иначе тёмный центр кадра выбеливает песок
     col *= 0.5 / e;

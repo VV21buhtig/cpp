@@ -131,12 +131,15 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     float tod = 1.5707f; // полдень (1/2/3 утро/день/вечер, F1 рентген карты)
     if (getenv("VK_TOD")) tod = (float)atof(getenv("VK_TOD")); // рентген: фикс солнца
     bool dbgShadow = false, prevF1 = false;
+    bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
+    bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
     int fpsN = 0;
     glm::mat4 prevVP(1.0f); // demo-7: VP прошлого кадра (с джиттером)
     float prevTod = tod;
+    bool prevUseTaa = true;
     while (!glfwWindowShouldClose(core.window)) {
         glfwPollEvents();
         double now = glfwGetTime();
@@ -168,6 +171,12 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f1 = glfwGetKey(core.window, GLFW_KEY_F1) != 0;
             if (f1 && !prevF1) { dbgShadow = !dbgShadow; printf("shadow xray %d\n", dbgShadow); }
             prevF1 = f1;
+            bool f2 = glfwGetKey(core.window, GLFW_KEY_F2) != 0;
+            if (f2 && !prevF2) { useSsao = !useSsao; printf("ssao %d\n", useSsao); }
+            prevF2 = f2;
+            bool f3 = glfwGetKey(core.window, GLFW_KEY_F3) != 0;
+            if (f3 && !prevF3) { useTaa = !useTaa; printf("taa %d\n", useTaa); }
+            prevF3 = f3;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -187,10 +196,13 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         float jx = (haltonRoot(hi, 2) - 0.5f) * 2.0f / (float)core.swapExtent.width;
         float jy = (haltonRoot(hi, 3) - 0.5f) * 2.0f / (float)core.swapExtent.height;
         glm::mat4 jproj = proj;
-        jproj[2][0] += jx;
-        jproj[2][1] += jy;
-        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f);
+        if (useTaa) {
+            jproj[2][0] += jx;
+            jproj[2][1] += jy;
+        }
+        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useTaa && !prevUseTaa);
         prevTod = tod;
+        prevUseTaa = useTaa;
         // UBO кадра
         {
             FrameUBO u{};
@@ -587,8 +599,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             tg.hdrLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         // demo-7 TAA: resolve HDR+история -> H[fi], копия назад в HDR.
-        // Дальше lum/bloom/tonemap читают уже сглаженный HDR.
-        {
+        // Дальше lum/bloom/tonemap читают уже сглаженный HDR. F3 выключает.
+        if (useTaa) {
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.taaPipe);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                     st.taaPipeLayout, 0, 1, &st.taaSet[fi], 0, nullptr);
@@ -739,7 +751,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.tonemapPipeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
-            glm::vec4 res((float)core.swapExtent.width, (float)core.swapExtent.height, 0, 0);
+            glm::vec4 res((float)core.swapExtent.width, (float)core.swapExtent.height,
+                            useSsao ? 0.65f : 0.0f, 0); // F2 гасит AO
             vkCmdPushConstants(sy.cmdBufs[fi], pp.tonemapPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(res), &res);
             vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);
