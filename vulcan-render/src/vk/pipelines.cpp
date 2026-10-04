@@ -55,11 +55,14 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         VkPushConstantRange pcOcc{};
         pcOcc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // demo-8: volMin+k, volSize
         pcOcc.size = 32; pcOcc.offset = 64;
-        VkPushConstantRange pcs[2] = {pc, pcOcc};
+        VkPushConstantRange pcFlag{};
+        pcFlag.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // F6: noShadow
+        pcFlag.size = 4; pcFlag.offset = 96;
+        VkPushConstantRange pcs[3] = {pc, pcOcc, pcFlag};
         VkPipelineLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         li.setLayoutCount = 1; li.pSetLayouts = &st.setLayout;
-        li.pushConstantRangeCount = 2; li.pPushConstantRanges = pcs;
+        li.pushConstantRangeCount = 3; li.pPushConstantRanges = pcs;
         VK_CHECK(vkCreatePipelineLayout(core.device, &li, nullptr, &p.pipeLayout));
         VkPipelineRenderingCreateInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;

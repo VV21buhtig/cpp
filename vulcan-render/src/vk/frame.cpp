@@ -135,6 +135,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
+    bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -185,6 +186,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f5 = glfwGetKey(core.window, GLFW_KEY_F5) != 0;
             if (f5 && !prevF5) { dbgNdl = !dbgNdl; printf("sundir view %d\n", dbgNdl); }
             prevF5 = f5;
+            bool f6 = glfwGetKey(core.window, GLFW_KEY_F6) != 0;
+            if (f6 && !prevF6) { noShadow = !noShadow; printf("shadowmap %d\n", !noShadow); }
+            prevF6 = f6;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -475,6 +479,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 dbgNdl ? 1.0f : 0.0f};
             vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                64, sizeof(op), &op);
+            float ns = noShadow ? 1.0f : 0.0f; // F6
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               96, sizeof(ns), &ns);
         }
         vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));

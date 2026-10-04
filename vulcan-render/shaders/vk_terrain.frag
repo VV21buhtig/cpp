@@ -20,6 +20,7 @@ layout(set = 0, binding = 10) uniform sampler3D occTex;
 layout(push_constant) uniform PushOcc {
     layout(offset = 64) vec4 volMinK;
     layout(offset = 80) vec4 volSize;
+    layout(offset = 96) float noShadow; // F6
 } occ;
 
 layout(location = 0) in vec3 vPos;
@@ -99,6 +100,7 @@ void main() {
     vec3 direct = frame.sunCol.rgb * ndl * tileTex;
     // demo-4: тень гасит ТОЛЬКО прямой свет, ambient живёт (иначе чернота).
     float sh = calcShadow(vShadow, norm, sunL, frame.viewPos.xyz, vPos);
+    if (occ.noShadow > 0.5) sh = 1.0; // F6: карта теней выкл (диагностика!)
     // demo-4: тень гасит ТОЛЬКО прямой свет, ambient живёт (иначе чернота).
     // fshade на ambient половинный: небесный свет полусферический, не направленный.
     vec3 shaded = (amb * mix(1.0, fshade, 0.5) + direct * sh * fshade) * aoC;
