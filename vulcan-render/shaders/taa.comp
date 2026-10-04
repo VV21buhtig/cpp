@@ -45,7 +45,9 @@ void main() {
     if (pc.params.x > 0.5) { imageStore(histOut, px, vec4(cur, 1.0)); return; }
     ivec2 maxP = ivec2(pc.res.xy) - 1;
     vec3 m1 = vec3(0.0), m2 = vec3(0.0);
-    float closest = 0.0;
+    // D32 прямая глубина (0=ближ, 1=даль, clear=1): ближайший = MIN.
+    // (В K обратная бесконечная, там max; у нас знак наоборот.)
+    float closest = 2.0;
     ivec2 closestP = px;
     for (int y = -1; y <= 1; y++)
         for (int x = -1; x <= 1; x++) {
@@ -54,7 +56,7 @@ void main() {
             m1 += c;
             m2 += c * c;
             float d = texelFetch(depthTex, q, 0).r;
-            if (d > closest) { closest = d; closestP = q; }
+            if (d < closest) { closest = d; closestP = q; }
         }
     vec3 mean = m1 / 9.0;
     vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, 0.0));

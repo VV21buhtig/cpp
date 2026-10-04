@@ -535,6 +535,7 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
             void* dst = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, stgAlc, &dst));
             memcpy(dst, px.data(), px.size() * sizeof(float));
+            vmaFlushAllocation(core.alloc, stgAlc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             vmaUnmapMemory(core.alloc, stgAlc);
             VkImageCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;

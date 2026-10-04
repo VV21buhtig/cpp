@@ -98,7 +98,7 @@ void main() {
     // Сырая альфа на мипах тает в серое 0.5 и кипит — fwidth держит край чётким
     // на любой дистанции. Остальные пишут 1.0 (полное покрытие).
     float alpha = 1.0;
-    if (vTile > 5.5 && vTile < 6.5) {
+    if (vTile > 5.5 && vTile < 6.5 && frame.misc.z > 0.5) { // F7: A2C выкл = полное покрытие
         float aa = fwidth(tileTexA.a);
         alpha = clamp((tileTexA.a - 0.5) / max(4.0 * aa, 0.0001) + 0.5, 0.0, 1.0);
     }

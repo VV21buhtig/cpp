@@ -15,6 +15,7 @@ shadow atlas, HDR + exposure + bloom + Uchimura, SSAO, TAA, RT AO, A2C.
 | F2 / F3 / F4 | SSAO / TAA / RT AO вкл-выкл |
 | F5 | Подсветка «куда светит» (зелёный=на солнце, красный=от) |
 | F6 | Карта теней вкл/выкл |
+| F7 | A2C вкл/выкл |
 
 Переменные окружения: `VK_TOD=0.5` (фикс солнца), `VK_WATERDBG=1` (дамп indirect).
 

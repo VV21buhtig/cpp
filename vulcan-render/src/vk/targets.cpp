@@ -38,7 +38,9 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         vmaDestroyImage(corep->alloc, tp->hdrImg, tp->hdrAlloc);
     });
 
-    // ---- demo-9 MSAA4 цели (DONT_CARE: всё уходит резолвом) ----
+    // ---- demo-9 MSAA4 цели (STORE: следующий пасс делает LOAD поверх!
+    // TRANSIENT/LAZY запрещены: DONT_CARE + LOAD = мусор на NVIDIA (на RADV
+    // содержимое выживало случайно). +45МБ, зато портируемо.
     {
         VkImageCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -47,13 +49,10 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
         ci.mipLevels = 1; ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_4_BIT;
-        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         VmaAllocationCreateInfo ai{};
-        ai.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
-        if (vmaCreateImage(core.alloc, &ci, &ai, &t.hdrMsImg, &t.hdrMsAlloc, nullptr) != VK_SUCCESS) {
-            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE; // нет lazy — обычная
-            VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.hdrMsImg, &t.hdrMsAlloc, nullptr));
-        }
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.hdrMsImg, &t.hdrMsAlloc, nullptr));
         VkImageViewCreateInfo vi{};
         vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vi.image = t.hdrMsImg;
@@ -62,13 +61,9 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.hdrMsView));
         ci.format = VK_FORMAT_D32_SFLOAT;
-        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-        ai.usage = VMA_MEMORY_USAGE_GPU_LAZILY_ALLOCATED;
-        if (vmaCreateImage(core.alloc, &ci, &ai, &t.depthMsImg, &t.depthMsAlloc, nullptr) != VK_SUCCESS) {
-            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.depthMsImg, &t.depthMsAlloc, nullptr));
-        }
+        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.depthMsImg, &t.depthMsAlloc, nullptr));
         vi.image = t.depthMsImg;
         vi.format = VK_FORMAT_D32_SFLOAT;
         vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
@@ -253,6 +248,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
             void* dst = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, stagingAlloc, &dst));
             memcpy(dst, all.data(), all.size());
+            vmaFlushAllocation(core.alloc, stagingAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             vmaUnmapMemory(core.alloc, stagingAlloc);
         }
         VkImageCreateInfo ci{};
@@ -273,7 +269,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
             VkBufferImageCopy cp{};
-            cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, NL};
+            cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, (uint32_t)NL};
             cp.imageExtent = {(uint32_t)T, (uint32_t)T, 1};
             vkCmdCopyBufferToImage(cb, staging, t.tileImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
             // мипы блитами 16->8->4->2->1 (каждый уровень: DST->SRC, blit, SRC->SHADER)
@@ -283,9 +279,9 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
                 VkImageBlit bl{};
-                bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)(m - 1), 0, NL};
+                bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)(m - 1), 0, (uint32_t)NL};
                 bl.srcOffsets[1] = {T >> (m - 1), T >> (m - 1), 1};
-                bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)m, 0, NL};
+                bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)m, 0, (uint32_t)NL};
                 bl.dstOffsets[1] = {T >> m, T >> m, 1};
                 vkCmdBlitImage(cb, t.tileImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                t.tileImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
@@ -305,7 +301,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         vi.image = t.tileImg;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, MIPS, 0, NL};
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, (uint32_t)MIPS, 0, (uint32_t)NL};
         VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.tileView));
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -367,6 +363,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
                 void* dst = nullptr;
                 VK_CHECK(vmaMapMemory(core.alloc, stagingAlloc, &dst));
                 memcpy(dst, src, sz);
+                vmaFlushAllocation(core.alloc, stagingAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
                 vmaUnmapMemory(core.alloc, stagingAlloc);
             }
             bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | use;
@@ -499,6 +496,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
                 void* dst = nullptr;
                 VK_CHECK(vmaMapMemory(core.alloc, stagingAlloc, &dst));
                 memcpy(dst, src, sz);
+                vmaFlushAllocation(core.alloc, stagingAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
                 vmaUnmapMemory(core.alloc, stagingAlloc);
             }
             bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | use;
@@ -554,6 +552,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         void* dst = nullptr;
         VK_CHECK(vmaMapMemory(core.alloc, stgAlloc, &dst));
         memcpy(dst, vox.data(), vox.size());
+        vmaFlushAllocation(core.alloc, stgAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
         vmaUnmapMemory(core.alloc, stgAlloc);
         VkImageCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;

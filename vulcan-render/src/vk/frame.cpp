@@ -9,6 +9,9 @@
 #include <glm/geometric.hpp>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <thread>
+#include <chrono>
 
 void makeSync(VkCore& core, FrameSync& sy) {
     // Синхра: acquire-семафор по кадру, render-семафор + layout по картинке,
@@ -136,6 +139,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
     bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
+    bool useA2c = true, prevF7 = false; // F7: A2C вкл/выкл (+сброс истории TAA)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -143,6 +147,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     glm::mat4 prevVP(1.0f); // demo-7: VP прошлого кадра (с джиттером)
     float prevTod = tod;
     bool prevUseTaa = true;
+    bool prevUseA2c = true;
     while (!glfwWindowShouldClose(core.window)) {
         glfwPollEvents();
         double now = glfwGetTime();
@@ -171,24 +176,29 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             if (glfwGetKey(core.window, GLFW_KEY_1)) tod = 0.5f;   // утро: длинные тени
             if (glfwGetKey(core.window, GLFW_KEY_2)) tod = 1.5707f; // полдень
             if (glfwGetKey(core.window, GLFW_KEY_3)) tod = 2.6f;    // вечер: длинные тени
-            bool f1 = glfwGetKey(core.window, GLFW_KEY_F1) != 0;
+            // Тогглы F1-F7 игнорируем первые кадры: при получении фокуса окном
+            // ОС может отдать залипшее состояние клавиш (фантомный xray на старте).
+            bool f1 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F1) != 0);
             if (f1 && !prevF1) { dbgShadow = !dbgShadow; printf("shadow xray %d\n", dbgShadow); }
             prevF1 = f1;
-            bool f2 = glfwGetKey(core.window, GLFW_KEY_F2) != 0;
+            bool f2 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F2) != 0);
             if (f2 && !prevF2) { useSsao = !useSsao; printf("ssao %d\n", useSsao); }
             prevF2 = f2;
-            bool f3 = glfwGetKey(core.window, GLFW_KEY_F3) != 0;
+            bool f3 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F3) != 0);
             if (f3 && !prevF3) { useTaa = !useTaa; printf("taa %d\n", useTaa); }
             prevF3 = f3;
-            bool f4 = glfwGetKey(core.window, GLFW_KEY_F4) != 0;
+            bool f4 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F4) != 0);
             if (f4 && !prevF4) { useRtAo = !useRtAo; printf("rtao %d\n", useRtAo); }
             prevF4 = f4;
-            bool f5 = glfwGetKey(core.window, GLFW_KEY_F5) != 0;
+            bool f5 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F5) != 0);
             if (f5 && !prevF5) { dbgNdl = !dbgNdl; printf("sundir view %d\n", dbgNdl); }
             prevF5 = f5;
-            bool f6 = glfwGetKey(core.window, GLFW_KEY_F6) != 0;
+            bool f6 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F6) != 0);
             if (f6 && !prevF6) { noShadow = !noShadow; printf("shadowmap %d\n", !noShadow); }
             prevF6 = f6;
+            bool f7 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F7) != 0);
+            if (f7 && !prevF7) { useA2c = !useA2c; printf("a2c %d\n", useA2c); }
+            prevF7 = f7;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -212,9 +222,10 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             jproj[2][0] += jx;
             jproj[2][1] += jy;
         }
-        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useTaa && !prevUseTaa);
+        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useTaa && !prevUseTaa) || (useA2c != prevUseA2c);
         prevTod = tod;
         prevUseTaa = useTaa;
+        prevUseA2c = useA2c;
         // UBO кадра
         {
             FrameUBO u{};
@@ -227,7 +238,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             u.ambSky = glm::vec4(0.54f, 0.60f, 0.69f, 0.0f);
             u.ambGnd = glm::vec4(0.27f, 0.24f, 0.21f, 0.0f);
             u.fog = glm::vec4(0.55f, 0.65f, 0.80f, 260.0f);
-            u.misc = glm::vec4(40.0f, 1.1f, 1.2f, (float)now);
+            u.misc = glm::vec4(40.0f, 1.1f, useA2c ? 1.0f : 0.0f, (float)now); // z: F7 A2C
             u.viewPos = glm::vec4(camPos, 0.0f);
             void* dst = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, st.uboAlloc[fi], &dst));
@@ -268,7 +279,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  0, 0, nullptr, 2, b, 0, nullptr);
         }
         // 2) плоскости фрустума (строки viewProj, нормированные).
-        glm::mat4 vp = jproj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+        // Каллинг по ЧИСТОЙ proj (рецепт K): джиттер в каллинге = мигание
+        // чанков на границах экрана в такт Halton-циклу ("землетрясение").
+        glm::mat4 vp = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
         glm::vec4 planes[6];
         {
             glm::vec4 r0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
@@ -454,7 +467,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             sky.imageView = tg.hdrMsView;
             sky.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             sky.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            sky.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // всё уходит резолвом
+            sky.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // террейн делает LOAD: DONT_CARE = мусор на NVIDIA
             sky.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
             sky.resolveImageView = tg.hdrView;
             sky.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -482,7 +495,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         color.imageView = tg.hdrMsView; // террейн — в MSAA поверх неба (LOAD!)
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // всё уходит резолвом
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // вода делает LOAD: DONT_CARE = мусор на NVIDIA
         color.resolveImageView = tg.hdrView;
         color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
@@ -491,7 +504,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         depth.imageView = tg.depthMsView;
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // уходит резолвом в копию
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // воду + копию: резолв идёт в копию, MSAA читает вода
         depth.clearValue.depthStencil = {1.0f, 0};
         depth.resolveImageView = tg.depthCopyView;
         depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -586,7 +599,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             wcol.imageView = tg.hdrMsView; // вода в MSAA поверх террейна (LOAD!)
             wcol.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             wcol.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            wcol.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // уходит резолвом
+            wcol.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // резолв в HDR читает все сэмплы
             wcol.resolveImageView = tg.hdrView;
             wcol.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             wcol.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
@@ -595,7 +608,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             wdep.imageView = tg.depthMsView; // LOAD террейна, резолва нет (копия уже снята)
             wdep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
             wdep.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            wdep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            wdep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo wri{};
             wri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
             wri.renderArea = {{0, 0}, core.swapExtent};
@@ -882,10 +895,23 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         pr.pSwapchains = &core.swapchain;
         pr.pImageIndices = &imgIdx;
         VK_CHECK(vkQueuePresentKHR(core.gfxQueue, &pr));
+        // Кап 60fps: демке больше не надо, движку вредит (dt скачет).
+        // VK_FPS=0 — без капа, VK_FPS=30 — строже.
+        {
+            double capFps = 60.0;
+            if (const char* e = getenv("VK_FPS")) capFps = atof(e);
+            if (capFps > 0.5) {
+                double end = glfwGetTime();
+                double wait = 1.0 / capFps - (end - now);
+                if (wait > 0.0)
+                    std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+            }
+        }
         if (wantShot) {
             VK_CHECK(vkWaitForFences(core.device, 1, &sy.frameFence[fi], VK_TRUE, 1000000000ull));
             void* px = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, tg.shotAlloc, &px));
+            vmaInvalidateAllocation(core.alloc, tg.shotAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
                 FILE* f = fopen("shot.tga", "wb");
             if (f) {
                 int W = (int)core.swapExtent.width, H = (int)core.swapExtent.height;
@@ -908,6 +934,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             });
             void* dpx = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             uint32_t* u = (uint32_t*)dpx;
             printf("WATERDBG waterInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
             {
@@ -927,6 +954,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 vkCmdCopyBuffer(cb, tg.visBuf, tg.dbgReadBuf, 1, &cp);
             });
             VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             u = (uint32_t*)dpx;
             printf("WATERDBG vis0-7: %08x %08x %08x %08x %08x %08x %08x %08x\n",
                    u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
@@ -937,6 +965,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 vkCmdCopyBuffer(cb, tg.waterMetaBuf, tg.dbgReadBuf, 1, &cp);
             });
             VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             u = (uint32_t*)dpx;
             printf("WATERDBG wmeta0-3: off=%u cnt=%u ox=%f oz=%f | off=%u cnt=%u\n",
                    u[0], u[1], *(float*)&u[2], *(float*)&u[3], u[4], u[5]);
@@ -947,6 +976,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 vkCmdCopyBuffer(cb, tg.indBuf, tg.dbgReadBuf, 1, &cp);
             });
             VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
             u = (uint32_t*)dpx;
             printf("WATERDBG terrainInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
             vmaUnmapMemory(core.alloc, tg.dbgReadAlloc);
