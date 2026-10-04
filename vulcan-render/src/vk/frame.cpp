@@ -130,6 +130,11 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool dbgShadow = false, prevF1 = false;
     bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
     bool useFsr = true, prevF8 = false; // F8: FSR2 вкл/выкл (выкл = копия HDR->fsr)
+    int fsrMode = 0, prevF9 = false; // F9: скейл Native/Quality/Balanced/Performance
+    int prevFsrMode = -1; // -1 = первый кадр тоже резетит историю FSR2
+    static const float FSR_SCALES[4] = {1.0f, 0.67f, 0.59f, 0.5f};
+    static const char* FSR_NAMES[4] = {"Native", "Quality", "Balanced", "Performance"};
+    if (getenv("VK_FSR_MODE")) fsrMode = atoi(getenv("VK_FSR_MODE")) % 4; // headless: стартовый режим
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
     bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
@@ -193,6 +198,12 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f8 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F8) != 0);
             if (f8 && !prevF8) { useFsr = !useFsr; printf("fsr2 %d\n", useFsr); }
             prevF8 = f8;
+            bool f9 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F9) != 0);
+            if (f9 && !prevF9) {
+                fsrMode = (fsrMode + 1) % 4;
+                printf("fsr scale %s\n", FSR_NAMES[fsrMode]);
+            }
+            prevF9 = f9;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -205,21 +216,32 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         // layout трекаем сами. Кадровый fence выше уже гарантирует свободный cmdbuf.
         VK_CHECK(vkAcquireNextImageKHR(core.device, core.swapchain, 1000000000ull,
                                        sy.acquireSem[fi], VK_NULL_HANDLE, &imgIdx));
+        // Render-scale: шейдим меньшую область в те же цели (память та же, fps растёт).
+        // FSR2 тянет до display. Смена режима = сброс истории.
+        uint32_t renderW = ((uint32_t)(core.swapExtent.width * FSR_SCALES[fsrMode])) & ~1u;
+        uint32_t renderH = ((uint32_t)(core.swapExtent.height * FSR_SCALES[fsrMode])) & ~1u;
+        if (renderW < 8) renderW = 8;
+        if (renderH < 8) renderH = 8;
+        bool modeChanged = (fsrMode != prevFsrMode);
+        prevFsrMode = fsrMode;
+        // Фолбэк без FSR2 — всегда native (иначе копия тащила бы мусор за рект).
+        uint32_t RW = (useFsr && st.fsr.ready) ? renderW : core.swapExtent.width;
+        uint32_t RH = (useFsr && st.fsr.ready) ? renderH : core.swapExtent.height;
+        VkExtent2D rExtEff{RW, RH};
         // FSR2-джиттер: их последовательность (доки дословно: NDC = +2x/W, -2y/H).
         // Рендер и jitterOffset идут из одних значений — конвенция сходится сама.
         // FSR2 пользуется тем же jproj.
-        int32_t jphase = ffxFsr2GetJitterPhaseCount((int32_t)core.swapExtent.width,
-                                                    (int32_t)core.swapExtent.width); // 1.0x
+        int32_t jphase = ffxFsr2GetJitterPhaseCount((int32_t)RW, (int32_t)core.swapExtent.width);
         float jox = 0.0f, joy = 0.0f;
         ffxFsr2GetJitterOffset(&jox, &joy, (int32_t)(drawn % (unsigned)jphase), jphase);
-        float jx = 2.0f * jox / (float)core.swapExtent.width;
-        float jy = -2.0f * joy / (float)core.swapExtent.height;
+        float jx = 2.0f * jox / (float)RW;
+        float jy = -2.0f * joy / (float)RH;
         glm::mat4 jproj = proj;
         if (useFsr) {
             jproj[2][0] += jx;
             jproj[2][1] += jy;
         }
-        bool fsrReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useA2c != prevUseA2c) || (useFsr && !prevUseFsr);
+        bool fsrReset = (drawn == 0) || modeChanged || (fabsf(tod - prevTod) > 1e-6f) || (useA2c != prevUseA2c) || (useFsr && !prevUseFsr);
         prevTod = tod;
         prevUseFsr = useFsr;
         prevUseA2c = useA2c;
@@ -458,8 +480,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  0, 0, nullptr, 0, nullptr, 1, &b3);
             tg.hdrLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
-        VkViewport svwp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
-        VkRect2D ssc{{0, 0}, core.swapExtent};
+        VkViewport svwp{0, 0, (float)RW, (float)RH, 0.0f, 1.0f};
+        VkRect2D ssc{{0, 0}, rExtEff};
         // Небо первым (MSAA CLEAR + резолв в HDR).
         {
             VkRenderingAttachmentInfo sky{};
@@ -474,7 +496,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             sky.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
             VkRenderingInfo sri{};
             sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            sri.renderArea = {{0, 0}, core.swapExtent};
+            sri.renderArea = {{0, 0}, rExtEff};
             sri.layerCount = 1;
             sri.colorAttachmentCount = 1;
             sri.pColorAttachments = &sky;
@@ -484,7 +506,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &ssc);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.skyPipeLayout, 0, 1, &st.skySets[fi], 0, nullptr);
-            glm::vec4 viewSize((float)core.swapExtent.width, (float)core.swapExtent.height, 0, 0);
+            glm::vec4 viewSize((float)RW, (float)RH, 0, 0);
             vkCmdPushConstants(sy.cmdBufs[fi], pp.skyPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(viewSize), &viewSize);
             vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);
@@ -511,15 +533,15 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         depth.resolveMode = VK_RESOLVE_MODE_MIN_BIT; // ближний побеждает (края для FSR2)
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ri.renderArea = {{0, 0}, core.swapExtent};
+        ri.renderArea = {{0, 0}, rExtEff};
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &color;
         ri.pDepthAttachment = &depth;
         vkCmdBeginRendering(sy.cmdBufs[fi], &ri);
         vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.pipeline);
-        VkViewport vwp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
-        VkRect2D sc{{0, 0}, core.swapExtent};
+        VkViewport vwp{0, 0, (float)RW, (float)RH, 0.0f, 1.0f};
+        VkRect2D sc{{0, 0}, rExtEff};
         vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &vwp);
         vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
         vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -569,13 +591,10 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.mvPipe);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                     st.mvPipeLayout, 0, 1, &st.mvSet[fi], 0, nullptr);
-            glm::vec4 mres((float)core.swapExtent.width, (float)core.swapExtent.height,
-                           1.0f / (float)core.swapExtent.width,
-                           1.0f / (float)core.swapExtent.height);
+            glm::vec4 mres((float)RW, (float)RH, 1.0f / (float)RW, 1.0f / (float)RH);
             vkCmdPushConstants(sy.cmdBufs[fi], st.mvPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(mres), &mres);
-            vkCmdDispatch(sy.cmdBufs[fi], (core.swapExtent.width + 15) / 16,
-                          (core.swapExtent.height + 15) / 16, 1);
+            vkCmdDispatch(sy.cmdBufs[fi], (RW + 15) / 16, (RH + 15) / 16, 1);
             VkImageMemoryBarrier mb{};
             mb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -600,13 +619,11 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                     st.ssaoPipeLayout, 0, 1, &st.ssaoSet, 0, nullptr);
             struct SsaoPush { float rw, rh, rw2, rh2, zn, zf, rad, dist; };
-            SsaoPush push{(float)core.swapExtent.width, (float)core.swapExtent.height,
-                          1.0f / (float)core.swapExtent.width, 1.0f / (float)core.swapExtent.height,
+            SsaoPush push{(float)RW, (float)RH, 1.0f / (float)RW, 1.0f / (float)RH,
                           0.1f, 600.0f, 0.6f, 1.5f};
             vkCmdPushConstants(sy.cmdBufs[fi], st.ssaoPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(push), &push);
-            vkCmdDispatch(sy.cmdBufs[fi], (core.swapExtent.width + 15) / 16,
-                          (core.swapExtent.height + 15) / 16, 1);
+            vkCmdDispatch(sy.cmdBufs[fi], (RW + 15) / 16, (RH + 15) / 16, 1);
             VkImageMemoryBarrier b2s{};
             b2s.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             b2s.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -637,7 +654,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             wdep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             VkRenderingInfo wri{};
             wri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            wri.renderArea = {{0, 0}, core.swapExtent};
+            wri.renderArea = {{0, 0}, rExtEff};
             wri.layerCount = 1;
             wri.colorAttachmentCount = 1;
             wri.pColorAttachments = &wcol;
@@ -648,7 +665,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
-            glm::vec2 wres((float)core.swapExtent.width, (float)core.swapExtent.height);
+            glm::vec2 wres((float)RW, (float)RH);
             vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
                                (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
                                                     VK_SHADER_STAGE_FRAGMENT_BIT),
@@ -677,14 +694,15 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         if (useFsr && st.fsr.ready) {
             FfxFsr2DispatchDescription dd{};
             dd.commandList = sy.cmdBufs[fi];
+            uint32_t DW = core.swapExtent.width, DH = core.swapExtent.height;
             dd.color = ffxGetTextureResourceVK(&st.fsr.ctx, tg.hdrImg, tg.hdrView,
-                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                DW, DH, VK_FORMAT_R16G16B16A16_SFLOAT,
                 L"hdr", FFX_RESOURCE_STATE_COMPUTE_READ);
             dd.depth = ffxGetTextureResourceVK(&st.fsr.ctx, tg.depthCopyImg, tg.depthCopyView,
-                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_D32_SFLOAT,
+                DW, DH, VK_FORMAT_D32_SFLOAT,
                 L"depth", FFX_RESOURCE_STATE_GENERIC_READ);
             dd.motionVectors = ffxGetTextureResourceVK(&st.fsr.ctx, st.mvImg, st.mvView,
-                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                DW, DH, VK_FORMAT_R16G16B16A16_SFLOAT,
                 L"mv", FFX_RESOURCE_STATE_GENERIC_READ);
             dd.output = ffxGetTextureResourceVK(&st.fsr.ctx, tg.fsrImg, tg.fsrView,
                 core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -694,8 +712,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 (frame % 2 == 0) ? tg.expView[1] : tg.expView[0],
                 1, 1, VK_FORMAT_R16_SFLOAT, L"exp", FFX_RESOURCE_STATE_GENERIC_READ);
             dd.jitterOffset = {jox, joy};
-            dd.motionVectorScale = {(float)core.swapExtent.width, (float)core.swapExtent.height};
-            dd.renderSize = {(uint32_t)core.swapExtent.width, (uint32_t)core.swapExtent.height};
+            dd.motionVectorScale = {(float)RW, (float)RH};
+            dd.renderSize = {RW, RH};
             dd.enableSharpening = false;
             dd.sharpness = 0.0f;
             dd.frameTimeDelta = dt * 1000.0f < 1.0f ? 1.0f : dt * 1000.0f; // мс, иначе варнинг FSR2
@@ -884,8 +902,11 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.tonemapPipeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
-            glm::vec4 res((float)core.swapExtent.width, (float)core.swapExtent.height,
-                            useSsao ? 0.65f : 0.0f, 0); // F2 гасит AO
+            struct TmPush { glm::vec4 res; float aoK; };
+            TmPush res{glm::vec4((float)core.swapExtent.width, (float)core.swapExtent.height,
+                                 (float)RW / (float)core.swapExtent.width,
+                                 (float)RH / (float)core.swapExtent.height),
+                       useSsao ? 0.65f : 0.0f}; // F2 гасит AO
             vkCmdPushConstants(sy.cmdBufs[fi], pp.tonemapPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(res), &res);
             vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);

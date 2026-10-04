@@ -307,7 +307,7 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
             VK_CHECK(vkCreatePipelineLayout(core.device, &li, nullptr, &out));
         };
         mkLayout(st.skyLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, p.skyPipeLayout);
-        mkLayout(st.postLayout, 16, VK_SHADER_STAGE_FRAGMENT_BIT, p.tonemapPipeLayout);
+        mkLayout(st.postLayout, 20, VK_SHADER_STAGE_FRAGMENT_BIT, p.tonemapPipeLayout);
         auto mkFullPipe = [&](const char* fsName, VkFormat colorFmt,
                               VkPipelineLayout layout, VkPipeline& out,
                               VkSampleCountFlagBits samples) {
