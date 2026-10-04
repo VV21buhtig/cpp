@@ -235,10 +235,6 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vmaFlushAllocation(core.alloc, st.uboAlloc[fi], 0, sizeof(u)); // non-coherent safety
             vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
             prevVP = u.viewProj; // demo-7: следующему кадру
-            if (frame == 60) {
-                printf("VPcur T=(%g,%g,%g)\n", u.viewProj[3][0], u.viewProj[3][1], u.viewProj[3][2]);
-                printf("VPprv T=(%g,%g,%g)\n", u.prevViewProj[3][0], u.prevViewProj[3][1], u.prevViewProj[3][2]);
-            }
         }
         VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
         VkCommandBufferBeginInfo bi{};
