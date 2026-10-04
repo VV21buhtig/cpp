@@ -35,31 +35,9 @@ float lum(vec3 c) { return 0.25 * c.r + 0.5 * c.g + 0.25 * c.b; }
 vec3 tm(vec3 c) { return c / (1.0 + lum(c)); }
 vec3 itm(vec3 c) { return c / max(1e-4, 1.0 - lum(c)); }
 
-vec3 histAt(vec2 uv) { return textureLod(histTex, uv, 0.0).rgb; }
-
-// 5-tap Catmull-Rom (дословно из wc_taa).
-vec3 sampleHist(vec2 uv) {
-    vec2 sp = uv * pc.res.xy;
-    vec2 tp1 = floor(sp - 0.5) + 0.5;
-    vec2 f = sp - tp1;
-    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-    vec2 w3 = f * f * (-0.5 + 0.5 * f);
-    vec2 w12 = w1 + w2;
-    vec2 off12 = w2 / w12;
-    vec2 tp0 = (tp1 - 1.0) * pc.res.zw;
-    vec2 tp3 = (tp1 + 2.0) * pc.res.zw;
-    vec2 tp12 = (tp1 + off12) * pc.res.zw;
-    vec3 r = histAt(vec2(tp12.x, tp0.y)) * w12.x * w0.y;
-    r += histAt(vec2(tp0.x, tp12.y)) * w0.x * w12.y;
-    r += histAt(vec2(tp12.x, tp12.y)) * w12.x * w12.y;
-    r += histAt(vec2(tp3.x, tp12.y)) * w3.x * w12.y;
-    r += histAt(vec2(tp12.x, tp3.y)) * w12.x * w3.y;
-    float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
-    return max(r / ws, vec3(0.0));
-}
-
+// История билинейно (без звона Catmull-Rom: на жёстких рёбрах вокселей
+// отрицательные доли дают переливание граней в движении).
+vec3 sampleHist(vec2 uv) { return max(textureLod(histTex, uv, 0.0).rgb, vec3(0.0)); }
 void main() {
     ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.res.x) || px.y >= int(pc.res.y)) return;
@@ -80,9 +58,21 @@ void main() {
         }
     vec3 mean = m1 / 9.0;
     vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, 0.0));
-    // Репроекция ближайшей глубины; однородные координаты — небо едет направлением.
-    vec2 uv = (vec2(closestP) + 0.5) * pc.res.zw;
-    vec4 h = frame.invViewProj * vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
+    // Репроекция: центр-пиксель решает. Небо в центре — только направление
+    // (без параллакса от полёта, иначе TAA тащит небо за камерой — «желе»).
+    // Террейн у края неба остаётся на ближайшей глубине (анти-гостинг Kaigen).
+    vec2 cuv = (vec2(px) + 0.5) * pc.res.zw;
+    float dc = texelFetch(depthTex, px, 0).r;
+    vec2 uv;
+    vec4 h;
+    if (dc >= 1.0) {
+        h = frame.invViewProj * vec4(cuv.x * 2.0 - 1.0, cuv.y * 2.0 - 1.0, 1.0, 1.0);
+        h = vec4(normalize(h.xyz / max(h.w, 1e-6) - frame.viewPos.xyz), 0.0);
+        uv = cuv;
+    } else {
+        uv = (vec2(closestP) + 0.5) * pc.res.zw;
+        h = frame.invViewProj * vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
+    }
     vec4 ph = frame.prevViewProj * h;
     vec2 prevUv = ph.xy / max(ph.w, 1e-6) * 0.5 + 0.5;
     vec2 motion = prevUv - uv;

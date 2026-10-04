@@ -232,8 +232,13 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             void* dst = nullptr;
             VK_CHECK(vmaMapMemory(core.alloc, st.uboAlloc[fi], &dst));
             memcpy(dst, &u, sizeof(u));
+            vmaFlushAllocation(core.alloc, st.uboAlloc[fi], 0, sizeof(u)); // non-coherent safety
             vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
             prevVP = u.viewProj; // demo-7: следующему кадру
+            if (frame == 60) {
+                printf("VPcur T=(%g,%g,%g)\n", u.viewProj[3][0], u.viewProj[3][1], u.viewProj[3][2]);
+                printf("VPprv T=(%g,%g,%g)\n", u.prevViewProj[3][0], u.prevViewProj[3][1], u.prevViewProj[3][2]);
+            }
         }
         VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
         VkCommandBufferBeginInfo bi{};
@@ -423,7 +428,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             VkImageMemoryBarrier b3{};
             b3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             b3.srcAccessMask = (drawn == 0) ? VkAccessFlags(0)
-                                            : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                                            : VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
             b3.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             b3.oldLayout = (drawn == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
                                         : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
