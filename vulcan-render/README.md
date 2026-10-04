@@ -2,7 +2,7 @@
 
 Форк GL-прототипа: мир/мешер/логика свои (`src/engine`), рендер — Vulkan:
 поквадратный мешер (1 грань = 1xu32), vertex pulling, compute-cull → indirect,
-shadow atlas, HDR + exposure + bloom + Uchimura, SSAO, TAA, RT AO, A2C.
+shadow atlas, HDR + exposure + bloom + Uchimura, SSAO, FSR2 1.0x, RT AO, A2C.
 Мир фиксированный 8x8 чанков (128x128x64), сид 1337. 60fps на RADV Renoir.
 
 ## Управление
@@ -12,10 +12,10 @@ shadow atlas, HDR + exposure + bloom + Uchimura, SSAO, TAA, RT AO, A2C.
 | WASD + мышь / стрелки, Space/C, Shift, ESC | Камера / выход |
 | 1 / 2 / 3 | Солнце утро / полдень / вечер |
 | F1 | Рентген теневой карты (весь экран) |
-| F2 / F3 / F4 | SSAO / TAA / RT AO вкл-выкл |
+| F2 / F4 | SSAO / RT AO вкл-выкл |
 | F5 | Подсветка «куда светит» (зелёный=на солнце, красный=от) |
 | F6 | Карта теней вкл/выкл |
-| F7 | A2C вкл/выкл |
+| F7 / F8 | A2C / FSR2 вкл-выкл |
 
 Переменные окружения: `VK_TOD=0.5` (фикс солнца), `VK_WATERDBG=1` (дамп indirect).
 

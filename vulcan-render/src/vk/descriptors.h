@@ -4,6 +4,7 @@
 #pragma once
 
 #include "vk/vk_ctx.h"
+#include "vk/fsr2.h"
 
 struct Targets;
 struct Sets {
@@ -46,14 +47,7 @@ struct Sets {
     VkDescriptorSet ssaoSet = nullptr;
     VkPipelineLayout ssaoPipeLayout = nullptr;
     VkPipeline ssaoPipe = nullptr;
-    VkImage histImg[2] = {nullptr, nullptr}; // demo-7: история TAA ping-pong
-    VmaAllocation histAlloc[2] = {nullptr, nullptr};
-    VkImageView histView[2] = {nullptr, nullptr};
-    VkDescriptorSetLayout taaLayout = nullptr;
-    VkDescriptorPool taaPool = nullptr;
-    VkDescriptorSet taaSet[2] = {nullptr, nullptr};
-    VkPipelineLayout taaPipeLayout = nullptr;
-    VkPipeline taaPipe = nullptr;
+    Fsr fsr; // FSR2-контекст (живёт в Sets, del чистит)
     VkImage mvImg = nullptr; // FSR2: motion vectors RG (UV-единицы, чистые матрицы)
     VmaAllocation mvAlloc = nullptr;
     VkImageView mvView = nullptr;

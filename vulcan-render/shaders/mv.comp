@@ -1,9 +1,9 @@
 #version 450
 // MV для FSR2: попиксельный motion (prevUv - uv) в UV-единицах [0,1],
 // scale отдаём через motionVectorScale=(W,H) диспатча.
-// Источник — ядро репроекции taa.comp (cuv/dc/closest/sky-else/prevUv),
+// Источник — бывшее ядро репроекции taa.comp (cuv/dc/closest/sky-else/prevUv),
 // БЕЗ статистики/истории/весов. Матрицы ЧИСТЫЕ (без Halton!): джиттер FSR2
-// отменяет сам через jitterOffset. Небо — direction-only как в TAA.
+// отменяет сам через jitterOffset. Небо — direction-only.
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(set = 0, binding = 0) uniform sampler2D depthTex; // D32 копия, nearest
@@ -18,7 +18,6 @@ layout(set = 0, binding = 2) uniform Frame {
     vec4 fog;
     vec4 misc;
     vec4 viewPos;
-    mat4 prevViewProj;
     mat4 viewProjNJ;
     mat4 invViewProjNJ;
     mat4 prevViewProjNJ;

@@ -21,7 +21,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         ci.mipLevels = 1; ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                   VK_IMAGE_USAGE_TRANSFER_DST_BIT; // demo-7: TAA пишет историю назад в HDR
+                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // +копия в fsr при выкл FSR2
         VmaAllocationCreateInfo ai{};
         ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.hdrImg, &t.hdrAlloc, nullptr));
@@ -74,6 +74,40 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         vmaDestroyImage(corep->alloc, tp->depthMsImg, tp->depthMsAlloc);
         vkDestroyImageView(corep->device, tp->hdrMsView, nullptr);
         vmaDestroyImage(corep->alloc, tp->hdrMsImg, tp->hdrMsAlloc);
+    });
+
+    // ---- FSR2 выход (R16F, GENERAL навсегда: storage + sampled) ----
+    {
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                   VK_IMAGE_USAGE_TRANSFER_DST_BIT; // фолбэк-копия HDR->fsr
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.fsrImg, &t.fsrAlloc, nullptr));
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = t.fsrImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.fsrView));
+        core.immRun([&](VkCommandBuffer cb) {
+            imgBarrier(cb, t.fsrImg, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                       VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        });
+    }
+    core.del.push([corep = &core, tp = &t]() {
+        vkDestroyImageView(corep->device, tp->fsrView, nullptr);
+        vmaDestroyImage(corep->alloc, tp->fsrImg, tp->fsrAlloc);
     });
 
     // ---- demo-5a lum 64x36 + exposure ping-pong 1x1 (GENERAL навсегда) ----

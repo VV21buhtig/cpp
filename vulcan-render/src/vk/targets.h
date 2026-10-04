@@ -18,6 +18,9 @@ struct Targets {
     VkImage hdrMsImg = nullptr; // demo-9: MSAA4 цвет (резолв в hdrView)
     VmaAllocation hdrMsAlloc = nullptr;
     VkImageView hdrMsView = nullptr;
+    VkImage fsrImg = nullptr; // FSR2: выход апскейла (пост читает его вместо HDR)
+    VmaAllocation fsrAlloc = nullptr;
+    VkImageView fsrView = nullptr;
     VkImage depthMsImg = nullptr; // demo-9: MSAA4 глубина (резолв в depthCopyView)
     VmaAllocation depthMsAlloc = nullptr;
     VkImageView depthMsView = nullptr;

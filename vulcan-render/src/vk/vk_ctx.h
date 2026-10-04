@@ -34,13 +34,11 @@ void imgBarrier(VkCommandBuffer cb, VkImage img, VkImageLayout oldL, VkImageLayo
                 VkPipelineStageFlags srcS, VkAccessFlags srcA,
                 VkPipelineStageFlags dstS, VkAccessFlags dstA);
 
-// Кадр CPU-зеркало UBO (std140: всё по 16 байт, итого 368: +prevViewProj под TAA,
-// +NJ-пара под MV для FSR2; добавление в КОНЕЦ старые шейдеры не ломает).
+// Кадр CPU-зеркало UBO (std140: всё по 16 байт).
 struct FrameUBO {
     glm::mat4 viewProj;
     glm::mat4 invViewProj;
     glm::vec4 sunDir, sunCol, ambSky, ambGnd, fog, misc, viewPos;
-    glm::mat4 prevViewProj; // demo-7: VP прошлого кадра (с джиттером)
     glm::mat4 viewProjNJ; // FSR2/MV: текущий VP БЕЗ джиттера
     glm::mat4 invViewProjNJ; // FSR2/MV: его инверсия (считаем на CPU)
     glm::mat4 prevViewProjNJ; // FSR2/MV: прошлый VP БЕЗ джиттера

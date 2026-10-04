@@ -177,19 +177,68 @@ bool vkInitCore(VkCore& c) {
         feat12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         feat12.drawIndirectCount = VK_TRUE; // demo-3c: vkCmdDrawIndirectCount
         feat12.pNext = &dyn;
+        bool haveF16 = false, haveI16 = false;
+        {
+            // FSR2 берёт HALF-пермутации: float16/int16 если есть.
+            VkPhysicalDeviceFeatures2 q12{};
+            q12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            VkPhysicalDeviceVulkan12Features qf{};
+            qf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            q12.pNext = &qf;
+            vkGetPhysicalDeviceFeatures2(c.gpu, &q12);
+            haveF16 = qf.shaderFloat16 != 0;
+            haveI16 = q12.features.shaderInt16 != 0;
+        }
+        VkPhysicalDeviceSubgroupSizeControlFeatures ssc{};
+        ssc.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
+        ssc.subgroupSizeControl = VK_TRUE; // FSR2: wave64 через pNext у пайпа
+        ssc.pNext = &feat12;
+        {
+            // Фичу просим только если есть (иначе vkCreateDevice упадёт).
+            VkPhysicalDeviceFeatures2 q{};
+            q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            VkPhysicalDeviceSubgroupSizeControlFeatures qs{};
+            qs.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
+            q.pNext = &qs;
+            vkGetPhysicalDeviceFeatures2(c.gpu, &q);
+            if (!qs.subgroupSizeControl) ssc.subgroupSizeControl = VK_FALSE;
+        }
         VkPhysicalDeviceFeatures2 feats2{};
         feats2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        feats2.pNext = &feat12;
+        feats2.pNext = &ssc;
         feats2.features.vertexPipelineStoresAndAtomics = VK_TRUE; // DEBUG VS-store
         feats2.features.samplerAnisotropy = VK_TRUE;
-        const char* devExts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        if (haveF16) feat12.shaderFloat16 = VK_TRUE;
+        if (haveI16) feats2.features.shaderInt16 = VK_TRUE;
+        // FSR2-бэкенд берёт coherent-кучу: включаем расширение+фичу если есть.
+        VkPhysicalDeviceCoherentMemoryFeaturesAMD cohm{};
+        cohm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD;
+        bool haveCohmem = false;
+        {
+            uint32_t en = 0;
+            vkEnumerateDeviceExtensionProperties(c.gpu, nullptr, &en, nullptr);
+            std::vector<VkExtensionProperties> exts(en);
+            vkEnumerateDeviceExtensionProperties(c.gpu, nullptr, &en, exts.data());
+            for (auto& e : exts)
+                if (!strcmp(e.extensionName, VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME)) {
+                    haveCohmem = true;
+                    break;
+                }
+            if (haveCohmem) {
+                cohm.deviceCoherentMemory = VK_TRUE;
+                cohm.pNext = feats2.pNext;
+                feats2.pNext = &cohm;
+            }
+        }
+        const char* devExts[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                                   VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME};
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        ci.pNext = &feats2; // feats2 -> feat12 -> dyn (pEnabledFeatures игнорим)
+        ci.pNext = &feats2; // feats2 -> [cohm] -> ssc -> feat12 -> dyn (pEnabledFeatures игнорим)
         ci.pEnabledFeatures = nullptr;
         ci.queueCreateInfoCount = 1;
         ci.pQueueCreateInfos = &qi;
-        ci.enabledExtensionCount = 1;
+        ci.enabledExtensionCount = haveCohmem ? 2u : 1u;
         ci.ppEnabledExtensionNames = devExts;
         VK_CHECK(vkCreateDevice(c.gpu, &ci, nullptr, &c.device));
         vkGetDeviceQueue(c.device, c.gfxFamily, 0, &c.gfxQueue);

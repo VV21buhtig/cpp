@@ -3,6 +3,9 @@
 #include "vk/targets.h"
 #include "vk/descriptors.h"
 #include "vk/pipelines.h"
+#include "vk/fsr2.h"
+#include "ffx_fsr2.h"
+#include "vk/ffx_fsr2_vk.h"
 #include "engine/world.h"
 #include "engine/blocks.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -66,16 +69,7 @@ void makeSync(VkCore& core, FrameSync& sy) {
     sy.nimgs = NIMGS;
 }
 
-// Halton (рецепт Kaigen wc_render: последовательность джиттера TAA).
-static float haltonRoot(unsigned i, unsigned b) {
-    float f = 1.0f, r = 0.0f;
-    while (i > 0) {
-        f /= (float)b;
-        r += f * (float)(i % b);
-        i /= b;
-    }
-    return r;
-}
+// FSR2 даёт свою последовательность (ffxFsr2GetJitterOffset) — Halton убран.
 
 int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                  Targets& tg, Sets& st, Pipes& pp, FrameSync& sy, const FrameArgs& a) {
@@ -135,19 +129,18 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     if (getenv("VK_TOD")) tod = (float)atof(getenv("VK_TOD")); // рентген: фикс солнца
     bool dbgShadow = false, prevF1 = false;
     bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
-    bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
+    bool useFsr = true, prevF8 = false; // F8: FSR2 вкл/выкл (выкл = копия HDR->fsr)
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
     bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
-    bool useA2c = true, prevF7 = false; // F7: A2C вкл/выкл (+сброс истории TAA)
+    bool useA2c = true, prevF7 = false; // F7: A2C вкл/выкл (+сброс истории FSR2)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
     int fpsN = 0;
-    glm::mat4 prevVP(1.0f); // demo-7: VP прошлого кадра (с джиттером)
     glm::mat4 prevVpNJ(1.0f); // FSR2/MV: прошлый VP без джиттера
     float prevTod = tod;
-    bool prevUseTaa = true;
+    bool prevUseFsr = true;
     bool prevUseA2c = true;
     while (!glfwWindowShouldClose(core.window)) {
         glfwPollEvents();
@@ -185,9 +178,6 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f2 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F2) != 0);
             if (f2 && !prevF2) { useSsao = !useSsao; printf("ssao %d\n", useSsao); }
             prevF2 = f2;
-            bool f3 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F3) != 0);
-            if (f3 && !prevF3) { useTaa = !useTaa; printf("taa %d\n", useTaa); }
-            prevF3 = f3;
             bool f4 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F4) != 0);
             if (f4 && !prevF4) { useRtAo = !useRtAo; printf("rtao %d\n", useRtAo); }
             prevF4 = f4;
@@ -200,6 +190,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             bool f7 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F7) != 0);
             if (f7 && !prevF7) { useA2c = !useA2c; printf("a2c %d\n", useA2c); }
             prevF7 = f7;
+            bool f8 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F8) != 0);
+            if (f8 && !prevF8) { useFsr = !useFsr; printf("fsr2 %d\n", useFsr); }
+            prevF8 = f8;
         }
         int fi = frame % FrameSync::FRAMES;
         uint32_t imgIdx = 0;
@@ -212,20 +205,23 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         // layout трекаем сами. Кадровый fence выше уже гарантирует свободный cmdbuf.
         VK_CHECK(vkAcquireNextImageKHR(core.device, core.swapchain, 1000000000ull,
                                        sy.acquireSem[fi], VK_NULL_HANDLE, &imgIdx));
-        // demo-7 джиттер: Halton 2/3, hi = drawn%8+1 (рецепт Kaigen).
-        // Смещение в NDC (+= в proj[2][0..1]) — вся математика репроекции
-        // идёт через матрицы, знак с Y-флипом сходится сам.
-        unsigned hi = (unsigned)(drawn % 8) + 1;
-        float jx = (haltonRoot(hi, 2) - 0.5f) * 2.0f / (float)core.swapExtent.width;
-        float jy = (haltonRoot(hi, 3) - 0.5f) * 2.0f / (float)core.swapExtent.height;
+        // FSR2-джиттер: их последовательность (доки дословно: NDC = +2x/W, -2y/H).
+        // Рендер и jitterOffset идут из одних значений — конвенция сходится сама.
+        // FSR2 пользуется тем же jproj.
+        int32_t jphase = ffxFsr2GetJitterPhaseCount((int32_t)core.swapExtent.width,
+                                                    (int32_t)core.swapExtent.width); // 1.0x
+        float jox = 0.0f, joy = 0.0f;
+        ffxFsr2GetJitterOffset(&jox, &joy, (int32_t)(drawn % (unsigned)jphase), jphase);
+        float jx = 2.0f * jox / (float)core.swapExtent.width;
+        float jy = -2.0f * joy / (float)core.swapExtent.height;
         glm::mat4 jproj = proj;
-        if (useTaa) {
+        if (useFsr) {
             jproj[2][0] += jx;
             jproj[2][1] += jy;
         }
-        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useTaa && !prevUseTaa) || (useA2c != prevUseA2c);
+        bool fsrReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f) || (useA2c != prevUseA2c) || (useFsr && !prevUseFsr);
         prevTod = tod;
-        prevUseTaa = useTaa;
+        prevUseFsr = useFsr;
         prevUseA2c = useA2c;
         // UBO кадра
         {
@@ -233,7 +229,6 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             glm::mat4 view = glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
             u.viewProj = jproj * view;
             u.invViewProj = glm::inverse(u.viewProj);
-            u.prevViewProj = prevVP;
             u.viewProjNJ = proj * view; // FSR2/MV: чисто, без Halton
             u.invViewProjNJ = glm::inverse(u.viewProjNJ);
             u.prevViewProjNJ = prevVpNJ;
@@ -250,7 +245,6 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             memcpy(dst, &u, sizeof(u));
             vmaFlushAllocation(core.alloc, st.uboAlloc[fi], 0, sizeof(u)); // non-coherent safety
             vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
-            prevVP = u.viewProj; // demo-7: следующему кадру
             prevVpNJ = u.viewProjNJ; // FSR2/MV: чистая следующему кадру
         }
         VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
@@ -514,7 +508,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         depth.clearValue.depthStencil = {1.0f, 0};
         depth.resolveImageView = tg.depthCopyView;
         depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depth.resolveMode = VK_RESOLVE_MODE_MIN_BIT; // ближний побеждает (края для TAA)
+        depth.resolveMode = VK_RESOLVE_MODE_MIN_BIT; // ближний побеждает (края для FSR2)
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ri.renderArea = {{0, 0}, core.swapExtent};
@@ -569,9 +563,9 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
                                  0, 0, nullptr, 0, nullptr, 1, &b);
         }
-        // FSR2/MV: векторы движения (пока никто не читает — валидация через FSR2 позже).
+        // FSR2/MV: векторы движения. Только для FSR2 (TAA-путь их не читает).
         // Сет fi: UBO привязан при создании (fence гарантирует завершение прошлого).
-        {
+        if (useFsr && st.fsr.ready) {
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.mvPipe);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                     st.mvPipeLayout, 0, 1, &st.mvSet[fi], 0, nullptr);
@@ -678,57 +672,116 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  0, 0, nullptr, 0, nullptr, 1, &b);
             tg.hdrLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
-        // demo-7 TAA: resolve HDR+история -> H[fi], копия назад в HDR.
-        // Дальше lum/bloom/tonemap читают уже сглаженный HDR. F3 выключает.
-        if (useTaa) {
-            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.taaPipe);
-            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    st.taaPipeLayout, 0, 1, &st.taaSet[fi], 0, nullptr);
-            struct TaaPush {
-                float rw, rh, rw2, rh2, reset, p0, p1, p2;
-            } push{(float)core.swapExtent.width, (float)core.swapExtent.height,
-                   1.0f / (float)core.swapExtent.width, 1.0f / (float)core.swapExtent.height,
-                   taaReset ? 1.0f : 0.0f, 0, 0, 0};
-            vkCmdPushConstants(sy.cmdBufs[fi], st.taaPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(push), &push);
-            vkCmdDispatch(sy.cmdBufs[fi], (core.swapExtent.width + 15) / 16,
-                          (core.swapExtent.height + 15) / 16, 1);
-            VkImageMemoryBarrier b2[2]{};
-            b2[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b2[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            b2[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            b2[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[0].image = st.histImg[fi];
-            b2[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            b2[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b2[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b2[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b2[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b2[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b2[1].image = tg.hdrImg;
-            b2[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        // FSR2 (1.0x). Пост всегда читает fsrOut:
+        // FSR2 пишет его сам; фолбэк (F8 выкл) — копией HDR->fsrOut.
+        if (useFsr && st.fsr.ready) {
+            FfxFsr2DispatchDescription dd{};
+            dd.commandList = sy.cmdBufs[fi];
+            dd.color = ffxGetTextureResourceVK(&st.fsr.ctx, tg.hdrImg, tg.hdrView,
+                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                L"hdr", FFX_RESOURCE_STATE_COMPUTE_READ);
+            dd.depth = ffxGetTextureResourceVK(&st.fsr.ctx, tg.depthCopyImg, tg.depthCopyView,
+                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_D32_SFLOAT,
+                L"depth", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.motionVectors = ffxGetTextureResourceVK(&st.fsr.ctx, st.mvImg, st.mvView,
+                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                L"mv", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.output = ffxGetTextureResourceVK(&st.fsr.ctx, tg.fsrImg, tg.fsrView,
+                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                L"fsrOut", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+            dd.exposure = ffxGetTextureResourceVK(&st.fsr.ctx,
+                (frame % 2 == 0) ? tg.expImg[1] : tg.expImg[0],
+                (frame % 2 == 0) ? tg.expView[1] : tg.expView[0],
+                1, 1, VK_FORMAT_R16_SFLOAT, L"exp", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.jitterOffset = {jox, joy};
+            dd.motionVectorScale = {(float)core.swapExtent.width, (float)core.swapExtent.height};
+            dd.renderSize = {(uint32_t)core.swapExtent.width, (uint32_t)core.swapExtent.height};
+            dd.enableSharpening = false;
+            dd.sharpness = 0.0f;
+            dd.frameTimeDelta = dt * 1000.0f < 1.0f ? 1.0f : dt * 1000.0f; // мс, иначе варнинг FSR2
+            dd.preExposure = 1.0f;
+            dd.reset = fsrReset;
+            dd.cameraNear = 0.1f;
+            dd.cameraFar = 600.0f;
+            dd.cameraFovAngleVertical = 70.0f * 3.14159265f / 180.0f;
+            dd.viewSpaceToMetersFactor = 1.0f;
+            FfxErrorCode fsrRc = ffxFsr2ContextDispatch(&st.fsr.ctx, &dd);
+            if (fsrRc != FFX_OK) printf("FSR2 dispatch failed: %d\n", (int)fsrRc);
+            // fsrOut: UAV-запись -> сэмпл поста.
+            VkImageMemoryBarrier fb{};
+            fb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fb.image = tg.fsrImg;
+            fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &fb);
+            // HDR остаётся SHADER_READ (FSR2 только читает): трекинг цел.
+            // depthCopy/MV вернуть в GENERAL (наши сэмплеры ждут его).
+            VkImageMemoryBarrier fr[3]{};
+            fr[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[0].image = tg.depthCopyImg;
+            fr[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            fr[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fr[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[1].image = st.mvImg;
+            fr[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            fr[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[2].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[2].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[2].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[2].image = (frame % 2 == 0) ? tg.expImg[1] : tg.expImg[0];
+            fr[2].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 3, fr);
+        } else {
+        // (TAA удалён: только копия HDR->fsrOut)
+
+            // Пост всегда читает fsrOut: подтянуть туда HDR.
+            VkImageMemoryBarrier cb1{};
+            cb1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb1.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb1.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            cb1.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cb1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            cb1.image = tg.hdrImg;
+            cb1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 2, b2);
-            VkImageCopy cp{};
-            cp.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            cp.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            cp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
-            vkCmdCopyImage(sy.cmdBufs[fi], st.histImg[fi], VK_IMAGE_LAYOUT_GENERAL,
-                           tg.hdrImg, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
-            VkImageMemoryBarrier b3{};
-            b3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b3.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b3.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            b3.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b3.image = tg.hdrImg;
-            b3.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                                 0, 0, nullptr, 0, nullptr, 1, &cb1);
+            VkImageCopy ccp{};
+            ccp.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            ccp.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            ccp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+            vkCmdCopyImage(sy.cmdBufs[fi], tg.hdrImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           tg.fsrImg, VK_IMAGE_LAYOUT_GENERAL, 1, &ccp);
+            VkImageMemoryBarrier cb2{};
+            cb2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            cb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            cb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cb2.image = tg.hdrImg;
+            cb2.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &b3);
+                                 0, 0, nullptr, 0, nullptr, 1, &cb2);
         }
+
         // exp для тонемэппа: binding 1 -> только что записанный.
         // ДО всех биндов сета в кадре (апдейт после бинда инвалидирует запись)!
         // (parity объявлен ниже у adapt; здесь inline по frame.)
