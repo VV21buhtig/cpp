@@ -1,0 +1,61 @@
+#version 450
+// MV для FSR2: попиксельный motion (prevUv - uv) в UV-единицах [0,1],
+// scale отдаём через motionVectorScale=(W,H) диспатча.
+// Источник — ядро репроекции taa.comp (cuv/dc/closest/sky-else/prevUv),
+// БЕЗ статистики/истории/весов. Матрицы ЧИСТЫЕ (без Halton!): джиттер FSR2
+// отменяет сам через jitterOffset. Небо — direction-only как в TAA.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthTex; // D32 копия, nearest
+layout(set = 0, binding = 1, rg16f) writeonly uniform image2D mvOut;
+layout(set = 0, binding = 2) uniform Frame {
+    mat4 viewProj;
+    mat4 invViewProj;
+    vec4 sunDir;
+    vec4 sunCol;
+    vec4 ambSky;
+    vec4 ambGnd;
+    vec4 fog;
+    vec4 misc;
+    vec4 viewPos;
+    mat4 prevViewProj;
+    mat4 viewProjNJ;
+    mat4 invViewProjNJ;
+    mat4 prevViewProjNJ;
+} frame;
+
+layout(push_constant) uniform Push {
+    vec4 res; // w, h, 1/w, 1/h
+} pc;
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.res.x) || px.y >= int(pc.res.y)) return;
+    ivec2 maxP = ivec2(pc.res.xy) - 1;
+    // Closest MIN по D32 (0=ближ, clear=1) — только глубина, без цвета.
+    float closest = 2.0;
+    ivec2 closestP = px;
+    for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++) {
+            ivec2 q = clamp(px + ivec2(x, y), ivec2(0), maxP);
+            float d = texelFetch(depthTex, q, 0).r;
+            if (d < closest) { closest = d; closestP = q; }
+        }
+    mat4 invNJ = frame.invViewProjNJ;
+    vec2 cuv = (vec2(px) + 0.5) * pc.res.zw;
+    float dc = texelFetch(depthTex, px, 0).r;
+    vec2 uv;
+    vec4 h;
+    if (dc >= 1.0) {
+        h = invNJ * vec4(cuv.x * 2.0 - 1.0, cuv.y * 2.0 - 1.0, 1.0, 1.0);
+        h = vec4(normalize(h.xyz / max(h.w, 1e-6) - frame.viewPos.xyz), 0.0);
+        uv = cuv;
+    } else {
+        uv = (vec2(closestP) + 0.5) * pc.res.zw;
+        h = invNJ * vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
+    }
+    vec4 ph = frame.prevViewProjNJ * h;
+    vec2 prevUv = ph.xy / max(ph.w, 1e-6) * 0.5 + 0.5;
+    vec2 motion = prevUv - uv;
+    imageStore(mvOut, px, vec4(motion, 0.0, 0.0));
+}

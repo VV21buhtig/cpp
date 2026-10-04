@@ -145,6 +145,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     double fpsT = prevT;
     int fpsN = 0;
     glm::mat4 prevVP(1.0f); // demo-7: VP прошлого кадра (с джиттером)
+    glm::mat4 prevVpNJ(1.0f); // FSR2/MV: прошлый VP без джиттера
     float prevTod = tod;
     bool prevUseTaa = true;
     bool prevUseA2c = true;
@@ -229,9 +230,13 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         // UBO кадра
         {
             FrameUBO u{};
-            u.viewProj = jproj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+            glm::mat4 view = glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+            u.viewProj = jproj * view;
             u.invViewProj = glm::inverse(u.viewProj);
             u.prevViewProj = prevVP;
+            u.viewProjNJ = proj * view; // FSR2/MV: чисто, без Halton
+            u.invViewProjNJ = glm::inverse(u.viewProjNJ);
+            u.prevViewProjNJ = prevVpNJ;
             glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
             u.sunDir = glm::vec4(sun, 0.0f);
             u.sunCol = glm::vec4(1.25f, 1.21f, 1.12f, 0.0f);
@@ -246,6 +251,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vmaFlushAllocation(core.alloc, st.uboAlloc[fi], 0, sizeof(u)); // non-coherent safety
             vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
             prevVP = u.viewProj; // demo-7: следующему кадру
+            prevVpNJ = u.viewProjNJ; // FSR2/MV: чистая следующему кадру
         }
         VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
         VkCommandBufferBeginInfo bi{};
@@ -562,6 +568,32 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  (VkPipelineStageFlags)(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
                                  0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        // FSR2/MV: векторы движения (пока никто не читает — валидация через FSR2 позже).
+        // Сет fi: UBO привязан при создании (fence гарантирует завершение прошлого).
+        {
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.mvPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    st.mvPipeLayout, 0, 1, &st.mvSet[fi], 0, nullptr);
+            glm::vec4 mres((float)core.swapExtent.width, (float)core.swapExtent.height,
+                           1.0f / (float)core.swapExtent.width,
+                           1.0f / (float)core.swapExtent.height);
+            vkCmdPushConstants(sy.cmdBufs[fi], st.mvPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(mres), &mres);
+            vkCmdDispatch(sy.cmdBufs[fi], (core.swapExtent.width + 15) / 16,
+                          (core.swapExtent.height + 15) / 16, 1);
+            VkImageMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            mb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            mb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            mb.image = st.mvImg;
+            mb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &mb);
         }
         // demo-6 SSAO по копии глубины террейна (вода depth ещё не писала — ей AO
         // ложится от рельефа за ней, малозаметно). Барьер transfer->compute,

@@ -927,4 +927,117 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
         });
     }
 
+    // ---- FSR2/MV: RG16F-векторы в UV-единицах, один сет (пинг-понг не нужен) ----
+    {
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R16G16_SFLOAT;
+        ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &s.mvImg, &s.mvAlloc, nullptr));
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = s.mvImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R16G16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &s.mvView));
+        core.immRun([&](VkCommandBuffer cb) {
+            imgBarrier(cb, s.mvImg, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                       VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        });
+        VkDescriptorSetLayoutBinding b[3]{};
+        b[0].binding = 0; // глубина (nearest)
+        b[1].binding = 1; // MV-выход
+        b[2].binding = 2; // UBO (NJ-матрицы)
+        b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        for (int i = 0; i < 3; i++) {
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 3; li.pBindings = b;
+        VK_CHECK(vkCreateDescriptorSetLayout(core.device, &li, nullptr, &s.mvLayout));
+        VkDescriptorPoolSize ps[3]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 1;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; ps[1].descriptorCount = 1;
+        ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[2].descriptorCount = 1;
+        VkDescriptorPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = 2;
+        pi.poolSizeCount = 3; pi.pPoolSizes = ps;
+        VK_CHECK(vkCreateDescriptorPool(core.device, &pi, nullptr, &s.mvPool));
+        for (int i = 0; i < 2; i++) {
+        VkDescriptorSetAllocateInfo ai2{};
+        ai2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai2.descriptorPool = s.mvPool;
+        ai2.descriptorSetCount = 1;
+        ai2.pSetLayouts = &s.mvLayout;
+        VK_CHECK(vkAllocateDescriptorSets(core.device, &ai2, &s.mvSet[i]));
+        VkDescriptorImageInfo ci0{};
+        ci0.sampler = tg.shadowRawSmp; ci0.imageView = tg.depthCopyView;
+        ci0.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo ci1{};
+        ci1.sampler = VK_NULL_HANDLE; ci1.imageView = s.mvView;
+        ci1.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        // UBO пер-кадровый (NJ текущего кадра): сет i читает uboBuf[i],
+        // fence fi гарантирует что прошлое использование завершено.
+        VkDescriptorBufferInfo dbi{};
+        dbi.buffer = s.uboBuf[i]; dbi.range = sizeof(FrameUBO);
+        VkWriteDescriptorSet w[3]{};
+        w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[0].dstSet = s.mvSet[i]; w[0].dstBinding = 0;
+        w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[0].pImageInfo = &ci0;
+        w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[1].dstSet = s.mvSet[i]; w[1].dstBinding = 1;
+        w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[1].pImageInfo = &ci1;
+        w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[2].dstSet = s.mvSet[i]; w[2].dstBinding = 2;
+        w[2].descriptorCount = 1;
+        w[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[2].pBufferInfo = &dbi;
+        vkUpdateDescriptorSets(core.device, 3, w, 0, nullptr);
+        }
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size = 16; pc.offset = 0; // res
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 1; pli.pSetLayouts = &s.mvLayout;
+        pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(core.device, &pli, nullptr, &s.mvPipeLayout));
+        VkShaderModule cs = makeShader(core.device, SHADER_DIR "mv.comp.spv");
+        VkComputePipelineCreateInfo cpi{};
+        cpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpi.stage.module = cs; cpi.stage.pName = "main";
+        cpi.layout = s.mvPipeLayout;
+        VK_CHECK(vkCreateComputePipelines(core.device, VK_NULL_HANDLE, 1, &cpi, nullptr, &s.mvPipe));
+        vkDestroyShaderModule(core.device, cs, nullptr);
+        core.del.push([corep = &core, sp = &s]() {
+            vkDestroyPipeline(corep->device, sp->mvPipe, nullptr);
+            vkDestroyPipelineLayout(corep->device, sp->mvPipeLayout, nullptr);
+            vkDestroyDescriptorSetLayout(corep->device, sp->mvLayout, nullptr);
+            vkDestroyDescriptorPool(corep->device, sp->mvPool, nullptr);
+            vkDestroyImageView(corep->device, sp->mvView, nullptr);
+            vmaDestroyImage(corep->alloc, sp->mvImg, sp->mvAlloc);
+        });
+    }
+
 }

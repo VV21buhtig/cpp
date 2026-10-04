@@ -54,6 +54,14 @@ struct Sets {
     VkDescriptorSet taaSet[2] = {nullptr, nullptr};
     VkPipelineLayout taaPipeLayout = nullptr;
     VkPipeline taaPipe = nullptr;
+    VkImage mvImg = nullptr; // FSR2: motion vectors RG (UV-единицы, чистые матрицы)
+    VmaAllocation mvAlloc = nullptr;
+    VkImageView mvView = nullptr;
+    VkDescriptorSetLayout mvLayout = nullptr;
+    VkDescriptorPool mvPool = nullptr;
+    VkDescriptorSet mvSet[2] = {nullptr, nullptr};
+    VkPipelineLayout mvPipeLayout = nullptr;
+    VkPipeline mvPipe = nullptr;
 };
 
 void makeSets(VkCore& core, Targets& tg, Sets& s);
