@@ -802,6 +802,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             dri.pColorAttachments = &dg;
             vkCmdBeginRendering(sy.cmdBufs[fi], &dri);
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.dbgPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
             VkViewport dvp{0, 0, 256, 256, 0.0f, 1.0f};
             VkRect2D dsc{{0, 0}, {256, 256}};
             vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &dvp);
