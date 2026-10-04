@@ -135,7 +135,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     bool useTaa = true, prevF3 = false;  // F3: TAA вкл/выкл (+сброс истории)
     bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
     bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
-    bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
+    bool noShadow = getenv("VK_NOSHADOW") != nullptr, prevF6 = false; // F6: карта теней выкл (диагностика!)
     double prevT = glfwGetTime();
     int frame = 0, drawn = 0;
     double fpsT = prevT;
@@ -319,11 +319,15 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             lx = floor(lx / texel + 0.5f) * texel;
             ly = floor(ly / texel + 0.5f) * texel;
             center = xx * lx + yx * ly + L * lz;
+            // Глаз ОТКАТЫВАЕМ назад по лучу: иначе он внутри террейна и near=1
+            // режет всё (в полдень карта пуста — проверено дампом!). Сцена ложится
+            // на ~200±100 при far=400.
+            glm::vec3 eye = center - L * 200.0f;
             glm::mat4 sb(1.0f); // NDC->0..1 по всем осям (GLM даёт глубину [-1,1])
             sb = glm::translate(sb, glm::vec3(0.5f, 0.5f, 0.5f));
             sb = glm::scale(sb, glm::vec3(0.5f, 0.5f, 0.5f));
             lightSpace = sb * glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
-                         glm::lookAt(center, center + L, yx);
+                         glm::lookAt(eye, center + L, yx);
         }
         // demo-4 shadow pass: та же видимость (indirect), только глубина.
         {
@@ -349,7 +353,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         sdepth.imageView = tg.shadowView;
         sdepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         sdepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        sdepth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        sdepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // карту читаем дальше — DONT_CARE запрещён!
         sdepth.clearValue.depthStencil = {1.0f, 0};
         VkRenderingInfo sri{};
         sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -804,8 +808,14 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.dbgPipe);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
-            VkViewport dvp{0, 0, 256, 256, 0.0f, 1.0f};
-            VkRect2D dsc{{0, 0}, {256, 256}};
+            glm::vec2 dres((float)core.swapExtent.width, (float)core.swapExtent.height);
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               64, sizeof(dres), &dres);
+            // F1: на весь экран как shadowmap-view (было 256 в углу).
+            VkViewport dvp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
+            VkRect2D dsc{{0, 0}, core.swapExtent};
             vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &dvp);
             vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &dsc);
             vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);

@@ -13,7 +13,11 @@ const int DV[4] = int[4](0, 0, 1, 1);
 const int SQI[6] = int[6](0, 1, 2, 0, 2, 3);
 
 void main() {
-    uint rec = qb.qd[gl_InstanceIndex];
+    // Чанк закодирован в старших битах firstInstance (как в террейне):
+    // gl_InstanceIndex = firstInstance + i.
+    uint chunk = uint(gl_InstanceIndex) / 1048576u;
+    uint quad = uint(gl_InstanceIndex) - chunk * 1048576u;
+    uint rec = qb.qd[quad];
     uint lx = rec & 15u, lz = (rec >> 4) & 15u, ly = (rec >> 8) & 63u;
     uint f = (rec >> 14) & 7u;
     int ax = int(f >> 1);
@@ -28,7 +32,6 @@ void main() {
     n[ax] = sn;
     ivec3 base = ivec3(int(lx), int(ly), int(lz))
                + (sn > 0 ? n : ivec3(0, 0, 0)) + du * A + dv * B;
-    uint chunk = uint(gl_InstanceIndex) / 1048576u;
     vec2 org = metas[chunk].origin;
     gl_Position = pc.lightSpace * vec4(vec3(base) + vec3(org.x, 0.0, org.y), 1.0);
 }
