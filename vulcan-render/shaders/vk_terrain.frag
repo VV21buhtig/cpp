@@ -93,8 +93,15 @@ void main() {
         outColor = vec4(tileTex * 1.8, 1.0);
         return;
     }
-    // demo-9 A2C: листва пишет альфу дырок (MSAA режет край), discard убран.
-    float alpha = (vTile > 5.5 && vTile < 6.5) ? tileTexA.a : 1.0;
+    // demo-9 A2C: листва пишет SHARPENED coverage (рецепт книги Ch10/03 + bgolus):
+    // coverage = clamp((a-cutoff)/max(thickness*fwidth(a),eps)+0.5).
+    // Сырая альфа на мипах тает в серое 0.5 и кипит — fwidth держит край чётким
+    // на любой дистанции. Остальные пишут 1.0 (полное покрытие).
+    float alpha = 1.0;
+    if (vTile > 5.5 && vTile < 6.5) {
+        float aa = fwidth(tileTexA.a);
+        alpha = clamp((tileTexA.a - 0.5) / max(4.0 * aa, 0.0001) + 0.5, 0.0, 1.0);
+    }
 
     float ndl = max(dot(norm, sunL), 0.0);
     vec3 amb = mix(frame.ambGnd.rgb, frame.ambSky.rgb, norm.y * 0.5 + 0.5) * tileTex;

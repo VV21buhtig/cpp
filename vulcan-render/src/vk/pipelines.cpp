@@ -35,6 +35,7 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         ms.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT; // demo-9: MSAA под A2C
         ms.alphaToCoverageEnable = VK_TRUE; // demo-9: листва без discard
+        // minSampleShading из книги (0.25) НЕ берём: на Renoir -40% fps, край и так чёткий
         VkPipelineColorBlendAttachmentState ba{};
         ba.colorWriteMask = 0xF;
         VkPipelineColorBlendStateCreateInfo cb{};
