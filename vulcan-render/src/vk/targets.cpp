@@ -529,7 +529,7 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
             for (int x = 0; x < W; x++)
                 for (int y = 0; y < H; y++) {
                     unsigned char b = world.getBlock(x, y, z);
-                    if (!b) continue;
+                    if (!World::isSolid(b)) continue; // воздух/вода/лава не затеняют
                     vox[((size_t)z * H + y) * W + x] =
                         (b == B_LEAVES) ? 128 : 255;
                 }
