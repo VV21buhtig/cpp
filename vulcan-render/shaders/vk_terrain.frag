@@ -67,7 +67,7 @@ float rtAO(vec3 pos, vec3 n) {
     for (int i = 0; i < 6; i++)
         for (int s = 1; s <= 3; s++)
             o += texture(occTex, uvw0 + dirs[i] * (float(s) * 1.1) * voxUv).r / float(s * s);
-    return clamp(1.0 - o * 0.55, 0.0, 1.0);
+    return clamp(1.0 - o * 0.55, 0.35, 1.0); // пол 0.35: небо не гаснет в ноль
 }
 
 void main() {
@@ -95,9 +95,9 @@ void main() {
     vec3 direct = frame.sunCol.rgb * ndl * tileTex;
     // demo-4: тень гасит ТОЛЬКО прямой свет, ambient живёт (иначе чернота).
     float sh = calcShadow(vShadow, norm, sunL, frame.viewPos.xyz, vPos);
-    vec3 result = amb + direct * sh;
-
-    vec3 shaded = result * fshade * aoC;
+    // demo-4: тень гасит ТОЛЬКО прямой свет, ambient живёт (иначе чернота).
+    // fshade на ambient половинный: небесный свет полусферический, не направленный.
+    vec3 shaded = (amb * mix(1.0, fshade, 0.5) + direct * sh * fshade) * aoC;
     // Под водой темнее и синее (SEA=20 константа мира): иначе песок светит
     // сквозь воду белым. Пещеры с воздухом ниже моря тоже темнеют — как в MC.
     float uw = clamp((20.0 - vPos.y) / 8.0, 0.0, 1.0);
