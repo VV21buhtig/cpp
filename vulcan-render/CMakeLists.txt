@@ -7,7 +7,7 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 find_program(GLSLC glslc REQUIRED)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-foreach(SH tri.vert tri.frag vk_terrain.vert vk_terrain.frag cull.comp shadow.vert shadow.frag dbg.frag sky.frag lum.comp adapt.comp tonemap.frag bright.comp kdown.comp kup.comp water.vert water.frag)
+foreach(SH tri.vert tri.frag vk_terrain.vert vk_terrain.frag cull.comp shadow.vert shadow.frag dbg.frag sky.frag lum.comp adapt.comp tonemap.frag bright.comp kdown.comp kup.comp water.vert water.frag ssao.comp)
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SH}.spv
         COMMAND ${GLSLC} -O -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SH}.spv
                 ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${SH}
@@ -20,6 +20,12 @@ endforeach()
 # друг друга не тащат). stb_image — системный (/usr/include).
 add_executable(vulcan_render
     src/main.cpp
+    src/vk/bootstrap.cpp
+    src/vk/targets.cpp
+    src/vk/descriptors.cpp
+    src/vk/pipelines.cpp
+    src/vk/frame.cpp
+    src/sky_atmo.cpp
     src/mesh_vk.cpp
     src/vma_impl.cpp
     src/engine/engine_world.cpp
@@ -27,6 +33,7 @@ add_executable(vulcan_render
     src/engine/engine_blocks.cpp
     src/engine/struct_config.cpp
     src/engine/struct_tree.cpp
+    src/engine/struct_rock.cpp
     src/engine/struct_mine.cpp
     src/game/stb_impl.cpp
     ${SHADERS_SPV})
