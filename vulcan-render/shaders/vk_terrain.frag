@@ -15,6 +15,12 @@ layout(set = 0, binding = 0) uniform Frame {
 layout(set = 0, binding = 1) uniform sampler2DArray tiles;
 // demo-4: compare-сэмплер (железный 2x2 PCF на тап) + ручной 3x3 поверх.
 layout(set = 0, binding = 5) uniform sampler2DShadow shadowMap;
+// demo-8: объём плотности (solid=1, листва=0.5) для RT AO.
+layout(set = 0, binding = 10) uniform sampler3D occTex;
+layout(push_constant) uniform PushOcc {
+    layout(offset = 64) vec4 volMinK;
+    layout(offset = 80) vec4 volSize;
+} occ;
 
 layout(location = 0) in vec3 vPos;
 layout(location = 1) in vec3 vNrm;
@@ -44,6 +50,26 @@ float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos, vec3 fragPos)
     return mix(1.0, s, gFade * eFade * dFade);
 }
 
+// demo-8 RT AO: 6 лучей полусферы x 3 шага по объёму плотности.
+// Старт в полвокселя от поверхности (свою грань не цепляем).
+float rtAO(vec3 pos, vec3 n) {
+    vec3 uvw0 = (pos - occ.volMinK.xyz + 0.5) / occ.volSize.xyz;
+    vec3 up = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 t0 = normalize(cross(up, n));
+    vec3 t1 = cross(n, t0);
+    vec3 dirs[6];
+    dirs[0] = n;
+    dirs[1] = normalize(n + t0); dirs[2] = normalize(n - t0);
+    dirs[3] = normalize(n + t1); dirs[4] = normalize(n - t1);
+    dirs[5] = normalize(n + t0 + t1);
+    vec3 voxUv = 1.0 / occ.volSize.xyz;
+    float o = 0.0;
+    for (int i = 0; i < 6; i++)
+        for (int s = 1; s <= 3; s++)
+            o += texture(occTex, uvw0 + dirs[i] * (float(s) * 1.1) * voxUv).r / float(s * s);
+    return clamp(1.0 - o * 0.55, 0.0, 1.0);
+}
+
 void main() {
     vec3 norm = normalize(vNrm);
     vec3 viewDir = normalize(frame.viewPos.xyz - vPos);
@@ -52,6 +78,8 @@ void main() {
                                      : (abs(norm.x) > abs(norm.z) ? 0.6 : 0.8);
     float aoV = clamp(vAO / 3.0, 0.0, 1.0);
     float aoC = 0.5 + 0.5 * aoV * aoV; // MC-мягкое
+    float rt = rtAO(vPos, norm);
+    aoC *= mix(1.0, rt, occ.volMinK.w); // demo-8 RT AO поверх вершинного (F4)
 
     vec4 tileTexA = texture(tiles, vec3(vUV, vTile));
     if (vTile > 5.5 && vTile < 6.5 && tileTexA.a < 0.5) discard;

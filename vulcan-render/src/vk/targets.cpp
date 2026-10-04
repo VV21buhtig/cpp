@@ -519,4 +519,83 @@ void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset,
         vmaDestroyBuffer(corep->alloc, tp->waterMetaBuf, tp->waterMetaAlloc);
         vmaDestroyBuffer(corep->alloc, tp->waterIndBuf, tp->waterIndAlloc);
     });
+
+    // ---- demo-8 объём плотности: solid=255, листва=128, иначе 0 (R8 3D) ----
+    // Статика на весь запуск (перестройка — с EditStore в игровой фазе).
+    {
+        int W = world.sizeX(), D = world.sizeZ(), H = Chunk::SY;
+        std::vector<unsigned char> vox((size_t)W * H * D, 0);
+        for (int z = 0; z < D; z++)
+            for (int x = 0; x < W; x++)
+                for (int y = 0; y < H; y++) {
+                    unsigned char b = world.getBlock(x, y, z);
+                    if (!b) continue;
+                    vox[((size_t)z * H + y) * W + x] =
+                        (b == B_LEAVES) ? 128 : 255;
+                }
+        VkBuffer stg;
+        VmaAllocation stgAlloc;
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = vox.size();
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+        VK_CHECK(vmaCreateBuffer(core.alloc, &bi, &aci, &stg, &stgAlloc, nullptr));
+        void* dst = nullptr;
+        VK_CHECK(vmaMapMemory(core.alloc, stgAlloc, &dst));
+        memcpy(dst, vox.data(), vox.size());
+        vmaUnmapMemory(core.alloc, stgAlloc);
+        VkImageCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ci.imageType = VK_IMAGE_TYPE_3D;
+        ci.format = VK_FORMAT_R8_UNORM;
+        ci.extent = {(uint32_t)W, (uint32_t)H, (uint32_t)D};
+        ci.mipLevels = 1; ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &t.occImg, &t.occAlloc, nullptr));
+        core.immRun([&](VkCommandBuffer cb) {
+            imgBarrier(cb, t.occImg, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkBufferImageCopy cp{};
+            cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cp.imageExtent = {(uint32_t)W, (uint32_t)H, (uint32_t)D};
+            vkCmdCopyBufferToImage(cb, stg, t.occImg,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+            imgBarrier(cb, t.occImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        });
+        vmaDestroyBuffer(core.alloc, stg, stgAlloc);
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = t.occImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vi.format = VK_FORMAT_R8_UNORM;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &t.occView));
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_LINEAR;
+        si.minFilter = VK_FILTER_LINEAR;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW =
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK; // вне мира пусто
+        VK_CHECK(vkCreateSampler(core.device, &si, nullptr, &t.occSmp));
+    }
+    core.del.push([corep = &core, tp = &t]() {
+        vkDestroySampler(corep->device, tp->occSmp, nullptr);
+        vkDestroyImageView(corep->device, tp->occView, nullptr);
+        vmaDestroyImage(corep->alloc, tp->occImg, tp->occAlloc);
+    });
 }

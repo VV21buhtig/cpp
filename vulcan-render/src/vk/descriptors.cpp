@@ -60,14 +60,19 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
         b9.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b9.descriptorCount = 1;
         b9.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutBinding bs[10] = {b0, b1, b2, b3, b4, b5, b6, b7, b8, b9};
+        VkDescriptorSetLayoutBinding b10{}; // 10=объём плотности для RT AO
+        b10.binding = 10;
+        b10.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b10.descriptorCount = 1;
+        b10.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding bs[11] = {b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10};
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 10; li.pBindings = bs;
+        li.bindingCount = 11; li.pBindings = bs;
         VK_CHECK(vkCreateDescriptorSetLayout(core.device, &li, nullptr, &s.setLayout));
         VkDescriptorPoolSize ps[3]{};
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = 2;
-        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 4;
+        ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = 2 * 5;
         ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[2].descriptorCount = 2 * 5;
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -155,7 +160,17 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
             wx[2].descriptorCount = 1;
             wx[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             wx[2].pImageInfo = &ddi;
+            VkDescriptorImageInfo oci{};
+            oci.sampler = tg.occSmp; oci.imageView = tg.occView;
+            oci.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet w10{};
+            w10.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w10.dstSet = s.descSets[i]; w10.dstBinding = 10;
+            w10.descriptorCount = 1;
+            w10.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w10.pImageInfo = &oci;
             vkUpdateDescriptorSets(core.device, 7, w, 0, nullptr);
+            vkUpdateDescriptorSets(core.device, 1, &w10, 0, nullptr);
             vkUpdateDescriptorSets(core.device, 3, wx, 0, nullptr);
         }
     }

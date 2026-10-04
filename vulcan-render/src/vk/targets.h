@@ -52,6 +52,10 @@ struct Targets {
     VkImageView depthCopyView = nullptr;
     VkBuffer waterGigaBuf = nullptr, waterMetaBuf = nullptr, waterIndBuf = nullptr;
     VmaAllocation waterGigaAlloc = nullptr, waterMetaAlloc = nullptr, waterIndAlloc = nullptr;
+    VkImage occImg = nullptr; // demo-8: воксели плотности под RT AO (R8 3D, статика до EditStore)
+    VmaAllocation occAlloc = nullptr;
+    VkImageView occView = nullptr;
+    VkSampler occSmp = nullptr;
 };
 
 void makeTargets(VkCore& core, const World& world, const glm::vec3& worldOffset, Targets& t);
