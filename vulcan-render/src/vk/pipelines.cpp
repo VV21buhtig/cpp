@@ -50,19 +50,14 @@ void makePipes(VkCore& core, Sets& st, Pipes& p) {
         dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
         VkPushConstantRange pc{};
         pc.stageFlags = (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
-                                             VK_SHADER_STAGE_FRAGMENT_BIT); // lightSpace VS + res FS
-        pc.size = sizeof(glm::mat4); pc.offset = 0;
-        VkPushConstantRange pcOcc{};
-        pcOcc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // demo-8: volMin+k, volSize
-        pcOcc.size = 32; pcOcc.offset = 64;
-        VkPushConstantRange pcFlag{};
-        pcFlag.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; // F6: noShadow
-        pcFlag.size = 4; pcFlag.offset = 96;
-        VkPushConstantRange pcs[3] = {pc, pcOcc, pcFlag};
+                                             VK_SHADER_STAGE_FRAGMENT_BIT);
+        // lightSpace [0,64) + occ [64,96) + noShadow [96,100): ОДИН диапазон —
+        // два элемента с общей стадией запрещены спекои (VUID-00292).
+        pc.size = 100; pc.offset = 0;
         VkPipelineLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         li.setLayoutCount = 1; li.pSetLayouts = &st.setLayout;
-        li.pushConstantRangeCount = 3; li.pPushConstantRanges = pcs;
+        li.pushConstantRangeCount = 1; li.pPushConstantRanges = &pc;
         VK_CHECK(vkCreatePipelineLayout(core.device, &li, nullptr, &p.pipeLayout));
         VkPipelineRenderingCreateInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;

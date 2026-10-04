@@ -477,10 +477,14 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 worldOffset.x, 0.0f, worldOffset.z, useRtAo ? 1.0f : 0.0f,
                 (float)world.sizeX(), (float)Chunk::SY, (float)world.sizeZ(),
                 dbgNdl ? 1.0f : 0.0f};
-            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
                                64, sizeof(op), &op);
             float ns = noShadow ? 1.0f : 0.0f; // F6
-            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
                                96, sizeof(ns), &ns);
         }
         vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
