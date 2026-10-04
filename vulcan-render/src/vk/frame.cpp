@@ -308,7 +308,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         glm::mat4 lightSpace;
         {
             glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
-            const float SE = 70.0f;
+            const float SE = 100.0f; // бокс шире дальности теней (dFade 25-60): край не виден
             float texel = 2.0f * SE / (float)SHADOW_S;
             glm::vec3 L = sun;
             glm::vec3 up0 = fabs(L.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);

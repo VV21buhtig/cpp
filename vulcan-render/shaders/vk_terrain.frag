@@ -44,8 +44,8 @@ float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos, vec3 fragPos)
     s /= 9.0;
     float ndl = max(dot(norm, sunDir), 0.0);
     float gFade = smoothstep(0.0, 0.2, ndl);
-    float eFade = smoothstep(0.0, 0.05, p.x) * smoothstep(1.0, 0.95, p.x) *
-                  smoothstep(0.0, 0.05, p.y) * smoothstep(1.0, 0.95, p.y);
+    float eFade = smoothstep(0.0, 0.10, p.x) * smoothstep(1.0, 0.90, p.x) *
+                  smoothstep(0.0, 0.10, p.y) * smoothstep(1.0, 0.90, p.y);
     float cd = length(camPos - fragPos);
     float dFade = 1.0 - smoothstep(25.0, 60.0, cd);
     return mix(1.0, s, gFade * eFade * dFade);
