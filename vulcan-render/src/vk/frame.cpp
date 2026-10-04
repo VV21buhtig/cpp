@@ -63,6 +63,17 @@ void makeSync(VkCore& core, FrameSync& sy) {
     sy.nimgs = NIMGS;
 }
 
+// Halton (рецепт Kaigen wc_render: последовательность джиттера TAA).
+static float haltonRoot(unsigned i, unsigned b) {
+    float f = 1.0f, r = 0.0f;
+    while (i > 0) {
+        f /= (float)b;
+        r += f * (float)(i % b);
+        i /= b;
+    }
+    return r;
+}
+
 int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                  Targets& tg, Sets& st, Pipes& pp, FrameSync& sy, const FrameArgs& a) {
     // ---- камера: старт у холма, WASD+мышь+стрелки, Space/C, ESC выход ----
@@ -124,6 +135,8 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     int frame = 0, drawn = 0;
     double fpsT = prevT;
     int fpsN = 0;
+    glm::mat4 prevVP(1.0f); // demo-7: VP прошлого кадра (с джиттером)
+    float prevTod = tod;
     while (!glfwWindowShouldClose(core.window)) {
         glfwPollEvents();
         double now = glfwGetTime();
@@ -167,11 +180,23 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
         // layout трекаем сами. Кадровый fence выше уже гарантирует свободный cmdbuf.
         VK_CHECK(vkAcquireNextImageKHR(core.device, core.swapchain, 1000000000ull,
                                        sy.acquireSem[fi], VK_NULL_HANDLE, &imgIdx));
+        // demo-7 джиттер: Halton 2/3, hi = drawn%8+1 (рецепт Kaigen).
+        // Смещение в NDC (+= в proj[2][0..1]) — вся математика репроекции
+        // идёт через матрицы, знак с Y-флипом сходится сам.
+        unsigned hi = (unsigned)(drawn % 8) + 1;
+        float jx = (haltonRoot(hi, 2) - 0.5f) * 2.0f / (float)core.swapExtent.width;
+        float jy = (haltonRoot(hi, 3) - 0.5f) * 2.0f / (float)core.swapExtent.height;
+        glm::mat4 jproj = proj;
+        jproj[2][0] += jx;
+        jproj[2][1] += jy;
+        bool taaReset = (drawn == 0) || (fabsf(tod - prevTod) > 1e-6f);
+        prevTod = tod;
         // UBO кадра
         {
             FrameUBO u{};
-            u.viewProj = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+            u.viewProj = jproj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
             u.invViewProj = glm::inverse(u.viewProj);
+            u.prevViewProj = prevVP;
             glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
             u.sunDir = glm::vec4(sun, 0.0f);
             u.sunCol = glm::vec4(1.25f, 1.21f, 1.12f, 0.0f);
@@ -184,6 +209,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             VK_CHECK(vmaMapMemory(core.alloc, st.uboAlloc[fi], &dst));
             memcpy(dst, &u, sizeof(u));
             vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
+            prevVP = u.viewProj; // demo-7: следующему кадру
         }
         VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
         VkCommandBufferBeginInfo bi{};
@@ -217,7 +243,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  0, 0, nullptr, 2, b, 0, nullptr);
         }
         // 2) плоскости фрустума (строки viewProj, нормированные).
-        glm::mat4 vp = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+        glm::mat4 vp = jproj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
         glm::vec4 planes[6];
         {
             glm::vec4 r0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
@@ -559,6 +585,57 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  0, 0, nullptr, 0, nullptr, 1, &b);
             tg.hdrLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        // demo-7 TAA: resolve HDR+история -> H[fi], копия назад в HDR.
+        // Дальше lum/bloom/tonemap читают уже сглаженный HDR.
+        {
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.taaPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    st.taaPipeLayout, 0, 1, &st.taaSet[fi], 0, nullptr);
+            struct TaaPush {
+                float rw, rh, rw2, rh2, reset, p0, p1, p2;
+            } push{(float)core.swapExtent.width, (float)core.swapExtent.height,
+                   1.0f / (float)core.swapExtent.width, 1.0f / (float)core.swapExtent.height,
+                   taaReset ? 1.0f : 0.0f, 0, 0, 0};
+            vkCmdPushConstants(sy.cmdBufs[fi], st.taaPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDispatch(sy.cmdBufs[fi], (core.swapExtent.width + 15) / 16,
+                          (core.swapExtent.height + 15) / 16, 1);
+            VkImageMemoryBarrier b2[2]{};
+            b2[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b2[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b2[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b2[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[0].image = st.histImg[fi];
+            b2[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b2[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b2[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b2[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b2[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b2[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2[1].image = tg.hdrImg;
+            b2[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 2, b2);
+            VkImageCopy cp{};
+            cp.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cp.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+            vkCmdCopyImage(sy.cmdBufs[fi], st.histImg[fi], VK_IMAGE_LAYOUT_GENERAL,
+                           tg.hdrImg, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+            VkImageMemoryBarrier b3{};
+            b3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b3.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b3.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b3.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b3.image = tg.hdrImg;
+            b3.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b3);
         }
         // exp для тонемэппа: binding 1 -> только что записанный.
         // ДО всех биндов сета в кадре (апдейт после бинда инвалидирует запись)!

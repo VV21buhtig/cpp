@@ -34,11 +34,12 @@ void imgBarrier(VkCommandBuffer cb, VkImage img, VkImageLayout oldL, VkImageLayo
                 VkPipelineStageFlags srcS, VkAccessFlags srcA,
                 VkPipelineStageFlags dstS, VkAccessFlags dstA);
 
-// Кадр CPU-зеркало UBO (std140: всё по 16 байт, итого 176).
+// Кадр CPU-зеркало UBO (std140: всё по 16 байт, итого 240: +prevViewProj под TAA).
 struct FrameUBO {
     glm::mat4 viewProj;
     glm::mat4 invViewProj;
     glm::vec4 sunDir, sunCol, ambSky, ambGnd, fog, misc, viewPos;
+    glm::mat4 prevViewProj; // demo-7: VP прошлого кадра (с джиттером)
 };
 
 // Мышь: захват + look (стрелки тоже работают). ESC — выход.

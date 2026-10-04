@@ -1,0 +1,107 @@
+// demo-7 TAA: closest-depth reprojection + YCoCg variance clip + Catmull-Rom
+// history (рецепт Kaigen wc_taa, без апскейла: up=false). Reset первым кадром
+// или телепортом света (push params.x).
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D colorTex;   // HDR кадра, nearest
+layout(set = 0, binding = 1) uniform sampler2D histTex;    // история, linear
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D histOut;
+layout(set = 0, binding = 3) uniform sampler2D depthTex;  // D32 копия, nearest
+layout(set = 0, binding = 4) uniform Frame {
+    mat4 viewProj;
+    mat4 invViewProj;
+    vec4 sunDir;
+    vec4 sunCol;
+    vec4 ambSky;
+    vec4 ambGnd;
+    vec4 fog;
+    vec4 misc;
+    vec4 viewPos;
+    mat4 prevViewProj;
+} frame;
+
+layout(push_constant) uniform Push {
+    vec4 res;    // w, h, 1/w, 1/h
+    vec4 params; // x reset
+} pc;
+
+vec3 toYCoCg(vec3 c) {
+    return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b,
+                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
+}
+vec3 fromYCoCg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+float lum(vec3 c) { return 0.25 * c.r + 0.5 * c.g + 0.25 * c.b; }
+vec3 tm(vec3 c) { return c / (1.0 + lum(c)); }
+vec3 itm(vec3 c) { return c / max(1e-4, 1.0 - lum(c)); }
+
+vec3 histAt(vec2 uv) { return textureLod(histTex, uv, 0.0).rgb; }
+
+// 5-tap Catmull-Rom (дословно из wc_taa).
+vec3 sampleHist(vec2 uv) {
+    vec2 sp = uv * pc.res.xy;
+    vec2 tp1 = floor(sp - 0.5) + 0.5;
+    vec2 f = sp - tp1;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 off12 = w2 / w12;
+    vec2 tp0 = (tp1 - 1.0) * pc.res.zw;
+    vec2 tp3 = (tp1 + 2.0) * pc.res.zw;
+    vec2 tp12 = (tp1 + off12) * pc.res.zw;
+    vec3 r = histAt(vec2(tp12.x, tp0.y)) * w12.x * w0.y;
+    r += histAt(vec2(tp0.x, tp12.y)) * w0.x * w12.y;
+    r += histAt(vec2(tp12.x, tp12.y)) * w12.x * w12.y;
+    r += histAt(vec2(tp3.x, tp12.y)) * w3.x * w12.y;
+    r += histAt(vec2(tp12.x, tp3.y)) * w12.x * w3.y;
+    float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return max(r / ws, vec3(0.0));
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.res.x) || px.y >= int(pc.res.y)) return;
+    vec3 cur = texelFetch(colorTex, px, 0).rgb;
+    if (pc.params.x > 0.5) { imageStore(histOut, px, vec4(cur, 1.0)); return; }
+    ivec2 maxP = ivec2(pc.res.xy) - 1;
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    float closest = 0.0;
+    ivec2 closestP = px;
+    for (int y = -1; y <= 1; y++)
+        for (int x = -1; x <= 1; x++) {
+            ivec2 q = clamp(px + ivec2(x, y), ivec2(0), maxP);
+            vec3 c = toYCoCg(tm(texelFetch(colorTex, q, 0).rgb));
+            m1 += c;
+            m2 += c * c;
+            float d = texelFetch(depthTex, q, 0).r;
+            if (d > closest) { closest = d; closestP = q; }
+        }
+    vec3 mean = m1 / 9.0;
+    vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, 0.0));
+    // Репроекция ближайшей глубины; однородные координаты — небо едет направлением.
+    vec2 uv = (vec2(closestP) + 0.5) * pc.res.zw;
+    vec4 h = frame.invViewProj * vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
+    vec4 ph = frame.prevViewProj * h;
+    vec2 prevUv = ph.xy / max(ph.w, 1e-6) * 0.5 + 0.5;
+    vec2 motion = prevUv - uv;
+    vec2 histUv = (vec2(px) + 0.5) * pc.res.zw + motion;
+    bool off = any(lessThan(histUv, vec2(0.0))) || any(greaterThan(histUv, vec2(1.0)));
+    vec3 hist = sampleHist(histUv);
+    vec3 histY = toYCoCg(tm(hist));
+    float motionPx = length(motion * pc.res.xy);
+    float gamma = mix(1.25, 0.9, clamp(motionPx / 8.0, 0.0, 1.0));
+    vec3 bmin = mean - gamma * sigma;
+    vec3 bmax = mean + gamma * sigma;
+    vec3 center = 0.5 * (bmax + bmin);
+    vec3 ext = 0.5 * (bmax - bmin) + 1e-5;
+    vec3 v = histY - center;
+    vec3 av = abs(v / ext);
+    float ma = max(av.x, max(av.y, av.z));
+    if (ma > 1.0) histY = center + v / ma;
+    hist = itm(fromYCoCg(histY));
+    float w = off ? 0.0 : mix(0.92, 0.82, clamp(motionPx / 12.0, 0.0, 1.0));
+    vec3 res = mix(tm(cur), tm(hist), w);
+    imageStore(histOut, px, vec4(max(itm(res), vec3(0.0)), 1.0));
+}

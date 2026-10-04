@@ -280,8 +280,6 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
     });
 
     // ---- demo-5a пост: 2 набора (на кадр: exp ping-pong; апдейт до бинда = безопасно) ----
-    s.postComputeLayout; // lum+adapt делят (push dt/parity)
-    s.lumPipe, s.adaptPipe;
     {
         VkDescriptorSetLayoutBinding pb[7]{};
         pb[0].binding = 0;
@@ -400,7 +398,6 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
     }
 
     // ---- demo-5b bloom-наборы: 3 прохода (bright/down/up), картинки статичны ----
-    s.brightPipe, s.kdownPipe, s.kupPipe;
     {
         VkDescriptorSetLayoutBinding bb[3]{};
         bb[0].binding = 0;
@@ -775,6 +772,142 @@ void makeSets(VkCore& core, Targets& tg, Sets& s) {
             vkDestroyPipelineLayout(corep->device, sp->ssaoPipeLayout, nullptr);
             vkDestroyDescriptorSetLayout(corep->device, sp->ssaoLayout, nullptr);
             vkDestroyDescriptorPool(corep->device, sp->ssaoPool, nullptr);
+        });
+    }
+
+    // ---- demo-7 TAA: 2 history R16F (GENERAL) + 2 сета крест-накрест ----
+    // set[fi]: читает H[fi^1], пишет H[fi] — перкадровых апдейтов не надо.
+    {
+        for (int i = 0; i < 2; i++) {
+            VkImageCreateInfo ci{};
+            ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ci.imageType = VK_IMAGE_TYPE_2D;
+            ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            ci.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+            ci.mipLevels = 1; ci.arrayLayers = 1;
+            ci.samples = VK_SAMPLE_COUNT_1_BIT;
+            ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VK_CHECK(vmaCreateImage(core.alloc, &ci, &ai, &s.histImg[i], &s.histAlloc[i], nullptr));
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = s.histImg[i];
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VK_CHECK(vkCreateImageView(core.device, &vi, nullptr, &s.histView[i]));
+            core.immRun([&](VkCommandBuffer cb) {
+                imgBarrier(cb, s.histImg[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                           VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            });
+        }
+        VkDescriptorSetLayoutBinding b[5]{};
+        b[0].binding = 0; // HDR кадра
+        b[1].binding = 1; // история (linear)
+        b[2].binding = 2; // история-выход
+        b[3].binding = 3; // глубина
+        b[4].binding = 4; // UBO (prevViewProj + invViewProj)
+        b[0].descriptorType = b[1].descriptorType = b[3].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        for (int i = 0; i < 5; i++) {
+            b[i].descriptorCount = 1;
+            b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 5; li.pBindings = b;
+        VK_CHECK(vkCreateDescriptorSetLayout(core.device, &li, nullptr, &s.taaLayout));
+        VkDescriptorPoolSize ps[3]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = 6;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; ps[1].descriptorCount = 2;
+        ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[2].descriptorCount = 2;
+        VkDescriptorPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pi.maxSets = 2;
+        pi.poolSizeCount = 3; pi.pPoolSizes = ps;
+        VK_CHECK(vkCreateDescriptorPool(core.device, &pi, nullptr, &s.taaPool));
+        for (int i = 0; i < 2; i++) {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = s.taaPool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &s.taaLayout;
+            VK_CHECK(vkAllocateDescriptorSets(core.device, &ai, &s.taaSet[i]));
+            VkDescriptorImageInfo ci0{};
+            ci0.sampler = tg.shadowRawSmp; ci0.imageView = tg.hdrView;
+            ci0.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorImageInfo ci1{};
+            ci1.sampler = s.bloomSmp; ci1.imageView = s.histView[i ^ 1];
+            ci1.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo ci2{};
+            ci2.sampler = VK_NULL_HANDLE; ci2.imageView = s.histView[i];
+            ci2.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo ci3{};
+            ci3.sampler = tg.shadowRawSmp; ci3.imageView = tg.depthCopyView;
+            ci3.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorBufferInfo dbi{};
+            dbi.buffer = s.uboBuf[i]; dbi.range = sizeof(FrameUBO);
+            VkWriteDescriptorSet w[5]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = s.taaSet[i]; w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[0].pImageInfo = &ci0;
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = s.taaSet[i]; w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[1].pImageInfo = &ci1;
+            w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[2].dstSet = s.taaSet[i]; w[2].dstBinding = 2;
+            w[2].descriptorCount = 1;
+            w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[2].pImageInfo = &ci2;
+            w[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[3].dstSet = s.taaSet[i]; w[3].dstBinding = 3;
+            w[3].descriptorCount = 1;
+            w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[3].pImageInfo = &ci3;
+            w[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[4].dstSet = s.taaSet[i]; w[4].dstBinding = 4;
+            w[4].descriptorCount = 1;
+            w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[4].pBufferInfo = &dbi;
+            vkUpdateDescriptorSets(core.device, 5, w, 0, nullptr);
+        }
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size = 32; pc.offset = 0; // res + params
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount = 1; pli.pSetLayouts = &s.taaLayout;
+        pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(core.device, &pli, nullptr, &s.taaPipeLayout));
+        VkShaderModule cs = makeShader(core.device, SHADER_DIR "taa.comp.spv");
+        VkComputePipelineCreateInfo cpi{};
+        cpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpi.stage.module = cs; cpi.stage.pName = "main";
+        cpi.layout = s.taaPipeLayout;
+        VK_CHECK(vkCreateComputePipelines(core.device, VK_NULL_HANDLE, 1, &cpi, nullptr, &s.taaPipe));
+        vkDestroyShaderModule(core.device, cs, nullptr);
+        core.del.push([corep = &core, sp = &s]() {
+            vkDestroyPipeline(corep->device, sp->taaPipe, nullptr);
+            vkDestroyPipelineLayout(corep->device, sp->taaPipeLayout, nullptr);
+            vkDestroyDescriptorSetLayout(corep->device, sp->taaLayout, nullptr);
+            vkDestroyDescriptorPool(corep->device, sp->taaPool, nullptr);
+            for (int i = 0; i < 2; i++) {
+                vkDestroyImageView(corep->device, sp->histView[i], nullptr);
+                vmaDestroyImage(corep->alloc, sp->histImg[i], sp->histAlloc[i]);
+            }
         });
     }
 
