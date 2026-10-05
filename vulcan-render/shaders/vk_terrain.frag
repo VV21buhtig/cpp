@@ -38,7 +38,7 @@ float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos, vec3 fragPos)
 {
     vec3 p = sp.xyz / sp.w;
     p.xy = p.xy * 0.5 + 0.5;
-    p.z = p.z * 0.5 + 0.5;
+    // p.z уже [0,1] (сжата в lightProj на CPU) — не трогаем.
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
     float s = 0.0;
     vec2 t = vec2(1.0 / 2048.0);

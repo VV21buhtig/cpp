@@ -361,9 +361,12 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             // на ~200±100 при far=400.
             glm::vec3 eye = center - L * 200.0f;
             // БЕЗ sb: растеризатор ждёт clip [-1,1] (иначе карта в четверти!).
-            // В [0,1] переводим при сэмплинге в vk_terrain.frag.
-            lightSpace = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
-                         glm::lookAt(eye, center + L, yx);
+            // НО глубину GLM [-1,1] Vulkan режет (Z<0 invalid!) — жмём её в [0,1]
+            // здесь. XY не трогаем (Y-flip для карты не нужен — всё самосогласовано).
+            glm::mat4 lightProj = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f);
+            lightProj[2][2] *= 0.5f;
+            lightProj[3][2] = lightProj[3][2] * 0.5f + 0.5f;
+            lightSpace = lightProj * glm::lookAt(eye, center + L, yx);
         }
         // demo-4 shadow pass: та же видимость (indirect), только глубина.
         {
