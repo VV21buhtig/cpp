@@ -26,7 +26,6 @@ bool makeFsr(VkCore& core, Fsr& f) {
     }
     FfxFsr2ContextDescription desc{};
     desc.flags = FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE |
-                 FFX_FSR2_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS | // MV в полном резе
                  FFX_FSR2_ENABLE_DYNAMIC_RESOLUTION | // renderSize меняется (F9 режимы)
                  FFX_FSR2_ENABLE_DEBUG_CHECKING; // валидация параметров, снять позже
     desc.maxRenderSize = {(uint32_t)core.swapExtent.width, (uint32_t)core.swapExtent.height};

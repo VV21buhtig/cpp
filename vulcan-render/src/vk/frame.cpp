@@ -702,7 +702,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                 DW, DH, VK_FORMAT_D32_SFLOAT,
                 L"depth", FFX_RESOURCE_STATE_GENERIC_READ);
             dd.motionVectors = ffxGetTextureResourceVK(&st.fsr.ctx, st.mvImg, st.mvView,
-                DW, DH, VK_FORMAT_R16G16B16A16_SFLOAT,
+                DW, DH, VK_FORMAT_R16G16_SFLOAT,
                 L"mv", FFX_RESOURCE_STATE_GENERIC_READ);
             dd.output = ffxGetTextureResourceVK(&st.fsr.ctx, tg.fsrImg, tg.fsrView,
                 core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
