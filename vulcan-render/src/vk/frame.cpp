@@ -354,15 +354,15 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             float lx = glm::dot(center, xx), ly = glm::dot(center, yx), lz = glm::dot(center, L);
             lx = floor(lx / texel + 0.5f) * texel;
             ly = floor(ly / texel + 0.5f) * texel;
+            lz = floor(lz / texel + 0.5f) * texel; // снап глубины: иначе дрожь краёв
             center = xx * lx + yx * ly + L * lz;
             // Глаз ОТКАТЫВАЕМ назад по лучу: иначе он внутри террейна и near=1
             // режет всё (в полдень карта пуста — проверено дампом!). Сцена ложится
             // на ~200±100 при far=400.
             glm::vec3 eye = center - L * 200.0f;
-            glm::mat4 sb(1.0f); // NDC->0..1 по всем осям (GLM даёт глубину [-1,1])
-            sb = glm::translate(sb, glm::vec3(0.5f, 0.5f, 0.5f));
-            sb = glm::scale(sb, glm::vec3(0.5f, 0.5f, 0.5f));
-            lightSpace = sb * glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
+            // БЕЗ sb: растеризатор ждёт clip [-1,1] (иначе карта в четверти!).
+            // В [0,1] переводим при сэмплинге в vk_terrain.frag.
+            lightSpace = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f) *
                          glm::lookAt(eye, center + L, yx);
         }
         // demo-4 shadow pass: та же видимость (indirect), только глубина.
@@ -411,7 +411,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                            (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
                                                 VK_SHADER_STAGE_FRAGMENT_BIT),
                            0, sizeof(lightSpace), &lightSpace);
-        vkCmdSetDepthBias(sy.cmdBufs[fi], 1.1f, 0.0f, 2.0f); // const/slope из книги
+        vkCmdSetDepthBias(sy.cmdBufs[fi], 2.5f, 0.0f, 3.5f); // воксели: давим акне (было 1.1/2.0 из книги)
         vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
                                64, sizeof(VkDrawIndirectCommand));
         vkCmdEndRendering(sy.cmdBufs[fi]);

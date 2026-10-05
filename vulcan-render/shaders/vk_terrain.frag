@@ -32,9 +32,13 @@ layout(location = 5) in vec4 vShadow;
 layout(location = 0) out vec4 outColor;
 
 // demo-4 PCF3x3 (рецепт Ch10/11) + фейды из GL-опыта (grazing/край/даль).
+// lightSpace БЕЗ sb (иначе карта в четверти!): clip [-1,1] -> UV [0,1] здесь.
+// z тоже маппим (*0.5+0.5): GLM даёт [-1,1], ZERO_TO_ONE у нас нет.
 float calcShadow(vec4 sp, vec3 norm, vec3 sunDir, vec3 camPos, vec3 fragPos)
 {
-    vec3 p = sp.xyz / sp.w; // scale/bias уже в матрице
+    vec3 p = sp.xyz / sp.w;
+    p.xy = p.xy * 0.5 + 0.5;
+    p.z = p.z * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
     float s = 0.0;
     vec2 t = vec2(1.0 / 2048.0);
