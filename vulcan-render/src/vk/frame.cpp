@@ -301,20 +301,12 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
                                  0, 0, nullptr, 2, b, 0, nullptr);
         }
         // 2) плоскости фрустума (строки viewProj, нормированные).
-        // Каллинг по ЧИСТОЙ proj (рецепт K): джиттер в каллинге = мигание
-        // чанков на границах экрана в такт Halton-циклу ("землетрясение").
-        glm::mat4 vp = proj * glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+        // Каллинг ВЫКЛЮЧЕН: теневой проход делит indBuf с камерой, и кастеры
+        // за спиной вырезались вместе с тенью (прямоугольная ползущая граница).
+        // Правильно — два каллинга (свет/глаза), это P3. Пока рисуем всё (8x8 статичен).
+        // (фрустум из proj*lookAt — восстановить в P3 с lightSpace для теней)
         glm::vec4 planes[6];
-        {
-            glm::vec4 r0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
-            glm::vec4 r1(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
-            glm::vec4 r2(vp[0][2], vp[1][2], vp[2][2], vp[3][2]);
-            glm::vec4 r3(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
-            planes[0] = r3 + r0; planes[1] = r3 - r0;
-            planes[2] = r3 + r1; planes[3] = r3 - r1;
-            planes[4] = r3 + r2; planes[5] = r3 - r2;
-            for (int i = 0; i < 6; i++) planes[i] /= glm::length(glm::vec3(planes[i]));
-        }
+        for (int i = 0; i < 6; i++) planes[i] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.cullPipe);
         vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
                                 st.cullPipeLayout, 0, 1, &st.cullSet, 0, nullptr);
