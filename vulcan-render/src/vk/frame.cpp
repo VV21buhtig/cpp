@@ -129,7 +129,7 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
     if (getenv("VK_TOD")) tod = (float)atof(getenv("VK_TOD")); // рентген: фикс солнца
     bool dbgShadow = false, prevF1 = false;
     bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
-    bool useFsr = true, prevF8 = false; // F8: FSR2 вкл/выкл (выкл = копия HDR->fsr)
+    bool useFsr = false, prevF8 = false; // F8: FSR2 вкл (по дефолту ВЫКЛ: на слабом железе дороже профита)
     int fsrMode = 0, prevF9 = false; // F9: скейл Native/Quality/Balanced/Performance
     int prevFsrMode = -1; // -1 = первый кадр тоже резетит историю FSR2
     static const float FSR_SCALES[4] = {1.0f, 0.67f, 0.59f, 0.5f};
@@ -787,6 +787,18 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             ccp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
             vkCmdCopyImage(sy.cmdBufs[fi], tg.hdrImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            tg.fsrImg, VK_IMAGE_LAYOUT_GENERAL, 1, &ccp);
+            VkImageMemoryBarrier cb3{};
+            cb3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb3.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            cb3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb3.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            cb3.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            cb3.image = tg.fsrImg;
+            cb3.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &cb3);
             VkImageMemoryBarrier cb2{};
             cb2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             cb2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
