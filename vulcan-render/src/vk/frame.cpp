@@ -898,8 +898,10 @@ int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
             tri.pColorAttachments = &tm;
             vkCmdBeginRendering(sy.cmdBufs[fi], &tri);
             vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.tonemapPipe);
-            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &vwp);
-            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
+            VkViewport tsvwp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
+            VkRect2D tssc{{0, 0}, core.swapExtent}; // display: vwp/sc ужаты под render-rect
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &tsvwp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &tssc);
             vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pp.tonemapPipeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
             struct TmPush { glm::vec4 res; float aoK; };
