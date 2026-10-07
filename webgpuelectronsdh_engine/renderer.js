@@ -53,8 +53,11 @@ fn map(p: vec3f) -> vec2f {
   return m;
 }
 
-fn calcNormal(p: vec3f) -> vec3f {
-  let e = vec2f(0.0015, -0.0015);
+fn calcNormal(p: vec3f, t: f32) -> vec3f {
+  // Эпсилон растёт с дистанцией: фиксированный 0.0015 на дальних/скользящих лучах
+  // даёт шум нормали (рябь и вмятины у горизонта). Канон iq: масштаб от t.
+  let ee = max(0.002 * t, 0.0008);
+  let e = vec2f(ee, -ee);
   return normalize(
     e.xyy * map(p + e.xyy).x + e.yyx * map(p + e.yyx).x +
     e.yxy * map(p + e.yxy).x + e.xxx * map(p + e.xxx).x);
@@ -67,7 +70,9 @@ fn softShadow(ro: vec3f, rd: vec3f, mint: f32, maxt: f32, k: f32) -> f32 {
     let h = map(ro + rd * t).x;
     if (h < 0.001) { return 0.0; }
     res = min(res, k * h / t);
-    t += clamp(h, 0.01, 0.5);
+    // Тот же relaxed step ×0.8 что в главном марше: поле с smin не 1-Липшиц,
+    // полный шаг проскакивает поверхности -> полосы и протечки тени.
+    t += clamp(h, 0.01, 0.5) * 0.8;
     if (t > maxt) { break; }
   }
   return clamp(res, 0.0, 1.0);
@@ -115,7 +120,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     return vec4f(sky(rd, u.sunDir) * dummyKeep, 1.0);
   }
   let pos = u.camPos + rd * m.x;
-  let n = calcNormal(pos);
+  let n = calcNormal(pos, m.x);
   let sunDir = normalize(u.sunDir);
   let ndl = max(dot(n, sunDir), 0.0);
   let sh = softShadow(pos + n * 0.04, sunDir, 0.05, 12.0, 8.0); // 0.04: bias против полос акне на скользящих углах
