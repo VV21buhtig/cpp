@@ -70,8 +70,8 @@ int main(int argc, char **argv) {
         uboMirror.resY = (float)hh;
 
         // Следующий коммит: memcpy -> queue.writeBuffer(ubo) + draw(3).
-        // Сейчас проверяем математику: раз в 60 кадров печатаем.
-        if (frame % 60 == 0)
+        // Сейчас проверяем математику: раз в 10 секунд печатаем.
+        if (frame % 600 == 0)
             printf("f=%d pos=(%.2f,%.2f,%.2f) res=%dx%d sun=(%.2f,%.2f,%.2f) arena_off=%zu ubo=%zuB\n",
                 frame, pos.x, pos.y, pos.z, ww, hh,
                 uboMirror.sunDir.x, uboMirror.sunDir.y, uboMirror.sunDir.z,
