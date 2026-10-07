@@ -46,6 +46,11 @@ int main(int argc, char **argv) {
     glfwSetCursorPosCallback(win, on_mouse);
     glfwSetMouseButtonCallback(win, on_btn);
     glfwSetScrollCallback(win, on_scroll);
+    glfwMakeContextCurrent(win);
+    glfwSwapInterval(1); // vsync: иначе тысячи fps, вой кулеров и спам
+    glClearColor(0.05f, 0.07f, 0.12f, 1.0f); // видно что окно наше, а не призрак
+    glfwShowWindow(win);
+    printf("window: 1280x720 'sdf engine — step1'. Закрыть: крестик или Ctrl+C. Лог раз в 10с.\n");
 
     static uint8_t frameMem[64 * 1024];
     Arena frameArena; arena_init(&frameArena, frameMem, sizeof frameMem);
@@ -56,6 +61,7 @@ int main(int argc, char **argv) {
     Vec3 target = v3(0.0f, 1.0f, 0.0f);
     int frame = 0;
     double t0 = glfwGetTime();
+    double lastLog = -10.0; // лог по ВРЕМЕНИ (раз в 10с), не по кадрам
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
         arena_reset(&frameArena); // весь временный мусор кадра — сюда, 0 malloc
@@ -70,15 +76,17 @@ int main(int argc, char **argv) {
         uboMirror.resY = (float)hh;
 
         // Следующий коммит: memcpy -> queue.writeBuffer(ubo) + draw(3).
-        // Сейчас проверяем математику: раз в 10 секунд печатаем.
-        if (frame % 600 == 0)
-            printf("f=%d pos=(%.2f,%.2f,%.2f) res=%dx%d sun=(%.2f,%.2f,%.2f) arena_off=%zu ubo=%zuB\n",
-                frame, pos.x, pos.y, pos.z, ww, hh,
+        // Лог по времени: раз в 10с (~в 15 раз реже чем было при vsync-off).
+        if (t - lastLog >= 10.0) {
+            lastLog = t;
+            printf("f=%d t=%.0fc pos=(%.2f,%.2f,%.2f) res=%dx%d sun=(%.2f,%.2f,%.2f) arena_off=%zu ubo=%zuB\n",
+                frame, t, pos.x, pos.y, pos.z, ww, hh,
                 uboMirror.sunDir.x, uboMirror.sunDir.y, uboMirror.sunDir.z,
                 frameArena.off, sizeof uboMirror);
+            fflush(stdout);
+        }
 
-        // Заглушка кадра: чистый цвет через glClear нет (no GL контекст смены) —
-        // просто swap для проверки цикла/ввода.
+        glClear(GL_COLOR_BUFFER_BIT); // тёмно-синий фон = окно живое
         glfwSwapBuffers(win);
         if (++frame == maxFrames) break;
     }
