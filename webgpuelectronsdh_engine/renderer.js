@@ -179,6 +179,25 @@ async function main() {
   });
 
   // orbit camera
+  // JS-зеркало map(): защита камеры от залезания ВНУТРЬ геометрии.
+  // Внутри SDF марш хитит на t=0 всем экраном -> плоская пересвеченная каша
+  // (тот самый белый экран). Guard оттягивает камеру к таргету, пока снаружи.
+  function sdfCPU(px, py, pz) {
+    let d = py; // plane
+    const smin = (a, b, k) => {
+      const h = Math.min(1, Math.max(0, 0.5 + 0.5 * (b - a) / k));
+      return b * (1 - h) + a * h - k * h * (1 - h);
+    };
+    const s1 = Math.hypot(px + 1.2, py - 1.0, pz) - 1.0;
+    const s2 = Math.hypot(px - 1.2, py - 0.8, pz - 0.5) - 0.7;
+    d = Math.min(d, smin(s1, s2, 0.6));
+    const qx = Math.abs(px) - 0.8, qy = Math.abs(py - 0.6) - 0.6, qz = Math.abs(pz + 2.0) - 0.8;
+    const bx = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0))
+      + Math.min(Math.max(qx, Math.max(qy, qz)), 0);
+    d = Math.min(d, bx);
+    const hole = Math.hypot(px, py - 1.4, pz - 1.8) - 0.5;
+    return Math.max(d, -hole);
+  }
   let yaw = -0.6, pitch = 0.25, dist = 7.0, tx = 0.0, ty = 1.0;
   let dragging = false, lx = 0, ly = 0;
   canvas.addEventListener("mousedown", (e) => { dragging = true; lx = e.clientX; ly = e.clientY; });
@@ -212,6 +231,10 @@ async function main() {
       ty + dist * Math.sin(pitch),
       0 + dist * Math.cos(pitch) * Math.sin(yaw),
     ];
+    // Guard: не даём камере нырнуть внутрь (8 попыток оттяжки к таргету).
+    for (let g = 0; g < 8 && sdfCPU(cp[0], cp[1], cp[2]) < 0.35; g++) {
+      cp[0] += (tx - cp[0]) * 0.12; cp[1] += (ty - cp[1]) * 0.12; cp[2] += (0 - cp[2]) * 0.12;
+    }
     // UBO 64Б = SdfUBO (csrc/sdf_ubo.h) = shaders/sdf.wgsl: camPos+time | camTarget+resX | sunDir+maxSteps | resY+pad
     data[0] = cp[0]; data[1] = cp[1]; data[2] = cp[2]; data[3] = t;
     data[4] = tx; data[5] = ty; data[6] = 0; data[7] = w;
@@ -235,7 +258,7 @@ async function main() {
     device.queue.submit([enc.finish()]);
     if (++frames % 60 === 0) {
       const now = performance.now();
-      document.title = "SDF engine — " + Math.round(frames / ((now - fpsT) / 1000)) + " fps";
+      document.title = "SDF v7 — " + Math.round(frames / ((now - fpsT) / 1000)) + " fps";
       frames = 0; fpsT = now;
     }
     requestAnimationFrame(frame);
