@@ -136,6 +136,15 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 async function main() {
   const canvas = document.getElementById("view");
   const hud = document.getElementById("hud");
+  // Детерминированный стенд из URL: ?cam=yaw,pitch,dist&t=sec&sh=0&fog=0&flat=1&sun=0
+  // cam/t фиксируют вид и солнце (воспроизводимость по кордам), sh/fog/flat/sun
+  // режут куски пайплайна (бисекция артефакта: не убил флаг — дело не в нём).
+  const q = new URLSearchParams(location.search);
+  const ff = {
+    sh: q.get("sh") !== "0", fog: q.get("fog") !== "0",
+    flat: q.get("flat") === "1", sun: q.get("sun") !== "0",
+  };
+  const frozenT = q.has("t") ? parseFloat(q.get("t")) : null;
   if (!(navigator.gpu)) {
     document.body.innerHTML = "<p style='color:#fff'>WebGPU not available (нужен Chrome/Edge 113+ или Electron 28+)</p>";
     return;
@@ -150,7 +159,13 @@ async function main() {
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
 
-  const mod = device.createShaderModule({ code: SDF_WGSL });
+  // Флаги стенда — текстовыми подменами в WGSL (исходник наш, строки канон).
+  let code = SDF_WGSL;
+  if (!ff.sh) code = code.replace("softShadow(pos + n * 0.04, sunDir, 0.05, 12.0, 8.0)", "1.0");
+  if (!ff.fog) code = code.replace("1.0 - exp(-0.0006 * m.x * m.x)", "0.0");
+  if (!ff.sun) code = code.replace("smoothstep(0.9993, 0.9997, sunAmt) * 4.0 + pow(sunAmt, 350.0) * 0.5", "0.0");
+  if (ff.flat) code = code.replace("base * (amb + vec3f(1.25, 1.21, 1.12) * ndl * sh)", "base");
+  const mod = device.createShaderModule({ code });
   const info = await mod.getCompilationInfo();
   const errors = info.messages.filter((m) => m.type === "error");
   if (errors.length) {
@@ -200,6 +215,10 @@ async function main() {
     return Math.max(d, -hole);
   }
   let yaw = -0.6, pitch = 0.25, dist = 7.0, tx = 0.0, ty = 1.0;
+  if (q.has("cam")) {
+    const c = q.get("cam").split(",").map(Number);
+    if (c.length === 3 && c.every(isFinite)) { yaw = c[0]; pitch = c[1]; dist = c[2]; }
+  }
   let dragging = false, lx = 0, ly = 0;
   canvas.addEventListener("mousedown", (e) => { dragging = true; lx = e.clientX; ly = e.clientY; });
   window.addEventListener("mouseup", () => { dragging = false; });
@@ -226,7 +245,7 @@ async function main() {
   function frame() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    const t = (performance.now() - t0) / 1000;
+    const t = frozenT !== null ? frozenT : (performance.now() - t0) / 1000;
     const cp = [
       tx + dist * Math.cos(pitch) * Math.cos(yaw),
       ty + dist * Math.sin(pitch),
@@ -265,7 +284,9 @@ async function main() {
       hud.textContent =
         "yaw " + yaw.toFixed(2) + " pitch " + pitch.toFixed(2) + " dist " + dist.toFixed(1) +
         "\ncam (" + cp[0].toFixed(2) + ", " + cp[1].toFixed(2) + ", " + cp[2].toFixed(2) + ")" +
-        "\nres " + w + "x" + h + " sunAng " + (t * 0.05).toFixed(2);
+        "\nres " + w + "x" + h + " sunAng " + (t * 0.05).toFixed(2) +
+        "\nflags sh=" + (ff.sh ? 1 : 0) + " fog=" + (ff.fog ? 1 : 0) +
+        " flat=" + (ff.flat ? 1 : 0) + " sun=" + (ff.sun ? 1 : 0) + (frozenT !== null ? " T_FROZEN" : "");
     }
     if (frames % 60 === 0) {
       const now = performance.now();
