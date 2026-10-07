@@ -135,6 +135,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
 async function main() {
   const canvas = document.getElementById("view");
+  const hud = document.getElementById("hud");
   if (!(navigator.gpu)) {
     document.body.innerHTML = "<p style='color:#fff'>WebGPU not available (нужен Chrome/Edge 113+ или Electron 28+)</p>";
     return;
@@ -239,7 +240,11 @@ async function main() {
     data[0] = cp[0]; data[1] = cp[1]; data[2] = cp[2]; data[3] = t;
     data[4] = tx; data[5] = ty; data[6] = 0; data[7] = w;
     const sa = t * 0.05;
-    data[8] = Math.cos(sa); data[9] = 0.55; data[10] = Math.sin(sa); data[11] = 100;
+    // Солнце — ЕДИНИЧНЫЙ вектор (канон: sdf_sun в csrc/sdf_ubo.h делает v3_norm).
+    // Было: (cos, 0.55, sin) длиной 1.14 -> dot(rd,sun) до 1.14 -> pow(>1,350)
+    // взрывался и раздувал диск до ~29 градусов (тот самый белый полуэкран).
+    const sl = Math.hypot(Math.cos(sa), 0.55, Math.sin(sa));
+    data[8] = Math.cos(sa) / sl; data[9] = 0.55 / sl; data[10] = Math.sin(sa) / sl; data[11] = 100;
     data[12] = h; data[13] = 0; data[14] = 0; data[15] = 0;
     device.queue.writeBuffer(ubo, 0, data); // writeBuffer = когерентность за нас; на нативе с map будет flush (см. csrc/sdf_gpu.h)
 
@@ -256,7 +261,13 @@ async function main() {
     pass.draw(3);
     pass.end();
     device.queue.submit([enc.finish()]);
-    if (++frames % 60 === 0) {
+    if (++frames % 10 === 0) {
+      hud.textContent =
+        "yaw " + yaw.toFixed(2) + " pitch " + pitch.toFixed(2) + " dist " + dist.toFixed(1) +
+        "\ncam (" + cp[0].toFixed(2) + ", " + cp[1].toFixed(2) + ", " + cp[2].toFixed(2) + ")" +
+        "\nres " + w + "x" + h + " sunAng " + (t * 0.05).toFixed(2);
+    }
+    if (frames % 60 === 0) {
       const now = performance.now();
       document.title = "SDF v7 — " + Math.round(frames / ((now - fpsT) / 1000)) + " fps";
       frames = 0; fpsT = now;
