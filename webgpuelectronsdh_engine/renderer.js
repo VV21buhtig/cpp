@@ -122,6 +122,10 @@ async function main() {
     return;
   }
   const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    document.body.innerHTML = "<p style='color:#fff'>WebGPU adapter = null: браузер API отдал, а GPU нет. Открой chrome://gpu (ищи WebGPU), включи chrome://flags/#enable-unsafe-webgpu или запусти с --enable-unsafe-webgpu</p>";
+    return;
+  }
   const device = await adapter.requestDevice();
   const ctx = canvas.getContext("webgpu");
   const format = navigator.gpu.getPreferredCanvasFormat();
