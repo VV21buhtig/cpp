@@ -89,7 +89,9 @@ fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
 @fragment
 fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let res = vec2f(u.resX, u.resY); // фикс: разрешение из UBO, не из dummy 1x1
-  let uv = (frag.xy - 0.5 * res) / res.y;
+  // WebGPU: frag.y растёт ВНИЗ (origin top-left), а сцена в y-up — флипаем.
+  // Без этого небо под ногами, земля над головой.
+  let uv = vec2f((frag.x - 0.5 * res.x) / res.y, -((frag.y - 0.5 * res.y) / res.y));
   let fw = normalize(u.camTarget - u.camPos);
   let rt = normalize(cross(fw, vec3f(0.0, 1.0, 0.0)));
   let up = cross(rt, fw);
@@ -116,7 +118,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let n = calcNormal(pos);
   let sunDir = normalize(u.sunDir);
   let ndl = max(dot(n, sunDir), 0.0);
-  let sh = softShadow(pos + n * 0.02, sunDir, 0.05, 12.0, 8.0);
+  let sh = softShadow(pos + n * 0.04, sunDir, 0.05, 12.0, 8.0); // 0.04: bias против полос акне на скользящих углах
   let base = select(select(vec3f(0.55, 0.60, 0.45), vec3f(0.75, 0.30, 0.25), m.y > 0.5),
                     vec3f(0.35, 0.45, 0.60), m.y > 1.5);
   let amb = mix(vec3f(0.27, 0.24, 0.21), vec3f(0.54, 0.60, 0.69), n.y * 0.5 + 0.5);
@@ -179,7 +181,9 @@ async function main() {
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     yaw -= (e.clientX - lx) * 0.005;
-    pitch = Math.min(1.4, Math.max(-0.2, pitch + (e.clientY - ly) * 0.005));
+    // Низ -0.12: ниже камера уходит ПОД бесконечную плоскость (внутрь геометрии)
+    // и весь экран — мусор поля. Это не баг рендера, это стена by design (v0.1 orbit).
+    pitch = Math.min(1.45, Math.max(-0.12, pitch + (e.clientY - ly) * 0.005));
     lx = e.clientX; ly = e.clientY;
   });
   canvas.addEventListener("wheel", (e) => {

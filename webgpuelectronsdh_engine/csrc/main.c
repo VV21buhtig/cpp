@@ -20,8 +20,9 @@ static void on_mouse(GLFWwindow *w, double x, double y) {
     if (!g_drag) { g_lx = x; g_ly = y; return; }
     g_yaw -= (x - g_lx) * 0.005;
     g_pitch += (y - g_ly) * 0.005;
-    if (g_pitch > 1.4) g_pitch = 1.4;
-    if (g_pitch < -0.2) g_pitch = -0.2;
+    if (g_pitch > 1.45) g_pitch = 1.45;
+    // Низ -0.12: ниже камера уходит под плоскость (см. renderer.js). Канон!
+    if (g_pitch < -0.12) g_pitch = -0.12;
     g_lx = x; g_ly = y;
 }
 static void on_btn(GLFWwindow *w, int b, int act, int m) {
