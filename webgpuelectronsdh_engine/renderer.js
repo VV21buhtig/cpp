@@ -188,6 +188,12 @@ async function main() {
 
   const data = new Float32Array(16);
   let t0 = performance.now();
+  // WASD здесь НЕТ by design (v0.1: только orbit; free-fly — v0.2).
+  // preventDefault чтобы браузер не уводил страницу (пробел-скролл и т.п.).
+  window.addEventListener("keydown", (e) => {
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+  });
+  let frames = 0, fpsT = performance.now();
   function frame() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
@@ -218,6 +224,11 @@ async function main() {
     pass.draw(3);
     pass.end();
     device.queue.submit([enc.finish()]);
+    if (++frames % 60 === 0) {
+      const now = performance.now();
+      document.title = "SDF engine — " + Math.round(frames / ((now - fpsT) / 1000)) + " fps";
+      frames = 0; fpsT = now;
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
