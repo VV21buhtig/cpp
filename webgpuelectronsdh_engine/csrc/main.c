@@ -41,14 +41,13 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = atoi(argv[++i]);
 
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // БЕЗ OpenGL: окно-пустышка,
+    // ждёт Dawn/WebGPU (шаг 2). Вулкан тут ни при чём — он в другом движке.
     GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf engine — step1 (no GPU yet)", 0, 0);
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
     glfwSetCursorPosCallback(win, on_mouse);
     glfwSetMouseButtonCallback(win, on_btn);
     glfwSetScrollCallback(win, on_scroll);
-    glfwMakeContextCurrent(win);
-    glfwSwapInterval(1); // vsync: иначе тысячи fps, вой кулеров и спам
-    glClearColor(0.05f, 0.07f, 0.12f, 1.0f); // видно что окно наше, а не призрак
     glfwShowWindow(win);
     printf("window: 1280x720 'sdf engine — step1'. Закрыть: крестик или Ctrl+C. Лог раз в 10с.\n");
 
@@ -86,8 +85,8 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
 
-        glClear(GL_COLOR_BUFFER_BIT); // тёмно-синий фон = окно живое
-        glfwSwapBuffers(win);
+        // NO_API: swap'а нет (нечего менять), просто ждём — кап 60fps, кулеры молчат.
+        glfwWaitEventsTimeout(1.0 / 60.0);
         if (++frame == maxFrames) break;
     }
     printf("step1 OK: %d frames, ubo=%zuB\n", frame, sizeof uboMirror);

@@ -4,11 +4,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(glfw3 REQUIRED)
-find_package(OpenGL REQUIRED)
 
 add_executable(sdf_native csrc/main.c csrc/sdf_math.c)
 target_include_directories(sdf_native PRIVATE csrc)
-target_link_libraries(sdf_native PRIVATE glfw OpenGL::GL m)
+target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
 
 # Веб-таргет появится когда будет emsdk:
