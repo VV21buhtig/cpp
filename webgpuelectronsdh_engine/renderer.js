@@ -1,5 +1,13 @@
 // SDF raymarcher frontend: WebGPU init + orbit camera + uniforms.
 // WGSL (sdf.wgsl) инлайнится строкой — без сборщиков, читается как есть.
+// Все ошибки — текстом на страницу (немой чёрный экран запрещён).
+window.addEventListener("error", (e) => {
+  document.body.innerHTML = "<pre style='color:#f88'>JS: " + (e.message || e.error) + "</pre>";
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason || "unknown";
+  document.body.innerHTML = "<pre style='color:#f88'>PROMISE: " + (r.message || r) + "</pre>";
+});
 const SDF_WGSL = /* wgsl */`
 // Канон SDF-сцены. Один источник: сюда правим, renderer.js-прототип сверяется с ним.
 // UBO 64Б = SdfUBO в csrc/sdf_ubo.h (std140: vec3+f32 = 16Б x4).
@@ -86,6 +94,9 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let rt = normalize(cross(fw, vec3f(0.0, 1.0, 0.0)));
   let up = cross(rt, fw);
   let rd = normalize(uv.x * rt + uv.y * up + 1.6 * fw);
+  // dummyTex белая 1x1 (*1.0): держит binding 1 в auto-layout, на картинку не влияет.
+  // Без этого auto-layout выкидывает неиспользуемый биндинг и createBindGroup кидает.
+  let dummyKeep = textureLoad(dummyTex, vec2u(0u, 0u), 0).x;
 
   var t = 0.0;
   var m = vec2f(-1.0, -1.0);
@@ -99,7 +110,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   }
 
   if (m.x < 0.0) {
-    return vec4f(sky(rd, u.sunDir), 1.0);
+    return vec4f(sky(rd, u.sunDir) * dummyKeep, 1.0);
   }
   let pos = u.camPos + rd * m.x;
   let n = calcNormal(pos);
@@ -111,7 +122,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let amb = mix(vec3f(0.27, 0.24, 0.21), vec3f(0.54, 0.60, 0.69), n.y * 0.5 + 0.5);
   let col = base * (amb + vec3f(1.25, 1.21, 1.12) * ndl * sh);
   let fog = 1.0 - exp(-0.0006 * m.x * m.x);
-  return vec4f(mix(col, sky(rd, u.sunDir), fog), 1.0);
+  return vec4f(mix(col, sky(rd, u.sunDir), fog) * dummyKeep, 1.0);
 }
 `;
 
