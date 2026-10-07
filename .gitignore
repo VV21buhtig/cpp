@@ -22,3 +22,7 @@ Makefile
 # Миры сейвов — локальные данные
 voxel-render/worlds/*.bin
 !voxel-render/worlds/README.md
+
+# Electron/TS движок (webgpuelectronsdh_engine)
+webgpuelectronsdh_engine/node_modules/
+webgpuelectronsdh_engine/dist/

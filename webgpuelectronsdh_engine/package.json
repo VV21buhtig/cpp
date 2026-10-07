@@ -1,0 +1,17 @@
+{
+  "name": "webgpuelectronsdh-engine",
+  "version": "0.0.1",
+  "description": "SDF raymarched engine: WebGPU (WGSL) + Electron shell",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && electron .",
+    "start:web": "npm run build && npx serve . -l 3000"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "electron": "^33.0.0",
+    "typescript": "^5.9.3"
+  }
+}
