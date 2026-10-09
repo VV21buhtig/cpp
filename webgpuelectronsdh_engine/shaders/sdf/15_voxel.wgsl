@@ -57,27 +57,30 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
   var tm = (vec3f(p) + vec3f(bx, by, bz) - ro) * vec3f(idx, idy, idz);
   var n = vec3f(0.0);
   var t = seg.x;
-  // Тороид: слот = wrap(чанк), чтение = wrap(мир - origin). tw сопровождаем шагам.
-  let ox = i32(u.pad0);
-  let oz = i32(u.pad1);
-  var tw = vec3i(((p.x - ox) % 176 + 176) % 176, p.y, ((p.z - oz) % 176 + 176) % 176);
   for (var i = 0; i < 320; i++) {
     if (tm.x < tm.y && tm.x < tm.z) {
       p.x += step.x; t = tm.x; tm.x += tdx; n = vec3f(-srd.x, 0.0, 0.0);
-      tw.x += step.x;
-      if (tw.x < 0) { tw.x += 176; } else if (tw.x >= 176) { tw.x -= 176; }
     } else if (tm.y < tm.z) {
       p.y += step.y; t = tm.y; tm.y += tdy; n = vec3f(0.0, -srd.y, 0.0);
-      tw.y += step.y;
     } else {
       p.z += step.z; t = tm.z; tm.z += tdz; n = vec3f(0.0, 0.0, -srd.z);
-      tw.z += step.z;
-      if (tw.z < 0) { tw.z += 176; } else if (tw.z >= 176) { tw.z -= 176; }
     }
     if (t > tEnd) { break; }
     // Вне окна — воздух (и дальше не вернётся: окно выпуклое, DDA монотонен).
+    let ox = i32(u.pad0);
+    let oz = i32(u.pad1);
     if (p.x < ox || p.y < 0 || p.z < oz || p.x >= ox + 176 || p.y >= 64 || p.z >= oz + 176) { continue; }
-    let id = textureLoad(voxTex, tw, 0).r;
+    // Тороид чтением: слот = wrap(чанк), чанк = floor(клетка/16).
+    // Совпадает с заливкой при любом origin (та — wrap(чанк) тоже).
+    let cx = select(p.x / 16, (p.x - 15) / 16, p.x < 0);
+    let cz = select(p.z / 16, (p.z - 15) / 16, p.z < 0);
+    let lx = p.x - cx * 16;
+    let lz = p.z - cz * 16;
+    let rx = cx % 11;
+    let rz = cz % 11;
+    let sx = select(rx, rx + 11, rx < 0);
+    let sz = select(rz, rz + 11, rz < 0);
+    let id = textureLoad(voxTex, vec3i(sx * 16 + lx, p.y, sz * 16 + lz), 0).r;
     if (id != 0u) {
       h.t = t;
       h.n = n;
