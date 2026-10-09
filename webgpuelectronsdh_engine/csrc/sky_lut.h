@@ -10,8 +10,8 @@
 #define SKY_TH 64
 #define SKY_MW 32
 #define SKY_MH 32
-#define SKY_VW 128
-#define SKY_VH 72
+#define SKY_VW 96
+#define SKY_VH 54
 
 typedef struct {
     WGPUDevice dev;
