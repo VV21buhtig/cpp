@@ -71,6 +71,11 @@ fn vnoise(p: vec2f) -> f32 {
   return mix(mix(hash12(i), hash12(i + vec2f(1.0, 0.0)), u.x),
              mix(hash12(i + vec2f(0.0, 1.0)), hash12(i + vec2f(1.0, 1.0)), u.x), u.y);
 }
+fn hash33(p: vec3f) -> vec3f {
+  var q = fract(p * vec3f(0.1031, 0.1030, 0.0973));
+  q += dot(q, q.yxz + vec3f(33.33));
+  return fract((q.xxy + q.yxx) * q.zyx);
+}
 fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   // Вид из K: цвет неба живёт от высоты солнца — день/закат/ночь.
   let sunAmt = max(dot(rd, sunDir), 0.0);
@@ -107,6 +112,27 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
     cloudCol = mix(dark, lit + dark, clamp(edge * 2.0 + pow(sunAmt, 3.0), 0.0, 1.0));
   }
   sk = mix(sk, cloudCol, cloudCov);
+  // Звёзды и луна из K (упрощены: 1 слой сетки, диск без кратеров).
+  // Луна opposite солнца — видна ночью. Всё гаснет днём и за облаками.
+  let mdir = -sunDir;
+  let mdot = dot(rd, mdir);
+  var star = vec3f(0.0);
+  if (night > 0.01 && rd.y > 0.0) {
+    let p = rd * 170.0;
+    let cell = floor(p);
+    let f = fract(p) - 0.5;
+    let h = hash33(cell);
+    let present = step(0.972, h.x);
+    let dd = length(f - (hash33(cell * 1.7 + vec3f(3.0)) - 0.5) * 0.5);
+    let tw = 0.75 + 0.25 * sin(u.time * (2.0 + h.z * 5.0) + h.y * 40.0);
+    let b = present * smoothstep(0.32, 0.0, dd) * 2.8 * (0.15 + h.y * h.y * h.y) * tw;
+    star = mix(vec3f(1.0, 0.8, 0.6), vec3f(0.72, 0.84, 1.0), h.z) * b;
+  }
+  let mr = sqrt(max(0.0, 2.0 * (1.0 - mdot)));
+  let mdisk = smoothstep(0.0155, 0.0143, mr);
+  let mlum = (0.75 + 0.25 * sqrt(max(0.0, 1.0 - (mr / 0.0155) * (mr / 0.0155))));
+  let moon = vec3f(0.95, 0.96, 1.0) * mlum * mdisk * 0.9;
+  sk += (star + moon) * night * (1.0 - cloudCov);
   return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sunCol * (disk + halo) * (1.0 - night) * (1.0 - cloudCov);
 }
 
