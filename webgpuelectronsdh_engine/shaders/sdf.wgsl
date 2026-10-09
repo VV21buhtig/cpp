@@ -1,6 +1,6 @@
 // Шаг 2: +ПОЛ. Куб и шар стоят на плоскости (не парят, не утоплены).
+// Шаг 3: +ТЕНИ (второй марш к солнцу, bias от акне).
 // Лестница: 0) куб -> 1) +шар -> 2) +пол -> 3) +тени -> 4) +небо/туман.
-// Плоскость точная: добивка аналитикой (скользящий марш у горизонта дребезжит).
 struct UBO {
   camPos: vec3f,
   time: f32,
@@ -39,6 +39,19 @@ fn calcNormal(p: vec3f, t: f32) -> vec3f {
     e.yxy * map(p + e.yxy).x + e.xxx * map(p + e.xxx).x);
 }
 
+fn softShadow(ro: vec3f, rd: vec3f) -> f32 {
+  var res = 1.0;
+  var t = 0.05;
+  for (var i = 0; i < 24; i++) {
+    let h = map(ro + rd * t).x;
+    if (h < 0.001) { return 0.0; }
+    res = min(res, 8.0 * h / t);
+    t += clamp(h, 0.01, 0.5);
+    if (t > 12.0) { break; }
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let v = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -71,10 +84,12 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     return vec4f(vec3f(0.02, 0.03, 0.06), 1.0);
   }
   let n = calcNormal(u.camPos + rd * m.x, m.x);
-  let l = normalize(vec3f(-0.5, 0.8, 0.35));
+  let sunDir = normalize(u.sunDir);
+  let sh = softShadow(u.camPos + rd * m.x + n * 0.02, sunDir); // bias: без него полосы акне
+  let l = sunDir;
   var base = vec3f(0.60, 0.65, 0.75); // куб
   if (m.y > 0.5 && m.y < 1.5) { base = vec3f(0.75, 0.45, 0.35); } // шар
   else if (m.y > 1.5) { base = vec3f(0.55, 0.60, 0.45); } // пол
-  let col = base * (0.25 + 0.90 * max(dot(n, l), 0.0));
+  let col = base * (0.25 + 0.90 * max(dot(n, l), 0.0) * sh);
   return vec4f(col, 1.0);
 }
