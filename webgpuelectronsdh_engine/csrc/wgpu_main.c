@@ -50,7 +50,7 @@ static void wait_for(volatile int *done) {
     for (int i = 0; i < 5000 && !*done; i++) nanosleep(&ts, 0);
 }
 
-static double g_yaw = 2.54, g_pitch = -0.30, g_speed = 4.0;
+static double g_yaw = 2.54, g_pitch = -0.30, g_speed = 4.0, g_sens = 0.0012;
 static double g_lx, g_ly;
 static int g_locked = 0;
 
@@ -64,8 +64,8 @@ static void set_locked(GLFWwindow *w, int locked) {
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
     if (!g_locked) { g_lx = x; g_ly = y; return; }
-    g_yaw -= (x - g_lx) * 0.003;
-    g_pitch -= (y - g_ly) * 0.003;
+    g_yaw -= (x - g_lx) * g_sens;
+    g_pitch -= (y - g_ly) * g_sens;
     if (g_pitch > 1.55) g_pitch = 1.55;
     if (g_pitch < -1.55) g_pitch = -1.55;
     g_lx = x; g_ly = y;
