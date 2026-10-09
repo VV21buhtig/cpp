@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <time.h>
 #include <math.h>
 #ifdef __EMSCRIPTEN__
@@ -22,7 +23,7 @@
 
 #define VOX_STREAM_CH 11 // окно 11x11 чанков = 176 клеток (кольцо R=4 + борт)
 #define VOX_STEX (VOX_STREAM_CH * VOX_SX)
-#define VOX_UP_BUDGET 4 // заливок чанков за кадр
+#define VOX_UP_BUDGET 12 // заливок чанков за кадр (16КБ шт, дёшево)
 
 #define FRAMES_IN_FLIGHT 2 // ring UBO: GPU читает свой, CPU пишет свой (иначе разрыв кадра на UMA)
 
@@ -47,6 +48,7 @@ typedef struct {
     WGPUBuffer ubo[FRAMES_IN_FLIGHT];
     WGPURenderPipeline pipeline;
     WGPUBindGroup bind[FRAMES_IN_FLIGHT];
+    WGPUBuffer tagsBuf; // 121 пара (cx,cz) реально залитых чанков, сентинел = воздух
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
     WGPUBindGroup skyBind;
@@ -137,12 +139,25 @@ static void vox_stream_sync(App *app, int pcx, int pcz) {
     app->streamOX = (float)(ox * VOX_SX);
     app->streamOZ = (float)(oz * VOX_SZ);
     static uint8_t staging[256 * VOX_SY * VOX_SZ];
+    static int32_t tags[484];
+    static int tagsInit = 0;
+    if (!tagsInit) {
+        for (int i = 0; i < 484; i++) tags[i] = INT32_MAX;
+        tagsInit = 1;
+    }
+    // Ближние первыми: проход кольцами, дальние ждут (дыр рядом с игроком нет).
     int up = 0;
+    int tagsDirty = 0;
+    for (int r = 0; r <= VOX_RADIUS + 1 && up < VOX_UP_BUDGET; r++) {
     for (int i = 0; i < VOX_POOL && up < VOX_UP_BUDGET; i++) {
         VoxSlot *s = &app->world.slots[i];
         if (!s->used) continue;
         int dx = s->cx - ox, dz = s->cz - oz;
         if (dx < 0 || dz < 0 || dx >= VOX_STREAM_CH || dz >= VOX_STREAM_CH) continue;
+        int dcx = s->cx - pcx, dcz = s->cz - pcz;
+        if (dcx < 0) dcx = -dcx;
+        if (dcz < 0) dcz = -dcz;
+        if ((dcx > dcz ? dcx : dcz) != r) continue;
         int sx = wrap11(s->cx), sz = wrap11(s->cz);
         if (g_slotOk[sx][sz] && g_slotCX[sx][sz] == s->cx && g_slotCZ[sx][sz] == s->cz) continue;
         for (int y = 0; y < VOX_SY; y++)
@@ -168,8 +183,14 @@ static void vox_stream_sync(App *app, int pcx, int pcz) {
         g_slotCX[sx][sz] = s->cx;
         g_slotCZ[sx][sz] = s->cz;
         g_slotOk[sx][sz] = 1;
+        tags[(sz * VOX_STREAM_CH + sx) * 4] = s->cx;
+        tags[(sz * VOX_STREAM_CH + sx) * 4 + 1] = s->cz;
+        tagsDirty = 1;
         up++;
     }
+    }
+    if (tagsDirty)
+        wgpuQueueWriteBuffer(app->queue, app->tagsBuf, 0, tags, sizeof tags);
 }
 
 static void on_mouse(GLFWwindow *w, double x, double y) {
@@ -280,17 +301,35 @@ static int app_frame(App *app) {
         pipe.multisample.mask = 0xFFFFFFFFu;
         app->pipeline = wgpuDeviceCreateRenderPipeline(app->device, &pipe);
         app->bgl = wgpuRenderPipelineGetBindGroupLayout(app->pipeline, 0);
+        // Теги слотов: сентинел = незалито.
+        {
+            WGPUBufferDescriptor td;
+            memset(&td, 0, sizeof td);
+            td.size = 1936;
+            td.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            app->tagsBuf = wgpuDeviceCreateBuffer(app->device, &td);
+            static int32_t sentinel[484];
+            static int sentinelInit = 0;
+            if (!sentinelInit) {
+                for (int i = 0; i < 484; i++) sentinel[i] = INT32_MAX;
+                sentinelInit = 1;
+            }
+            wgpuQueueWriteBuffer(app->queue, app->tagsBuf, 0, sentinel, sizeof sentinel);
+        }
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            WGPUBindGroupEntry be;
-            memset(&be, 0, sizeof be);
-            be.binding = 0;
-            be.buffer = app->ubo[i];
-            be.size = 64;
+            WGPUBindGroupEntry be[2];
+            memset(be, 0, sizeof be);
+            be[0].binding = 0;
+            be[0].buffer = app->ubo[i];
+            be[0].size = 64;
+            be[1].binding = 1;
+            be[1].buffer = app->tagsBuf;
+            be[1].size = 1936;
             WGPUBindGroupDescriptor bgdef;
             memset(&bgdef, 0, sizeof bgdef);
             bgdef.layout = app->bgl;
-            bgdef.entryCount = 1;
-            bgdef.entries = &be;
+            bgdef.entryCount = 2;
+            bgdef.entries = be;
             app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
         }
         // Тороидальная 3D-текстура 176x64x176 (11x11 чанков): заливка — по грязным

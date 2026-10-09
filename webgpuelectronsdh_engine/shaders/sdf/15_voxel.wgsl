@@ -2,6 +2,9 @@
 // Окно: origin из UBO (pad0/pad1 = мировая клетка texel 0,0), размер 176x64x176.
 // Вне окна — воздух. Тороид на заливке (C), в шейдере прямое смещение.
 @group(1) @binding(3) var voxTex: texture_3d<u32>;
+// Теги слотов: какой мировой чанк РЕАЛЬНО залит (121 пара). Сентинел = воздух,
+// иначе видны миражи со старого конца карты при отставании заливки.
+@group(0) @binding(1) var<uniform> voxTags: array<vec4i, 121>;
 
 struct VoxHit {
   t: f32,
@@ -29,8 +32,7 @@ fn boxSeg(ro: vec3f, rd: vec3f) -> vec2f {
   return vec2f(max(enter, 0.0), exit);
 }
 
-fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
-  var h: VoxHit;
+fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {  var h: VoxHit;
   h.t = -1.0;
   h.n = vec3f(0.0);
   h.id = 0u;
@@ -80,6 +82,9 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
     let rz = cz % 11;
     let sx = select(rx, rx + 11, rx < 0);
     let sz = select(rz, rz + 11, rz < 0);
+    // Слот без свежих данных — воздух (луч идёт дальше, а не в мираж).
+    let tag = voxTags[sz * 11 + sx].xy;
+    if (tag.x != cx || tag.y != cz) { continue; }
     let id = textureLoad(voxTex, vec3i(sx * 16 + lx, p.y, sz * 16 + lz), 0).r;
     if (id != 0u) {
       h.t = t;
