@@ -19,6 +19,8 @@
 #include "vox/vox_gen.h"
 #include "sdf_wgsl.h"
 
+#define FRAMES_IN_FLIGHT 2 // ring UBO: GPU читает свой, CPU пишет свой (иначе разрыв кадра на UMA)
+
 #ifdef __EMSCRIPTEN__
 #define CB_MODE WGPUCallbackMode_AllowSpontaneous
 #else
@@ -37,9 +39,9 @@ typedef struct {
     WGPUTextureFormat fmt;
     WGPUSurfaceConfiguration cfg;
     WGPUShaderModule mod;
-    WGPUBuffer ubo;
+    WGPUBuffer ubo[FRAMES_IN_FLIGHT];
     WGPURenderPipeline pipeline;
-    WGPUBindGroup bind;
+    WGPUBindGroup bind[FRAMES_IN_FLIGHT];
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
     WGPUBindGroup skyBind;
@@ -175,7 +177,7 @@ static int app_frame(App *app) {
         app->cfg.usage = WGPUTextureUsage_RenderAttachment;
         app->cfg.width = 1280;
         app->cfg.height = 720;
-        app->cfg.presentMode = WGPUPresentMode_Fifo;
+        app->cfg.presentMode = WGPUPresentMode_Mailbox; // Immediate не поддерживается ([Mailbox, Fifo])
         app->cfg.alphaMode = WGPUCompositeAlphaMode_Opaque;
         wgpuSurfaceConfigure(app->surface, &app->cfg);
         app->mod = make_module(app->device);
@@ -183,7 +185,8 @@ static int app_frame(App *app) {
         memset(&bdef, 0, sizeof bdef);
         bdef.size = 64;
         bdef.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        app->ubo = wgpuDeviceCreateBuffer(app->device, &bdef);
+        for (int i = 0; i < FRAMES_IN_FLIGHT; i++)
+            app->ubo[i] = wgpuDeviceCreateBuffer(app->device, &bdef);
         WGPUColorTargetState color;
         memset(&color, 0, sizeof color);
         color.format = app->fmt;
@@ -209,17 +212,19 @@ static int app_frame(App *app) {
         pipe.multisample.mask = 0xFFFFFFFFu;
         app->pipeline = wgpuDeviceCreateRenderPipeline(app->device, &pipe);
         app->bgl = wgpuRenderPipelineGetBindGroupLayout(app->pipeline, 0);
-        WGPUBindGroupEntry be;
-        memset(&be, 0, sizeof be);
-        be.binding = 0;
-        be.buffer = app->ubo;
-        be.size = 64;
-        WGPUBindGroupDescriptor bgdef;
-        memset(&bgdef, 0, sizeof bgdef);
-        bgdef.layout = app->bgl;
-        bgdef.entryCount = 1;
-        bgdef.entries = &be;
-        app->bind = wgpuDeviceCreateBindGroup(app->device, &bgdef);
+        for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+            WGPUBindGroupEntry be;
+            memset(&be, 0, sizeof be);
+            be.binding = 0;
+            be.buffer = app->ubo[i];
+            be.size = 64;
+            WGPUBindGroupDescriptor bgdef;
+            memset(&bgdef, 0, sizeof bgdef);
+            bgdef.layout = app->bgl;
+            bgdef.entryCount = 1;
+            bgdef.entries = &be;
+            app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
+        }
         // Воксельный патч 48x64x48 в 3D-текстуру (R8Uint, строки паддинг 256).
         {
             WGPUTextureDescriptor td;
@@ -300,14 +305,15 @@ static int app_frame(App *app) {
     app->prevT = now;
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
+    float logic_dt = dt > 0.033f ? 0.033f : dt; // физика без телепортов
     // Перемотка времени как у них: T вперёд x36, Shift+T назад (их wc_game.c:287).
     GLFWwindow *win = app->win;
     int tDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
     int shDown = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                  glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
     app->timeScale = tDown ? (shDown ? -36.0 : 36.0) : 1.0;
-    app->dayT += dt * app->timeScale;
-    app->cloudT += dt;
+    app->dayT += logic_dt * app->timeScale;
+    app->cloudT += logic_dt;
     if (dt > 0.0f) {
         float fps = 1.0f / dt;
         app->fpsEma = app->fpsEma > 0.0f ? app->fpsEma * 0.95f + fps * 0.05f : fps;
@@ -322,7 +328,7 @@ static int app_frame(App *app) {
     // Горизонталь отдельно от вертикали: W/S не втыкают в холм носом.
     Vec3 fh = v3_norm(v3(fwd.x, 0.0f, fwd.z));
     Vec3 rh = v3_norm(v3(right.x, 0.0f, right.z));
-    float sp = (float)app->speed * dt;
+    float sp = (float)app->speed * logic_dt;
     Vec3 wish = v3(0.0f, 0.0f, 0.0f);
     if (glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS) wish = v3_add(wish, v3_mul(fh, sp));
     if (glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS) wish = v3_sub(wish, v3_mul(fh, sp));
@@ -352,7 +358,8 @@ static int app_frame(App *app) {
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
     u.sunDir = sunDir; u.maxSteps = app->maxSteps;
     u.resY = (float)hh;
-    wgpuQueueWriteBuffer(app->queue, app->ubo, 0, &u, sizeof u);
+    int fi = app->frame % FRAMES_IN_FLIGHT; // свой UBO на кадр: GPU читает, CPU пишет
+    wgpuQueueWriteBuffer(app->queue, app->ubo[fi], 0, &u, sizeof u);
 
     WGPUSurfaceTexture st;
     memset(&st, 0, sizeof st);
@@ -386,7 +393,7 @@ static int app_frame(App *app) {
     rp.colorAttachments = &ca;
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
     wgpuRenderPassEncoderSetPipeline(pass, app->pipeline);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, app->bind, 0, 0);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, app->bind[fi], 0, 0);
     wgpuRenderPassEncoderSetBindGroup(pass, 1, app->skyBind, 0, 0);
     wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
@@ -467,10 +474,12 @@ int main(int argc, char **argv) {
     if (!app.adapter) { fprintf(stderr, "adapter timeout\n"); return 1; }
     while (!app_frame(&app)) { }
     printf("done: %d frames\n", app.frame);
-    wgpuBindGroupRelease(app.bind);
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        wgpuBindGroupRelease(app.bind[i]);
+        wgpuBufferRelease(app.ubo[i]);
+    }
     wgpuBindGroupLayoutRelease(app.bgl);
     wgpuRenderPipelineRelease(app.pipeline);
-    wgpuBufferRelease(app.ubo);
     wgpuShaderModuleRelease(app.mod);
     wgpuSurfaceUnconfigure(app.surface);
     wgpuQueueRelease(app.queue);
