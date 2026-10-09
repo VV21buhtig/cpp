@@ -16,6 +16,7 @@
 #include "sdf_ubo.h"
 #include "sdf_scene.h"
 #include "sdf_gpu.h"
+#include "sdf_settings.h"
 #include "sky_lut.h"
 #include "vox/vox_gen.h"
 #include "vox/vox_world.h"
@@ -49,6 +50,8 @@ typedef struct {
     WGPURenderPipeline pipeline;
     WGPUBindGroup bind[FRAMES_IN_FLIGHT];
     WGPUBuffer tagsBuf; // 121 пара (cx,cz) реально залитых чанков, сентинел = воздух
+    SdfSettings settings;
+    WGPUBuffer gradeBuf; // 16Б: gamma, exposure
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
     WGPUBindGroup skyBind;
@@ -316,8 +319,21 @@ static int app_frame(App *app) {
             }
             wgpuQueueWriteBuffer(app->queue, app->tagsBuf, 0, sentinel, sizeof sentinel);
         }
+        // Грейд: settings.cfg + 16Б юниформ.
+        sdf_settings_load(&app->settings, "settings.cfg");
+        {
+            WGPUBufferDescriptor gd;
+            memset(&gd, 0, sizeof gd);
+            gd.size = 16;
+            gd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            app->gradeBuf = wgpuDeviceCreateBuffer(app->device, &gd);
+            float g[4] = {app->settings.gamma, app->settings.exposure, 0, 0};
+            wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+            printf("grade: gamma=%.2f exposure=%.2f (F5/F6, F7/F8)\n",
+                app->settings.gamma, app->settings.exposure);
+        }
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            WGPUBindGroupEntry be[2];
+            WGPUBindGroupEntry be[3];
             memset(be, 0, sizeof be);
             be[0].binding = 0;
             be[0].buffer = app->ubo[i];
@@ -325,10 +341,13 @@ static int app_frame(App *app) {
             be[1].binding = 1;
             be[1].buffer = app->tagsBuf;
             be[1].size = 1936;
+            be[2].binding = 2;
+            be[2].buffer = app->gradeBuf;
+            be[2].size = 16;
             WGPUBindGroupDescriptor bgdef;
             memset(&bgdef, 0, sizeof bgdef);
             bgdef.layout = app->bgl;
-            bgdef.entryCount = 2;
+            bgdef.entryCount = 3;
             bgdef.entries = be;
             app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
         }
@@ -396,6 +415,30 @@ static int app_frame(App *app) {
     int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
     if (nDown && !nPrev) { app->mode = (app->mode + 1) % 3; printf("view mode=%d\n", app->mode); }
     nPrev = nDown;
+    // Грейд-хоткеи как слайдеры s_gamma: F5/F6 гамма, F7/F8 экспозиция. Сохраняем сразу.
+    {
+        static int p5 = 0, p6 = 0, p7 = 0, p8 = 0;
+        int k5 = glfwGetKey(app->win, GLFW_KEY_F5) == GLFW_PRESS;
+        int k6 = glfwGetKey(app->win, GLFW_KEY_F6) == GLFW_PRESS;
+        int k7 = glfwGetKey(app->win, GLFW_KEY_F7) == GLFW_PRESS;
+        int k8 = glfwGetKey(app->win, GLFW_KEY_F8) == GLFW_PRESS;
+        int ch = 0;
+        if (k5 && !p5) { app->settings.gamma -= 0.1f; ch = 1; }
+        if (k6 && !p6) { app->settings.gamma += 0.1f; ch = 1; }
+        if (k7 && !p7) { app->settings.exposure -= 0.1f; ch = 1; }
+        if (k8 && !p8) { app->settings.exposure += 0.1f; ch = 1; }
+        p5 = k5; p6 = k6; p7 = k7; p8 = k8;
+        if (ch) {
+            if (app->settings.gamma < 0.5f) app->settings.gamma = 0.5f;
+            if (app->settings.gamma > 4.0f) app->settings.gamma = 4.0f;
+            if (app->settings.exposure < 0.1f) app->settings.exposure = 0.1f;
+            if (app->settings.exposure > 4.0f) app->settings.exposure = 4.0f;
+            float g[4] = {app->settings.gamma, app->settings.exposure, 0, 0};
+            wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+            sdf_settings_save(&app->settings, "settings.cfg");
+            printf("grade: gamma=%.2f exposure=%.2f\n", app->settings.gamma, app->settings.exposure);
+        }
+    }
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
     float logic_dt = dt > 0.033f ? 0.033f : dt; // физика без телепортов

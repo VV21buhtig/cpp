@@ -19,7 +19,9 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Мир — окно стриминга 176x64x176: analytic вход + DDA внутри.
   let hit = voxMarch(u.camPos, rd, 300.0);
   if (hit.t < 0.0) {
-    return vec4f(sky(rd, normalize(u.sunDir)), 1.0);
+    var miss = sky(rd, normalize(u.sunDir));
+    miss = pow(max(miss * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
+    return vec4f(miss, 1.0);
   }
   let pos = u.camPos + rd * hit.t;
   let n = hit.n;
@@ -58,5 +60,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let fog = 1.0 - exp(-fogDen * hit.t * hit.t);
   var fogCol = skyGrad(rd, sunDir) + sunTerms(rd, sunDir, lightCol, 1.0 - dayL);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
-  return vec4f(mix(col, fogCol, fog), 1.0);
+  var outc = mix(col, fogCol, fog);
+  outc = pow(max(outc * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
+  return vec4f(outc, 1.0);
 }

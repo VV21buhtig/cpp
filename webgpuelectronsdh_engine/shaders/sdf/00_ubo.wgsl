@@ -13,3 +13,5 @@ struct UBO {
 };
 
 @group(0) @binding(0) var<uniform> u: UBO;
+// Грейд из settings.cfg (как их gammaU): x=gamma, y=exposure.
+@group(0) @binding(2) var<uniform> grade: vec4f;
