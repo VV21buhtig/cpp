@@ -53,6 +53,17 @@ fn softShadow(ro: vec3f, rd: vec3f) -> f32 {
   return clamp(res, 0.0, 1.0);
 }
 
+fn hash12(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
+  p3 += dot(p3, p3.yzx + vec3f(33.33));
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let u = fract(p) * fract(p) * (3.0 - 2.0 * fract(p));
+  return mix(mix(hash12(i), hash12(i + vec2f(1.0, 0.0)), u.x),
+             mix(hash12(i + vec2f(0.0, 1.0)), hash12(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
 fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   // Вид из K: цвет неба живёт от высоты солнца — день/закат/ночь.
   let sunAmt = max(dot(rd, sunDir), 0.0);
@@ -67,7 +78,28 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   let sunCol = mix(vec3f(1.0, 0.45, 0.20), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
   let disk = smoothstep(0.9993, 0.9997, sunAmt) * 4.0;
   let halo = pow(sunAmt, 350.0) * 0.5 + pow(sunAmt, 8.0) * 0.12 * (1.0 - night);
-  return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sunCol * (disk + halo) * (1.0 - night);
+  // Дешёвые облака вместо волюметрики K: 2D fbm-купол, тёмные сверху,
+  // рыжая подсветка снизу у солнца. Только небо (rd.y>0), 4 октавы.
+  var cloudCov = 0.0;
+  var cloudCol = vec3f(0.0);
+  if (rd.y > 0.015) {
+    let cuv = rd.xz / (rd.y + 0.08) * 1.2 + vec2f(u.time * 0.008, u.time * 0.003);
+    var f = 0.0;
+    var a = 0.5;
+    var pp = cuv;
+    for (var i = 0; i < 4; i++) {
+      f += a * vnoise(pp);
+      pp = pp * 2.03 + vec2f(1.7, 9.2);
+      a *= 0.5;
+    }
+    let edge = smoothstep(0.45, 0.60, f) - smoothstep(0.52, 0.72, f);
+    cloudCov = smoothstep(0.52, 0.72, f) * smoothstep(0.015, 0.12, rd.y);
+    let dark = mix(vec3f(0.10, 0.09, 0.12), vec3f(0.02, 0.02, 0.04), night);
+    let lit = sunCol * 1.3 * clamp(edge * 1.5 + pow(sunAmt, 3.0), 0.0, 1.0) * (1.0 - night);
+    cloudCol = mix(dark, lit + dark, clamp(edge * 2.0 + pow(sunAmt, 3.0), 0.0, 1.0));
+  }
+  sk = mix(sk, cloudCol, cloudCov);
+  return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sunCol * (disk + halo) * (1.0 - night) * (1.0 - cloudCov);
 }
 
 @vertex
@@ -114,7 +146,16 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   if (m.y > 0.5 && m.y < 1.5) { base = vec3f(0.75, 0.45, 0.35); } // шар
   else if (m.y > 1.5) { base = vec3f(0.55, 0.60, 0.45); } // пол
   let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL);
-  let col = base * (amb + lightCol * max(dot(n, sunDir), 0.0) * sh * dayL);
+  let ndl = max(dot(n, sunDir), 0.0);
+  var col = base * (amb + lightCol * ndl * sh * dayL);
+  // Контровой рим из K: край против солнца подсвечен — силуэты не плоские.
+  let sunAmt = max(dot(rd, sunDir), 0.0);
+  let sunset = pow(clamp(1.0 - abs(clamp(sunDir.y, -1.0, 1.0)), 0.0, 1.0), 3.0);
+  let rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+  col += base * lightCol * rim * (0.15 + 0.85 * sunset);
+  // Воздушная перспектива: туман греется к солнцу (дальняк в рыжее).
   let fog = 1.0 - exp(-0.0006 * m.x * m.x);
-  return vec4f(mix(col, sky(rd, sunDir), fog), 1.0);
+  var fogCol = sky(rd, sunDir);
+  fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
+  return vec4f(mix(col, fogCol, fog), 1.0);
 }
