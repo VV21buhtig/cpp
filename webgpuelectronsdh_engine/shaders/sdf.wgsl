@@ -21,8 +21,13 @@ fn sdBoxF(p: vec3f, b: vec3f) -> f32 {
   return length(max(d, vec3f(0.0))) + min(max(d.x, max(d.y, d.z)), 0.0);
 }
 
+fn sdSphere(p: vec3f, r: f32) -> f32 { return length(p) - r; }
+
 fn map(p: vec3f) -> vec2f {
-  return vec2f(sdBoxF(p, vec3f(0.8)), 0.0);
+  var m = vec2f(sdBoxF(p, vec3f(0.8)), 0.0);
+  let s = sdSphere(p - vec3f(1.8, 0.0, 0.0), 0.7);
+  if (s < m.x) { m = vec2f(s, 1.0); }
+  return m;
 }
 
 fn calcNormal(p: vec3f) -> vec3f {

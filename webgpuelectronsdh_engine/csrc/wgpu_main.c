@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
 
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf step0 — one cube", 0, 0);
+    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf step1 — cube + ball", 0, 0);
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
     glfwSetCursorPosCallback(win, on_mouse);
     glfwSetMouseButtonCallback(win, on_btn);

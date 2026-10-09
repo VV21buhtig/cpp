@@ -8,7 +8,10 @@
 static inline float sdf_eval(float px, float py, float pz) {
     float qx = fabsf(px) - 0.8f, qy = fabsf(py) - 0.8f, qz = fabsf(pz) - 0.8f;
     float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f), oz = fmaxf(qz, 0.0f);
-    return sqrtf(ox*ox + oy*oy + oz*oz) + fminf(fmaxf(qx, fmaxf(qy, qz)), 0.0f);
+    float d = sqrtf(ox*ox + oy*oy + oz*oz) + fminf(fmaxf(qx, fmaxf(qy, qz)), 0.0f);
+    float dx = px - 1.8f;
+    float s = sqrtf(dx*dx + py*py + pz*pz) - 0.7f;
+    return d < s ? d : s;
 }
 
 // Guard камеры: пока внутри (< 0.35) — тянем к таргету.
