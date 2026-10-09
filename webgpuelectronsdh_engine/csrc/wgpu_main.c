@@ -312,6 +312,7 @@ static int app_frame(App *app) {
         wgpuSurfaceConfigure(app->surface, &app->cfg);
     }
     double now = glfwGetTime();
+    double frameStart = now;
     double t = now - app->t0;
     float dt = (float)(now - app->prevT);
     app->prevT = now;
@@ -439,6 +440,19 @@ static int app_frame(App *app) {
     }
     app->frame++;
     if (app->maxFrames > 0 && app->frame >= app->maxFrames) return 1;
+#ifndef __EMSCRIPTEN__
+    // Лимит 60 fps: ноут не жарим. В тестах (--frames) не спим.
+    if (app->maxFrames <= 0) {
+        double elapsed = glfwGetTime() - frameStart;
+        double want = 1.0 / 60.0;
+        if (elapsed < want) {
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = (long)((want - elapsed) * 1e9);
+            nanosleep(&ts, 0);
+        }
+    }
+#endif
     return glfwWindowShouldClose(win) ? 1 : 0;
 }
 
