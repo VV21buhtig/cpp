@@ -13,6 +13,11 @@ add_executable(sdf_native csrc/main.c csrc/sdf_math.c)
 target_include_directories(sdf_native PRIVATE csrc)
 target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
+# Тест вокселей шага 1: генерация чанка, без рендера.
+add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c)
+target_include_directories(vox_test PRIVATE csrc)
+target_link_libraries(vox_test PRIVATE m)
+target_compile_options(vox_test PRIVATE -Wall -Wextra)
 endif()
 
 # WGSL-канон вшивается в заголовок при каждой правке shaders/sdf.wgsl.
