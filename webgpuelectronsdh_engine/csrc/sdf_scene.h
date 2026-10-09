@@ -1,16 +1,17 @@
 #ifndef SDF_SCENE_H
 #define SDF_SCENE_H
-// Шаг 0: ОДИН КУБ (центр 0, полуребро 0.8). Совпадает с map() в shaders/sdf.wgsl.
-// Лестница: куб -> +шар -> +пол -> +тени -> +небо. Зеркало правится вместе с WGSL.
+// Шаг 2: куб + шар стоят на полу. Совпадает с map() в shaders/sdf.wgsl.
 #include "sdf_math.h"
 #include <math.h>
 
 static inline float sdf_eval(float px, float py, float pz) {
-    float qx = fabsf(px) - 0.8f, qy = fabsf(py) - 0.8f, qz = fabsf(pz) - 0.8f;
+    float d = py; // пол
+    float qx = fabsf(px) - 0.8f, qy = fabsf(py - 0.8f) - 0.8f, qz = fabsf(pz) - 0.8f;
     float ox = fmaxf(qx, 0.0f), oy = fmaxf(qy, 0.0f), oz = fmaxf(qz, 0.0f);
-    float d = sqrtf(ox*ox + oy*oy + oz*oz) + fminf(fmaxf(qx, fmaxf(qy, qz)), 0.0f);
-    float dx = px - 1.8f;
-    float s = sqrtf(dx*dx + py*py + pz*pz) - 0.7f;
+    float bx = sqrtf(ox*ox + oy*oy + oz*oz) + fminf(fmaxf(qx, fmaxf(qy, qz)), 0.0f);
+    if (bx < d) d = bx;
+    float dx = px - 1.8f, dy = py - 0.7f;
+    float s = sqrtf(dx*dx + dy*dy + pz*pz) - 0.7f;
     return d < s ? d : s;
 }
 
