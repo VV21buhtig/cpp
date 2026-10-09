@@ -50,28 +50,35 @@ static void wait_for(volatile int *done) {
     for (int i = 0; i < 5000 && !*done; i++) nanosleep(&ts, 0);
 }
 
-static double g_yaw = -0.6, g_pitch = 0.3, g_dist = 5.0;
+static double g_yaw = 2.54, g_pitch = -0.30, g_speed = 4.0;
 static double g_lx, g_ly;
-static int g_drag = 0;
+static int g_locked = 0;
 
+static void set_locked(GLFWwindow *w, int locked) {
+    g_locked = locked;
+    glfwSetInputMode(w, GLFW_CURSOR, locked ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    int ww, hh;
+    glfwGetWindowSize(w, &ww, &hh);
+    g_lx = ww * 0.5; g_ly = hh * 0.5;
+}
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
-    if (!g_drag) { g_lx = x; g_ly = y; return; }
-    g_yaw -= (x - g_lx) * 0.005;
-    g_pitch += (y - g_ly) * 0.005;
-    if (g_pitch > 1.45) g_pitch = 1.45;
-    if (g_pitch < -1.45) g_pitch = -1.45;
+    if (!g_locked) { g_lx = x; g_ly = y; return; }
+    g_yaw -= (x - g_lx) * 0.003;
+    g_pitch -= (y - g_ly) * 0.003;
+    if (g_pitch > 1.55) g_pitch = 1.55;
+    if (g_pitch < -1.55) g_pitch = -1.55;
     g_lx = x; g_ly = y;
 }
 static void on_btn(GLFWwindow *w, int b, int act, int m) {
-    (void)w; (void)m;
-    if (b == GLFW_MOUSE_BUTTON_LEFT) g_drag = (act == GLFW_PRESS);
+    (void)m;
+    if (b == GLFW_MOUSE_BUTTON_LEFT && act == GLFW_PRESS && !g_locked) set_locked(w, 1);
 }
 static void on_scroll(GLFWwindow *w, double dx, double dy) {
     (void)w; (void)dx;
-    g_dist *= (1.0 + (dy > 0 ? -0.1 : dy < 0 ? 0.1 : 0.0));
-    if (g_dist < 2.0) g_dist = 2.0;
-    if (g_dist > 20.0) g_dist = 20.0;
+    g_speed *= (1.0 + (dy > 0 ? 0.15 : dy < 0 ? -0.15 : 0.0));
+    if (g_speed < 1.0) g_speed = 1.0;
+    if (g_speed > 12.0) g_speed = 12.0;
 }
 
 static WGPUShaderModule make_module(WGPUDevice device) {
@@ -92,11 +99,12 @@ int main(int argc, char **argv) {
 
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf step1 — cube + ball", 0, 0);
+    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf cam — freecam WASD", 0, 0);
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
     glfwSetCursorPosCallback(win, on_mouse);
     glfwSetMouseButtonCallback(win, on_btn);
     glfwSetScrollCallback(win, on_scroll);
+    set_locked(win, 1); // сразу FPS-режим; ESC — отпустить, клик — вернуть
 
     WGPUInstanceDescriptor idef;
     memset(&idef, 0, sizeof idef);
@@ -197,12 +205,14 @@ int main(int argc, char **argv) {
     WGPUBindGroup bind = wgpuDeviceCreateBindGroup(device, &bgdef);
     printf("step0 pipe OK: cube, flat light, dark bg\n");
 
-    Vec3 target = v3(0.0f, 0.0f, 0.0f);
+    Vec3 camPos = v3(3.94f, 1.48f, -2.70f); // старт как раньше: смотрим на сцену
     double t0 = glfwGetTime();
+    double prevT = t0;
     double lastLog = -10.0;
     int frame = 0;
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
+        if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS && g_locked) set_locked(win, 0);
         int ww, hh;
         glfwGetFramebufferSize(win, &ww, &hh);
         if ((uint32_t)ww != cfg.width || (uint32_t)hh != cfg.height) {
@@ -211,15 +221,31 @@ int main(int argc, char **argv) {
             wgpuSurfaceConfigure(surface, &cfg);
         }
         double t = glfwGetTime() - t0;
-        Vec3 pos;
-        sdf_camera_orbit(target, (float)g_yaw, (float)g_pitch, (float)g_dist, &pos);
-        float cx = pos.x, cy = pos.y, cz = pos.z;
-        sdf_guard(&cx, &cy, &cz, target.x, target.y, target.z);
+        double now = glfwGetTime();
+        float dt = (float)(now - prevT);
+        prevT = now;
+        if (dt > 0.05f) dt = 0.05f;
+        // Freecam: WASD + Space вверх / Shift вниз, скорость на колесе.
+        float cp = cosf((float)g_pitch);
+        Vec3 fwd = v3(cp * cosf((float)g_yaw), sinf((float)g_pitch), cp * sinf((float)g_yaw));
+        Vec3 right = v3_norm(v3_cross(fwd, v3(0.0f, 1.0f, 0.0f)));
+        float sp = (float)g_speed * dt;
+        if (glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS) camPos = v3_add(camPos, v3_mul(fwd, sp));
+        if (glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS) camPos = v3_sub(camPos, v3_mul(fwd, sp));
+        if (glfwGetKey(win, GLFW_KEY_D) == GLFW_PRESS) camPos = v3_add(camPos, v3_mul(right, sp));
+        if (glfwGetKey(win, GLFW_KEY_A) == GLFW_PRESS) camPos = v3_sub(camPos, v3_mul(right, sp));
+        if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) camPos.y += sp;
+        if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+            glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) camPos.y -= sp;
+        float cx = camPos.x, cy = camPos.y, cz = camPos.z;
+        sdf_guard_fly(&cx, &cy, &cz, fwd);
+        camPos = v3(cx, cy, cz);
+        Vec3 camTarget = v3_add(camPos, fwd);
 
         SdfUBO u;
         memset(&u, 0, sizeof u);
         u.camPos = v3(cx, cy, cz); u.time = (float)t;
-        u.camTarget = target;      u.resX = (float)ww;
+        u.camTarget = camTarget;  u.resX = (float)ww;
         u.sunDir = sdf_sun((float)t); u.maxSteps = 100.0f;
         u.resY = (float)hh;
         wgpuQueueWriteBuffer(queue, ubo, 0, &u, sizeof u);
@@ -273,7 +299,8 @@ int main(int argc, char **argv) {
 
         if (t - lastLog >= 4.0) {
             lastLog = t;
-            printf("f=%d pos=(%.2f,%.2f,%.2f)\n", frame, cx, cy, cz);
+            printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f\n",
+                frame, cx, cy, cz, g_yaw, g_pitch, g_speed);
         }
         if (++frame == maxFrames) break;
     }
