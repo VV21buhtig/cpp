@@ -2,20 +2,15 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>SDF engine — WebGPU</title>
+<title>SDF engine — C/WebGPU (без JS-рендера)</title>
 <style>
   html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; }
-  #hud {
-    position: fixed; left: 8px; top: 8px; z-index: 10;
-    font: 12px/1.5 monospace; color: #0f0; background: rgba(0,0,0,0.55);
-    padding: 6px 8px; border-radius: 4px; white-space: pre; pointer-events: none;
-  }
+  #msg { position: fixed; left: 8px; top: 8px; font: 13px/1.5 monospace; color: #8f8; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
-<div id="hud">yaw --- pitch --- dist --- fps ---</div>
-<script src="./renderer.js?v=9"></script>
+<div id="msg">JS-рендер удалён. Рендер — только C (csrc/) + shaders/sdf.wgsl.<br>Натив: собери sdf_native_webgpu. Веб: emcc-сборка (когда будет emsdk).</div>
 </body>
 </html>

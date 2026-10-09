@@ -5,15 +5,21 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(glfw3 REQUIRED)
 
+# CPU-каркас (окно+математика+арены), без GPU — собирается всегда и везде.
 add_executable(sdf_native csrc/main.c csrc/sdf_math.c)
 target_include_directories(sdf_native PRIVATE csrc)
 target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
 
-# Веб-таргет появится когда будет emsdk:
-# if(EMSCRIPTEN)
-#   set_target_properties(sdf_web PROPERTIES SUFFIX ".html")
-#   target_link_libraries(sdf_web PRIVATE emdawnwebgpu_cpp webgpu_glfw)
-#   target_link_options(sdf_web PRIVATE "-sASYNCIFY=1" "-sUSE_GLFW=3")
-# endif()
-# Dawn-native (webgpu_dawn) — следующим коммитом через FetchContent.
+# GPU-путь: Dawn через предсборку (без depot_tools/gn, качаем бинарники).
+# Тег dawn-XXXX = снапшот Dawn с готовыми .so. Веб-таргет — когда будет emsdk.
+include(FetchContent)
+FetchContent_Declare(webgpu-distribution
+  GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
+  GIT_TAG dawn-7069)
+FetchContent_MakeAvailable(webgpu-distribution)
+
+add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c)
+target_include_directories(sdf_native_webgpu PRIVATE csrc)
+target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
+target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)

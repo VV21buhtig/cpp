@@ -5,6 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
+    "clean": "rm -rf dist",
     "start": "npm run build && electron .",
     "start:web": "npm run build && npx serve . -l 3000"
   },
