@@ -199,8 +199,24 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let sunset = pow(clamp(1.0 - abs(clamp(sunDir.y, -1.0, 1.0)), 0.0, 1.0), 3.0);
   let rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
   col += base * lightCol * rim * (0.15 + 0.85 * sunset);
+  // Тени облаков из K (deferred cloud_shadow): проекция мира вдоль солнца
+  // на плоскость h=8, тот же fbm. Только при солнце над горизонтом.
+  if (sunDir.y > 0.02) {
+    let cuv2 = (pos.xz + sunDir.xz / sunDir.y * (8.0 - pos.y)) * 0.08 + vec2f(u.time * 0.008, u.time * 0.003);
+    var f2 = 0.0;
+    var a2 = 0.5;
+    var pp2 = cuv2;
+    for (var j = 0; j < 4; j++) {
+      f2 += a2 * vnoise(pp2);
+      pp2 = pp2 * 2.03 + vec2f(1.7, 9.2);
+      a2 *= 0.5;
+    }
+    col *= mix(1.0, mix(1.0, 0.35, smoothstep(0.50, 0.75, f2)), clamp(sunDir.y * 8.0, 0.0, 1.0));
+  }
   // Воздушная перспектива: туман греется к солнцу (дальняк в рыжее).
-  let fog = 1.0 - exp(-0.0006 * m.x * m.x);
+  // Высотный туман из K (fog_od): плотность падает с высотой, аналитика.
+  let fogDen = 0.0006 * exp(-max(pos.y, 0.0) / 6.0);
+  let fog = 1.0 - exp(-fogDen * m.x * m.x);
   var fogCol = sky(rd, sunDir);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   return vec4f(mix(col, fogCol, fog), 1.0);
