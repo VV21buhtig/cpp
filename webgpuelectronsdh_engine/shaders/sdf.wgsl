@@ -96,8 +96,8 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   // H=40: t=(H-y)/d.y, cuv=(xz+d.xz*t)*S+W. Камера выше H — без облаков.
   var cloudCov = 0.0;
   var cloudCol = vec3f(0.0);
-  vec2f cuv = vec2f(0.0);
-  float ct = (40.0 - u.camPos.y) / rd.y;
+  var cuv = vec2f(0.0);
+  let ct = (40.0 - u.camPos.y) / rd.y;
   if (rd.y > 0.015 && ct > 0.0) {
     cuv = (u.camPos.xz + rd.xz * ct) * 0.05 + vec2f(u.time * 0.020, u.time * 0.007);
     var f = 0.0;
