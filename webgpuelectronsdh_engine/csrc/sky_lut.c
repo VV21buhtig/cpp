@@ -202,15 +202,19 @@ void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
     float altMoon = asinf(moonDir.y > 1.0f ? 1.0f : (moonDir.y < -1.0f ? -1.0f : moonDir.y));
     float dh = camY - s->camH;
     if (dh < 0) dh = -dh;
-    int moved = !s->skyValid || dh > 1.0f;
+    int moved = !s->skyValid || dh > 4.0f;
     Vec3 bodies[2] = {sunDir, moonDir};
     float *cached[2] = {&s->altSun, &s->altMoon};
     WGPUTextureView targets[2] = {s->sunView, s->moonView};
+    int didBake = 0;
     for (int b = 0; b < 2; b++) {
         float alt = b ? altMoon : altSun;
         float dd = alt - *cached[b];
         if (dd < 0) dd = -dd;
-        if (!moved && dd <= 1e-3f) continue;
+        // Допуск 5e-3 (был 1e-3: при дне 1200с ребейк шёл 5 раз/с и рвал пейсинг).
+        // Не больше одного тела за кадр: рассинхрон в 1 кадр не виден.
+        if (didBake) continue;
+        if (!moved && dd <= 5e-3f) continue;
         *cached[b] = alt;
         float ubo[8] = {bodies[b].x, bodies[b].y, bodies[b].z, 0.0f, camY, 0, 0, 0};
         wgpuQueueWriteBuffer(s->queue, s->viewUbo, 0, ubo, sizeof ubo);
@@ -232,9 +236,11 @@ void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
             wgpuBindGroupLayoutRelease(l);
         bake_draw(s->dev, s->queue, s->viewPipe, bg, targets[b]);
         wgpuBindGroupRelease(bg);
+        didBake = 1;
     }
     if (moved) s->camH = camY;
     s->skyValid = 1;
+    if (!didBake) return; // ambient только следом за skyview, не каждый кадр
     // ambient следом (6px, дёшево): sun/moon dirs+cols
     {
         Vec3 sunCol, moonCol;
