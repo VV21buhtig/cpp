@@ -91,12 +91,15 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   let disk = smoothstep(0.9993, 0.9997, sunAmt) * 4.0;
   let hg = (1.0 - 0.36) / (12.56637 * pow(max(1.0 + 0.36 - 1.2 * sunAmt, 1e-4), 1.5)); // Henyey-Greenstein g=0.6 из K
   let halo = pow(sunAmt, 350.0) * 0.5 + hg * 0.25 * (1.0 - night);
-  // Дешёвые облака вместо волюметрики K: 2D fbm-купол, тёмные сверху,
-  // рыжая подсветка снизу у солнца. Только небо (rd.y>0), 4 октавы.
+  // Облака из K одной плоскостью H: небо и тени земли — одно поле,
+  // один ветер, одно покрытие (у них общий weather + wind_offset).
+  // H=40: t=(H-y)/d.y, cuv=(xz+d.xz*t)*S+W. Камера выше H — без облаков.
   var cloudCov = 0.0;
   var cloudCol = vec3f(0.0);
-  if (rd.y > 0.015) {
-    let cuv = rd.xz / (rd.y + 0.08) * 1.2 + vec2f(u.time * 0.008, u.time * 0.003);
+  vec2f cuv = vec2f(0.0);
+  float ct = (40.0 - u.camPos.y) / rd.y;
+  if (rd.y > 0.015 && ct > 0.0) {
+    cuv = (u.camPos.xz + rd.xz * ct) * 0.05 + vec2f(u.time * 0.020, u.time * 0.007);
     var f = 0.0;
     var a = 0.5;
     var pp = cuv;
@@ -199,19 +202,20 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let sunset = pow(clamp(1.0 - abs(clamp(sunDir.y, -1.0, 1.0)), 0.0, 1.0), 3.0);
   let rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
   col += base * lightCol * rim * (0.15 + 0.85 * sunset);
-  // Тени облаков из K (deferred cloud_shadow): проекция мира вдоль солнца
-  // на плоскость h=8, тот же fbm. Только при солнце над горизонтом.
+  // Тень облака — тем же полем, что небо: луч от точки к солнцу бьёт в H.
+  // Поэтому пятно соответствует облаку (у них общий weather).
   if (sunDir.y > 0.02) {
-    let cuv2 = (pos.xz + sunDir.xz / sunDir.y * (8.0 - pos.y)) * 0.08 + vec2f(u.time * 0.008, u.time * 0.003);
+    let st = (40.0 - pos.y) / sunDir.y;
+    let scuv = (pos.xz + sunDir.xz * st) * 0.05 + vec2f(u.time * 0.020, u.time * 0.007);
     var f2 = 0.0;
     var a2 = 0.5;
-    var pp2 = cuv2;
+    var pp2 = scuv;
     for (var j = 0; j < 4; j++) {
       f2 += a2 * vnoise(pp2);
       pp2 = pp2 * 2.03 + vec2f(1.7, 9.2);
       a2 *= 0.5;
     }
-    col *= mix(1.0, mix(1.0, 0.35, smoothstep(0.50, 0.75, f2)), clamp(sunDir.y * 8.0, 0.0, 1.0));
+    col *= mix(1.0, mix(1.0, 0.25, smoothstep(0.45, 0.75, f2)), clamp(sunDir.y * 8.0, 0.0, 1.0));
   }
   // Воздушная перспектива: туман греется к солнцу (дальняк в рыжее).
   // Высотный туман из K (fog_od): плотность падает с высотой, аналитика.
