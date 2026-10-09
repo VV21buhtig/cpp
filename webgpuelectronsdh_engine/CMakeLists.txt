@@ -18,6 +18,11 @@ add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c)
 target_include_directories(vox_test PRIVATE csrc)
 target_link_libraries(vox_test PRIVATE m)
 target_compile_options(vox_test PRIVATE -Wall -Wextra)
+# Тест стриминга: кольцо + бюджет + выселение, без рендера.
+add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_world.c)
+target_include_directories(vox_stream PRIVATE csrc)
+target_link_libraries(vox_stream PRIVATE m)
+target_compile_options(vox_stream PRIVATE -Wall -Wextra)
 endif()
 
 # WGSL-канон вшивается в заголовок при каждой правке shaders/sdf.wgsl.
