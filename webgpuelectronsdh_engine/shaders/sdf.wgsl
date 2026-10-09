@@ -1,5 +1,6 @@
 // Шаг 2: +ПОЛ. Куб и шар стоят на плоскости (не парят, не утоплены).
 // Шаг 3: +ТЕНИ (второй марш к солнцу, bias от акне).
+// Шаг 4: +НЕБО (градиент + диск) + ТУМАН (дальний пол тает в небо, шва нет).
 // Лестница: 0) куб -> 1) +шар -> 2) +пол -> 3) +тени -> 4) +небо/туман.
 struct UBO {
   camPos: vec3f,
@@ -52,6 +53,13 @@ fn softShadow(ro: vec3f, rd: vec3f) -> f32 {
   return clamp(res, 0.0, 1.0);
 }
 
+fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
+  let sunAmt = max(dot(rd, sunDir), 0.0);
+  let sk = mix(vec3f(0.30, 0.45, 0.65), vec3f(0.05, 0.10, 0.22), pow(clamp(rd.y, 0.0, 1.0), 0.6));
+  let sun = vec3f(1.25, 1.21, 1.12) * (smoothstep(0.9993, 0.9997, sunAmt) * 4.0 + pow(sunAmt, 350.0) * 0.5);
+  return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sun;
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let v = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -81,15 +89,17 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   if (rd.y < -0.0005 && tP > 0.0 && (m.x < 0.0 || tP < m.x)) { m = vec2f(tP, 2.0); }
 
   if (m.x < 0.0) {
-    return vec4f(vec3f(0.02, 0.03, 0.06), 1.0);
+    return vec4f(sky(rd, normalize(u.sunDir)), 1.0);
   }
-  let n = calcNormal(u.camPos + rd * m.x, m.x);
+  let pos = u.camPos + rd * m.x;
+  let n = calcNormal(pos, m.x);
   let sunDir = normalize(u.sunDir);
-  let sh = softShadow(u.camPos + rd * m.x + n * 0.02, sunDir); // bias: без него полосы акне
+  let sh = softShadow(pos + n * 0.02, sunDir); // bias: без него полосы акне
   let l = sunDir;
   var base = vec3f(0.60, 0.65, 0.75); // куб
   if (m.y > 0.5 && m.y < 1.5) { base = vec3f(0.75, 0.45, 0.35); } // шар
   else if (m.y > 1.5) { base = vec3f(0.55, 0.60, 0.45); } // пол
   let col = base * (0.25 + 0.90 * max(dot(n, l), 0.0) * sh);
-  return vec4f(col, 1.0);
+  let fog = 1.0 - exp(-0.0006 * m.x * m.x);
+  return vec4f(mix(col, sky(rd, sunDir), fog), 1.0);
 }
