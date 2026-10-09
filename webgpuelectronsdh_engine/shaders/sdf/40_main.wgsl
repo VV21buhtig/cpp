@@ -24,10 +24,11 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let pos = u.camPos + rd * hit.t;
   let n = hit.n;
   let sunDir = normalize(u.sunDir);
-  // Тень — тем же DDA к солнцу (жёсткая, 40 единиц).
+  // Тень — тем же DDA к солнцу (жёсткая). Дальше 30 — туман съедает,
+  // второй полный проход по дальняку и даёт шипы кадра.
   var sh = 1.0;
-  if (dot(n, sunDir) > 0.0) {
-    let shHit = voxMarch(pos + n * 0.02, sunDir, 40.0);
+  if (dot(n, sunDir) > 0.0 && hit.t < 30.0) {
+    let shHit = voxMarch(pos + n * 0.02, sunDir, 24.0);
     sh = select(0.0, 1.0, shHit.t < 0.0);
   }
   // Живой свет из K: тёплый низко, белый высоко, ночью гаснет.
