@@ -5,6 +5,7 @@
 typedef struct {
     float gamma;    // 2.2: финал pow(col*exposure, 1/gamma)
     float exposure; // 1.0
+    float fog;      // 1.0: множитель плотности тумана
 } SdfSettings;
 
 void sdf_settings_load(SdfSettings *s, const char *path);

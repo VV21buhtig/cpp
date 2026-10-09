@@ -56,7 +56,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
   col += base * lightCol * rim * (0.15 + 0.85 * sunset);
   // Воздушная перспектива: туман греется к солнцу. Плотность падает с высотой.
-  let fogDen = 0.0006 * exp(-max(pos.y, 0.0) / 6.0);
+  let fogDen = 0.0006 * grade.z * exp(-max(pos.y, 0.0) / 6.0);
   let fog = 1.0 - exp(-fogDen * hit.t * hit.t);
   var fogCol = skyGrad(rd, sunDir) + sunTerms(rd, sunDir, lightCol, 1.0 - dayL);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);

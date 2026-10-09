@@ -9,5 +9,5 @@
     "moduleResolution": "node",
     "types": ["node"]
   },
-  "include": ["src/main.ts"]
+  "include": ["src/main.ts", "src/preload.ts"]
 }

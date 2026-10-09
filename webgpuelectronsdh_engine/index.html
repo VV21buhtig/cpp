@@ -2,15 +2,43 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>SDF engine — C/WebGPU (без JS-рендера)</title>
+<title>SDF — настройки</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; }
-  #msg { position: fixed; left: 8px; top: 8px; font: 13px/1.5 monospace; color: #8f8; }
+  html, body { margin: 0; background: #101216; color: #cfd4dc; font: 14px/1.6 system-ui, sans-serif; }
+  main { padding: 18px 22px; max-width: 420px; }
+  h1 { font-size: 16px; margin: 0 0 12px; color: #fff; }
+  .row { display: grid; grid-template-columns: 110px 1fr 52px; gap: 10px; align-items: center; margin: 10px 0; }
+  input[type="range"] { width: 100%; accent-color: #7aa2ff; }
+  .val { text-align: right; font-variant-numeric: tabular-nums; color: #fff; }
+  .hint { margin-top: 14px; font-size: 12px; color: #8a91a1; }
 </style>
 </head>
 <body>
-<canvas id="view"></canvas>
-<div id="msg">JS-рендер удалён. Рендер — только C (csrc/) + shaders/sdf.wgsl.<br>Натив: собери sdf_native_webgpu. Веб: emcc-сборка (когда будет emsdk).</div>
+<main>
+  <h1>Рендер — настройки</h1>
+  <div class="row"><label for="gamma">Гамма</label><input id="gamma" type="range" min="0.5" max="4" step="0.05"><span class="val" id="gamma_v"></span></div>
+  <div class="row"><label for="exposure">Экспозиция</label><input id="exposure" type="range" min="0.1" max="4" step="0.05"><span class="val" id="exposure_v"></span></div>
+  <div class="row"><label for="fog">Туман</label><input id="fog" type="range" min="0" max="3" step="0.05"><span class="val" id="fog_v"></span></div>
+  <div class="hint">Пишет в settings.cfg — движок подхватывает на лету. Хоткеи в окне рендера: F5–F8 (гамма/экспозиция), F9/F10 (туман).</div>
+</main>
+<script>
+  const api = window.sdfSettings;
+  const ids = ["gamma", "exposure", "fog"];
+  async function init() {
+    const s = await api.load();
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      el.value = s[id];
+      document.getElementById(id + "_v").textContent = Number(s[id]).toFixed(2);
+      el.addEventListener("input", async () => {
+        document.getElementById(id + "_v").textContent = Number(el.value).toFixed(2);
+        const cur = {};
+        for (const k of ids) cur[k] = parseFloat(document.getElementById(k).value);
+        await api.save(cur);
+      });
+    }
+  }
+  init();
+</script>
 </body>
 </html>

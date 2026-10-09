@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <math.h>
 #ifdef __EMSCRIPTEN__
@@ -51,7 +52,8 @@ typedef struct {
     WGPUBindGroup bind[FRAMES_IN_FLIGHT];
     WGPUBuffer tagsBuf; // 121 пара (cx,cz) реально залитых чанков, сентинел = воздух
     SdfSettings settings;
-    WGPUBuffer gradeBuf; // 16Б: gamma, exposure
+    WGPUBuffer gradeBuf; // 16Б: gamma, exposure, fog
+    time_t cfgMtime; // дозор settings.cfg (пишет страница Electron)
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
     WGPUBindGroup skyBind;
@@ -327,7 +329,7 @@ static int app_frame(App *app) {
             gd.size = 16;
             gd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             app->gradeBuf = wgpuDeviceCreateBuffer(app->device, &gd);
-            float g[4] = {app->settings.gamma, app->settings.exposure, 0, 0};
+            float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
             wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
             printf("grade: gamma=%.2f exposure=%.2f (F5/F6, F7/F8)\n",
                 app->settings.gamma, app->settings.exposure);
@@ -417,26 +419,32 @@ static int app_frame(App *app) {
     nPrev = nDown;
     // Грейд-хоткеи как слайдеры s_gamma: F5/F6 гамма, F7/F8 экспозиция. Сохраняем сразу.
     {
-        static int p5 = 0, p6 = 0, p7 = 0, p8 = 0;
+        static int p5 = 0, p6 = 0, p7 = 0, p8 = 0, p9 = 0, p10 = 0;
         int k5 = glfwGetKey(app->win, GLFW_KEY_F5) == GLFW_PRESS;
         int k6 = glfwGetKey(app->win, GLFW_KEY_F6) == GLFW_PRESS;
         int k7 = glfwGetKey(app->win, GLFW_KEY_F7) == GLFW_PRESS;
         int k8 = glfwGetKey(app->win, GLFW_KEY_F8) == GLFW_PRESS;
+        int k9 = glfwGetKey(app->win, GLFW_KEY_F9) == GLFW_PRESS;
+        int k10 = glfwGetKey(app->win, GLFW_KEY_F10) == GLFW_PRESS;
         int ch = 0;
         if (k5 && !p5) { app->settings.gamma -= 0.1f; ch = 1; }
         if (k6 && !p6) { app->settings.gamma += 0.1f; ch = 1; }
         if (k7 && !p7) { app->settings.exposure -= 0.1f; ch = 1; }
         if (k8 && !p8) { app->settings.exposure += 0.1f; ch = 1; }
-        p5 = k5; p6 = k6; p7 = k7; p8 = k8;
+        if (k9 && !p9) { app->settings.fog -= 0.1f; ch = 1; }
+        if (k10 && !p10) { app->settings.fog += 0.1f; ch = 1; }
+        p5 = k5; p6 = k6; p7 = k7; p8 = k8; p9 = k9; p10 = k10;
         if (ch) {
             if (app->settings.gamma < 0.5f) app->settings.gamma = 0.5f;
             if (app->settings.gamma > 4.0f) app->settings.gamma = 4.0f;
             if (app->settings.exposure < 0.1f) app->settings.exposure = 0.1f;
             if (app->settings.exposure > 4.0f) app->settings.exposure = 4.0f;
-            float g[4] = {app->settings.gamma, app->settings.exposure, 0, 0};
+            if (app->settings.fog < 0.0f) app->settings.fog = 0.0f;
+            if (app->settings.fog > 3.0f) app->settings.fog = 3.0f;
+            float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
             wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
             sdf_settings_save(&app->settings, "settings.cfg");
-            printf("grade: gamma=%.2f exposure=%.2f\n", app->settings.gamma, app->settings.exposure);
+            printf("grade: gamma=%.2f exposure=%.2f fog=%.2f\n", app->settings.gamma, app->settings.exposure, app->settings.fog);
         }
     }
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
@@ -559,6 +567,18 @@ static int app_frame(App *app) {
     wgpuTextureViewRelease(view);
     wgpuTextureRelease(st.texture);
 
+    if ((app->frame % 30) == 0) {
+        struct stat st;
+        if (stat("settings.cfg", &st) == 0 && st.st_mtime != app->cfgMtime) {
+            app->cfgMtime = st.st_mtime;
+            SdfSettings r;
+            sdf_settings_load(&r, "settings.cfg");
+            app->settings = r;
+            float g[4] = {r.gamma, r.exposure, r.fog, 0};
+            wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+            printf("grade: reload gamma=%.2f exposure=%.2f fog=%.2f\n", r.gamma, r.exposure, r.fog);
+        }
+    }
     if (t - app->lastLog >= 4.0) {
         app->lastLog = t;
         printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f dtmax=%.0fms rebake=%d\n",

@@ -1,15 +1,52 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
+import * as fs from "fs";
 import * as path from "path";
 
+const settingsPath = path.join(app.getAppPath(), "settings.cfg");
+
+function parseSettings(): { gamma: number; exposure: number; fog: number } {
+  const s = { gamma: 2.2, exposure: 1.0, fog: 1.0 };
+  try {
+    for (const line of fs.readFileSync(settingsPath, "utf8").split("\n")) {
+      const [k, v] = line.trim().split(/\s+/);
+      const f = parseFloat(v);
+      if (!isFinite(f)) continue;
+      if (k === "gamma") s.gamma = Math.min(4, Math.max(0.5, f));
+      else if (k === "exposure") s.exposure = Math.min(4, Math.max(0.1, f));
+      else if (k === "fog") s.fog = Math.min(3, Math.max(0, f));
+    }
+  } catch {
+    /* нет файла — дефолты */
+  }
+  return s;
+}
+
 function createWindow(): void {
+  ipcMain.handle("settings:load", () => parseSettings());
+  ipcMain.handle(
+    "settings:save",
+    (_e, s: { gamma: number; exposure: number; fog: number }) => {
+      const cur = parseSettings();
+      const out = {
+        gamma: isFinite(s.gamma) ? Math.min(4, Math.max(0.5, s.gamma)) : cur.gamma,
+        exposure: isFinite(s.exposure) ? Math.min(4, Math.max(0.1, s.exposure)) : cur.exposure,
+        fog: isFinite(s.fog) ? Math.min(3, Math.max(0, s.fog)) : cur.fog,
+      };
+      fs.writeFileSync(
+        settingsPath,
+        `gamma ${out.gamma.toFixed(3)}\nexposure ${out.exposure.toFixed(3)}\nfog ${out.fog.toFixed(3)}\n`
+      );
+    }
+  );
   const win = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: 480,
+    height: 360,
     autoHideMenuBar: true,
-    backgroundColor: "#000000",
+    backgroundColor: "#101216",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
   win.loadFile(path.join(__dirname, "..", "index.html"));
