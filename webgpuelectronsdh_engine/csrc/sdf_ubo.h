@@ -25,10 +25,9 @@ static inline void sdf_camera_orbit(Vec3 target, float yaw, float pitch, float d
 }
 
 static inline Vec3 sdf_sun(float t) {
-    // Дуга как в майне: восход -> зенит -> закат (vulcan делал так же:
-    // sun=(cos(tod), sin(tod), 0.35)). Было: высота 0.55 + круг азимута (муха).
-    // День 240с, старт утро (a0=0.3). Ночное небо — отдельным шагом, пока нет.
-    float a = 0.3f + t * (6.2831853f / 240.0f);
+    // Дуга как в майне и K (день 1200с = 20 мин как их day_length).
+    // Солнце — по day-часам, облака — по реальным (их cloud_time += dt).
+    float a = 0.3f + t * (6.2831853f / 1200.0f);
     Vec3 s = { cosf(a), sinf(a), 0.35f };
     return v3_norm(s);
 }

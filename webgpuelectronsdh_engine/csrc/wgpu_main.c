@@ -45,6 +45,9 @@ typedef struct {
     Vec3 camPos;
     double yaw, pitch, speed;
     double t0, prevT, lastLog;
+    double dayT;   // часы солнца (T — перемотка x36 как у них)
+    double cloudT; // часы облаков/мерцания: реальный dt всегда (их cloud_time += dt)
+    double timeScale;
     int frame;
     int maxFrames;
 } App;
@@ -226,6 +229,14 @@ static int app_frame(App *app) {
     float dt = (float)(now - app->prevT);
     app->prevT = now;
     if (dt > 0.05f) dt = 0.05f;
+    // Перемотка времени как у них: T вперёд x36, Shift+T назад (их wc_game.c:287).
+    GLFWwindow *win = app->win;
+    int tDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
+    int shDown = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                 glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    app->timeScale = tDown ? (shDown ? -36.0 : 36.0) : 1.0;
+    app->dayT += dt * app->timeScale;
+    app->cloudT += dt;
     if (dt > 0.0f) {
         float fps = 1.0f / dt;
         app->fpsEma = app->fpsEma > 0.0f ? app->fpsEma * 0.95f + fps * 0.05f : fps;
@@ -238,7 +249,6 @@ static int app_frame(App *app) {
     Vec3 fwd = v3(cp * cosf((float)app->yaw), sinf((float)app->pitch), cp * sinf((float)app->yaw));
     Vec3 right = v3_norm(v3_cross(fwd, v3(0.0f, 1.0f, 0.0f)));
     float sp = (float)app->speed * dt;
-    GLFWwindow *win = app->win;
     if (glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS) app->camPos = v3_add(app->camPos, v3_mul(fwd, sp));
     if (glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS) app->camPos = v3_sub(app->camPos, v3_mul(fwd, sp));
     if (glfwGetKey(win, GLFW_KEY_D) == GLFW_PRESS) app->camPos = v3_add(app->camPos, v3_mul(right, sp));
@@ -252,9 +262,9 @@ static int app_frame(App *app) {
 
     SdfUBO u;
     memset(&u, 0, sizeof u);
-    u.camPos = app->camPos; u.time = (float)t;
+    u.camPos = app->camPos; u.time = (float)app->cloudT;
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
-    u.sunDir = sdf_sun((float)t); u.maxSteps = app->maxSteps;
+    u.sunDir = sdf_sun((float)app->dayT); u.maxSteps = app->maxSteps;
     u.resY = (float)hh;
     wgpuQueueWriteBuffer(app->queue, app->ubo, 0, &u, sizeof u);
 
@@ -307,8 +317,8 @@ static int app_frame(App *app) {
 
     if (t - app->lastLog >= 4.0) {
         app->lastLog = t;
-        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f\n",
-            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps);
+        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f\n",
+            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps, app->timeScale);
     }
     app->frame++;
     if (app->maxFrames > 0 && app->frame >= app->maxFrames) return 1;
@@ -355,6 +365,7 @@ int main(int argc, char **argv) {
 
     app.camPos = v3(3.94f, 1.48f, -2.70f);
     app.yaw = 2.54; app.pitch = -0.30; app.speed = 4.0;
+    app.dayT = 0.0; app.cloudT = 0.0; app.timeScale = 1.0;
     app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();
     app.lastLog = -10.0;
