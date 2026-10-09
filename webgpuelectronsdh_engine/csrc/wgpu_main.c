@@ -298,7 +298,7 @@ static int app_frame(App *app) {
     double t = now - app->t0;
     float dt = (float)(now - app->prevT);
     app->prevT = now;
-    if (dt > 0.05f) dt = 0.05f;
+    if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
     // Перемотка времени как у них: T вперёд x36, Shift+T назад (их wc_game.c:287).
     GLFWwindow *win = app->win;
