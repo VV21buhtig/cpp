@@ -40,7 +40,7 @@ typedef struct {
     WGPUBindGroup bind;
     WGPUBindGroupLayout bgl;
     int ready; // труба собрана
-    float fpsEma; // сглаженный fps для губернатора шагов (идея из boids BOID_MIN_FPS)
+    float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
     float maxSteps; // текущий лимит марша: 100 -> 25 по просадке, обратно по запасу
     Vec3 camPos;
     double yaw, pitch, speed;
