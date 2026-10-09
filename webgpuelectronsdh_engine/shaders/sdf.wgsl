@@ -108,38 +108,102 @@ fn sunTerms(rd: vec3f, sunDir: vec3f, sunCol: vec3f, night: f32) -> vec3f {
   return sunCol * (disk + halo) * (1.0 - night);
 }
 
+fn ign(p: vec2f) -> f32 {
+  return fract(52.9829189 * fract(dot(p, vec2f(0.06711056, 0.00583715))));
+}
+
+fn hg_phase(c: f32, g: f32) -> f32 {
+  let g2 = g * g;
+  return (1.0 - g2) / (12.56637 * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
+}
+
 fn slabClouds(ro: vec3f, rd: vec3f, sunCol: vec3f, night: f32) -> vec4f {
-  // Объём как у WT: марш плиты [12,20], 6 проб, профиль высоты, самозатенение.
-  // Сбоку не исчезает (длинный сегмент копится), сверху — палуба, внутри — молоко.
-  // Ранний выход гасит худший случай. Туман берёт skyGrad (дешевле).
+  // Их wc_clouds целиком: сферичность опущена (мир плоский), 56 проб -> 8 (Vega),
+  // 3D-шумы -> наш warp-fbm (текстур нет), LUT неба -> наши sky-функции.
+  // Остальное 1:1 — марш к солнцу 4, Wrenninge x4, powder, horizon-fade.
   var t0 = (12.0 - ro.y) / rd.y;
   var t1 = (20.0 - ro.y) / rd.y;
   if (t0 > t1) { let tt = t0; t0 = t1; t1 = tt; }
   t0 = max(t0, 0.0);
-  if (t1 <= t0) { return vec4f(0.0); }
+  t1 = min(t1, t0 + 120.0);
+  if (t1 <= t0 || t0 > 400.0) { return vec4f(0.0); }
+  let sunDir = normalize(u.sunDir);
+  let moonUp = 1.0 - night;
+  let L = select(-sunDir, sunDir, moonUp > 0.5);
+  let light_col = select(vec3f(0.10, 0.11, 0.14), sunCol, moonUp > 0.5);
+  let cos_t = dot(rd, L);
+  let jitter = fract(ign(rd.xy * 913.0) * 7.0 + u.time * 0.13);
+  let span = t1 - t0;
+  let dt = span / 8.0;
+  var t = t0 + dt * jitter;
+  var T = 1.0;
+  var scat = vec3f(0.0);
+  let sigma = 0.30;
   let wind = vec2f(u.time * 0.020, u.time * 0.007);
-  let dark = mix(vec3f(0.10, 0.09, 0.12), vec3f(0.02, 0.02, 0.04), night);
-  var acc = 0.0;
-  var col = vec3f(0.0);
-  let seg = (t1 - t0) / 6.0;
-  for (var i = 0; i < 6; i++) {
-    let p = ro + rd * (t0 + seg * (f32(i) + 0.5));
-    let h01 = clamp((p.y - 12.0) / 8.0, 0.0, 1.0);
-    let prof = smoothstep(0.0, 0.15, h01) * (1.0 - smoothstep(0.45, 1.0, h01));
-    if (prof > 0.003) {
-      let q = p.xz * 0.05 + wind;
-      let wv = vec2f(vnoise(q * 2.1), vnoise(q * 2.1 + vec2f(7.3, 3.1))) - 0.5;
-      let d = smoothstep(0.52, 0.72, fbm4(q + 0.45 * wv)) * prof;
-      if (d > 0.003) {
-        let a = 1.0 - exp(-d * seg * 0.35);
-        let lite = mix(dark, sunCol * 1.25 * (0.35 + 0.65 * h01), exp(-acc * 1.8) * (1.0 - night));
-        col += (1.0 - acc) * a * lite;
-        acc += (1.0 - acc) * a;
-        if (acc > 0.97) { break; }
+  let amb_top = skyGrad(vec3f(0.0, 1.0, 0.0), sunDir) * 1.15;
+  let amb_bot = vec3f(0.16, 0.15, 0.13) * 0.7 + amb_top * 0.15;
+  var tsum = 0.0;
+  var wsum = 0.0;
+  for (var i = 0; i < 8; i++) {
+    let p = ro + rd * t;
+    let h = (p.y - 12.0) / 8.0;
+    if (h >= 0.0 && h <= 1.0) {
+      let grad = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.55, 1.0, h));
+      var d = 0.0;
+      if (grad > 0.0) {
+        let q = p.xz * 0.05 + wind;
+        let wv = vec2f(vnoise(q * 2.1), vnoise(q * 2.1 + vec2f(7.3, 3.1))) - 0.5;
+        d = smoothstep(0.52, 0.72, fbm4(q + 0.45 * wv)) * grad;
+      }
+      if (d > 0.002) {
+        // марш к свету: шаги растут, как у них ls*(j*0.6+1)
+        var od = 0.0;
+        var lp = p;
+        for (var j = 0; j < 4; j++) {
+          let stepl = 0.72 * (f32(j) * 0.6 + 1.0);
+          lp += L * stepl;
+          let lh = (lp.y - 12.0) / 8.0;
+          if (lh > 1.0) { break; }
+          if (lh >= 0.0) {
+            let lq = lp.xz * 0.05 + wind;
+            od += fbm4(lq) * stepl;
+          }
+        }
+        // Wrenninge x4: вперёд 0.75c + назад -0.25c, бленд 0.3
+        var sun = vec3f(0.0);
+        var a = 1.0;
+        var b = 1.0;
+        var c = 1.0;
+        for (var o = 0; o < 4; o++) {
+          let ph = mix(hg_phase(cos_t, 0.75 * c), hg_phase(cos_t, -0.25 * c), 0.3);
+          sun += vec3f(a * exp(-od * sigma * b) * ph);
+          a *= 0.55;
+          b *= 0.35;
+          c *= 0.5;
+        }
+        let powder = 1.0 - exp(-d * sigma * 120.0);
+        sun *= mix(1.0, powder * 2.0, 0.6);
+        let amb = mix(amb_bot, amb_top, h * h) * (0.4 + 0.6 * h);
+        let S = (light_col * sun + amb) * sigma * d;
+        let st = exp(-d * sigma * dt);
+        scat += T * (S - S * st) / max(sigma * d, 1e-4);
+        tsum += t * T * (1.0 - st);
+        wsum += T * (1.0 - st);
+        T *= st;
+        if (T < 0.01) { break; }
       }
     }
+    t += dt;
   }
-  return vec4f(col, clamp(acc, 0.0, 1.0));
+  // Воздушная перспектива + горизонт-фэйд как у них (душит полосы сбоку).
+  let dist = select(t1, tsum / max(wsum, 1e-4), wsum > 0.0);
+  let fade = exp(-dist / 80.0);
+  let sky_col = skyGrad(rd, sunDir);
+  scat = mix(sky_col * (1.0 - T), scat, fade);
+  let horizon = smoothstep(0.0, 0.06, rd.y + 0.02);
+  scat *= horizon;
+  T = mix(1.0, T, horizon);
+  return vec4f(scat, 1.0 - T);
 }
 
 fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
