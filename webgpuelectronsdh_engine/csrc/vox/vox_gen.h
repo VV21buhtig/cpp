@@ -4,6 +4,7 @@
 // Пустыня/деревья/пещеры — позже, сейчас только рельеф + слои.
 #include "vox_chunk.h"
 #include <stdint.h>
+#include <math.h>
 
 #define VOX_PATCH 3 // патч 3x3 чанка = 48x64x48 вокселей
 #define VOX_PW (VOX_PATCH * VOX_SX)
@@ -14,4 +15,15 @@ void vox_gen(VoxChunk *c, uint32_t seed);
 int vox_height(int wx, int wz, uint32_t seed);
 // Патч чанков (cx0..cx0+2, cz0..cz0+2) плотно в dst[48*64*48], индекс (y*48+z)*48+x.
 void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed);
+// Пол для камеры: высота поверхности + 0.6 (вне патча 0.6).
+static inline float vox_floor_y(float x, float z) {
+    int gx = (int)floorf(x), gz = (int)floorf(z);
+    if (gx >= 0 && gz >= 0 && gx < VOX_PW && gz < VOX_PZ)
+        return (float)vox_height(gx, gz, 1337) + 0.6f;
+    return 0.6f;
+}
+// 1 если в (x,z) на высоте y свободно (холм не мешает), иначе 0.
+static inline int vox_floor(float x, float z, float y) {
+    return y >= vox_floor_y(x, z);
+}
 #endif

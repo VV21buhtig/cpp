@@ -316,23 +316,28 @@ static int app_frame(App *app) {
     float cp = cosf((float)app->pitch);
     Vec3 fwd = v3(cp * cosf((float)app->yaw), sinf((float)app->pitch), cp * sinf((float)app->yaw));
     Vec3 right = v3_norm(v3_cross(fwd, v3(0.0f, 1.0f, 0.0f)));
+    // Горизонталь отдельно от вертикали: W/S не втыкают в холм носом.
+    Vec3 fh = v3_norm(v3(fwd.x, 0.0f, fwd.z));
+    Vec3 rh = v3_norm(v3(right.x, 0.0f, right.z));
     float sp = (float)app->speed * dt;
-    if (glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS) app->camPos = v3_add(app->camPos, v3_mul(fwd, sp));
-    if (glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS) app->camPos = v3_sub(app->camPos, v3_mul(fwd, sp));
-    if (glfwGetKey(win, GLFW_KEY_D) == GLFW_PRESS) app->camPos = v3_add(app->camPos, v3_mul(right, sp));
-    if (glfwGetKey(win, GLFW_KEY_A) == GLFW_PRESS) app->camPos = v3_sub(app->camPos, v3_mul(right, sp));
+    Vec3 wish = v3(0.0f, 0.0f, 0.0f);
+    if (glfwGetKey(win, GLFW_KEY_W) == GLFW_PRESS) wish = v3_add(wish, v3_mul(fh, sp));
+    if (glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS) wish = v3_sub(wish, v3_mul(fh, sp));
+    if (glfwGetKey(win, GLFW_KEY_D) == GLFW_PRESS) wish = v3_add(wish, v3_mul(rh, sp));
+    if (glfwGetKey(win, GLFW_KEY_A) == GLFW_PRESS) wish = v3_sub(wish, v3_mul(rh, sp));
+    // Скольжение вдоль холма: целиком -> только X -> только Z -> стоим.
+    float cy0 = app->camPos.y;
+    float nx = app->camPos.x + wish.x, nz = app->camPos.z + wish.z;
+    if (vox_floor(nx, nz, cy0)) { app->camPos.x = nx; app->camPos.z = nz; }
+    else if (vox_floor(app->camPos.x + wish.x, app->camPos.z, cy0)) { app->camPos.x += wish.x; }
+    else if (vox_floor(app->camPos.x, app->camPos.z + wish.z, cy0)) { app->camPos.z += wish.z; }
     if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) app->camPos.y += sp;
     if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
         glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) app->camPos.y -= sp;
     float cx = app->camPos.x, cy = app->camPos.y, cz = app->camPos.z;
-    // Guard по высоте рельефа: не ниже поверхности + 0.6 (мир воксельный).
-    int gx = (int)floorf(cx), gz = (int)floorf(cz);
-    if (gx >= 0 && gz >= 0 && gx < VOX_PW && gz < VOX_PZ) {
-        float minY = (float)vox_height(gx, gz, 1337) + 0.6f;
-        if (cy < minY) cy = minY;
-    } else if (cy < 0.6f) {
-        cy = 0.6f;
-    }
+    // Пол: не ниже поверхности + 0.6 (только посадка, без телепортов вверх).
+    float fl = vox_floor_y(cx, cz);
+    if (cy < fl) cy = fl;
     app->camPos = v3(cx, cy, cz);
 
     SdfUBO u;
