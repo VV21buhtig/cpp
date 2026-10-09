@@ -211,10 +211,11 @@ int sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
         float alt = b ? altMoon : altSun;
         float dd = alt - *cached[b];
         if (dd < 0) dd = -dd;
-        // Допуск 5e-3 (был 1e-3: при дне 1200с ребейк шёл 5 раз/с и рвал пейсинг).
+        // Допуск 2e-2: небо меняется медленно, чаще раза в ~4с печь нечего.
+        // Было 5e-3 — ребейк шёл 2 раза/с и рвал пейсинг (dtmax 50мс).
         // Не больше одного тела за кадр: рассинхрон в 1 кадр не виден.
         if (didBake) continue;
-        if (!moved && dd <= 5e-3f) continue;
+        if (!moved && dd <= 2e-2f) continue;
         *cached[b] = alt;
         float ubo[8] = {bodies[b].x, bodies[b].y, bodies[b].z, 0.0f, camY, 0, 0, 0};
         wgpuQueueWriteBuffer(s->queue, s->viewUbo, 0, ubo, sizeof ubo);
