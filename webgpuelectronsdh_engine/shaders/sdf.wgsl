@@ -54,9 +54,16 @@ fn softShadow(ro: vec3f, rd: vec3f) -> f32 {
 }
 
 fn hash12(p: vec2f) -> f32 {
-  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
-  p3 += dot(p3, p3.yzx + vec3f(33.33));
-  return fract((p3.x + p3.y) * p3.z);
+  // murmur из K (wc_noise_common): ровнее fract-sin. Обёртка в [0,1024):
+  // u32() от отрицательного в WGSL недетерминирован, заодно тайлится.
+  let q = p - floor(p / 1024.0) * 1024.0;
+  var h = 0x5bd1e995u;
+  h ^= u32(q.x) * 0x27d4eb2du;
+  h ^= u32(q.y) * 0x9e3779b1u;
+  h ^= (u32(q.x) + u32(q.y)) * 0x165667b1u;
+  h *= 0x85ebca6bu;
+  h ^= h >> 16u;
+  return f32(h & 1023u) / 1024.0;
 }
 fn vnoise(p: vec2f) -> f32 {
   let i = floor(p);
@@ -77,7 +84,8 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   sk *= (1.0 - night * 0.85);
   let sunCol = mix(vec3f(1.0, 0.45, 0.20), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
   let disk = smoothstep(0.9993, 0.9997, sunAmt) * 4.0;
-  let halo = pow(sunAmt, 350.0) * 0.5 + pow(sunAmt, 8.0) * 0.12 * (1.0 - night);
+  let hg = (1.0 - 0.36) / (12.56637 * pow(max(1.0 + 0.36 - 1.2 * sunAmt, 1e-4), 1.5)); // Henyey-Greenstein g=0.6 из K
+  let halo = pow(sunAmt, 350.0) * 0.5 + hg * 0.25 * (1.0 - night);
   // Дешёвые облака вместо волюметрики K: 2D fbm-купол, тёмные сверху,
   // рыжая подсветка снизу у солнца. Только небо (rd.y>0), 4 октавы.
   var cloudCov = 0.0;
@@ -100,6 +108,18 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   }
   sk = mix(sk, cloudCol, cloudCov);
   return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sunCol * (disk + halo) * (1.0 - night) * (1.0 - cloudCov);
+}
+
+fn sdfAO(pos: vec3f, n: vec3f) -> f32 {
+  // Дешёвый SSAO из K для реймарша: 5 проб вдоль нормали (iq).
+  var occ = 0.0;
+  var sca = 1.0;
+  for (var i = 0; i < 5; i++) {
+    let h = 0.01 + 0.12 * f32(i) / 4.0;
+    occ += (h - map(pos + n * h).x) * sca;
+    sca *= 0.95;
+  }
+  return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
 }
 
 @vertex
@@ -145,7 +165,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   var base = vec3f(0.60, 0.65, 0.75); // куб
   if (m.y > 0.5 && m.y < 1.5) { base = vec3f(0.75, 0.45, 0.35); } // шар
   else if (m.y > 1.5) { base = vec3f(0.55, 0.60, 0.45); } // пол
-  let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL);
+  let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL) * sdfAO(pos, n);
   let ndl = max(dot(n, sunDir), 0.0);
   var col = base * (amb + lightCol * ndl * sh * dayL);
   // Контровой рим из K: край против солнца подсвечен — силуэты не плоские.
