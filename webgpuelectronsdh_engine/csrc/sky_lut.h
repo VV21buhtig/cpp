@@ -29,7 +29,7 @@ typedef struct {
 } SkyLuts;
 
 void sky_luts_init(SkyLuts *s, WGPUDevice dev, WGPUQueue q);
-void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY);
+int sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY); // 1 если пекла
 // Цвета тел для ambient/LUT (палитра сцены, как sunCol в 30_sky.wgsl).
 void sky_body_cols(Vec3 sunDir, Vec3 *sunCol, Vec3 *moonCol);
 #endif

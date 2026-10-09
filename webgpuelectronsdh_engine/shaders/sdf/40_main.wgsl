@@ -10,7 +10,9 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let res = vec2f(u.resX, u.resY);
   let uv = vec2f((frag.x - 0.5 * res.x) / res.y, -((frag.y - 0.5 * res.y) / res.y));
   let fw = normalize(u.camTarget - u.camPos);
-  let rt = normalize(cross(fw, vec3f(0.0, 1.0, 0.0)));
+  // Базис без NaN: на питче ±90 cross вырождается и весь кадр рвёт.
+  let up0 = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, -1.0), abs(fw.y) > 0.999);
+  let rt = normalize(cross(fw, up0));
   let up = cross(rt, fw);
   let rd = normalize(uv.x * rt + uv.y * up + 1.6 * fw);
 

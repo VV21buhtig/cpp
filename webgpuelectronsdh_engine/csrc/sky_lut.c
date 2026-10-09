@@ -197,7 +197,7 @@ void sky_luts_init(SkyLuts *s, WGPUDevice dev, WGPUQueue q) {
     s->skyValid = 0;
 }
 
-void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
+int sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
     float altSun = asinf(sunDir.y > 1.0f ? 1.0f : (sunDir.y < -1.0f ? -1.0f : sunDir.y));
     float altMoon = asinf(moonDir.y > 1.0f ? 1.0f : (moonDir.y < -1.0f ? -1.0f : moonDir.y));
     float dh = camY - s->camH;
@@ -240,7 +240,7 @@ void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
     }
     if (moved) s->camH = camY;
     s->skyValid = 1;
-    if (!didBake) return; // ambient только следом за skyview, не каждый кадр
+    if (!didBake) return 0; // ambient только следом за skyview, не каждый кадр
     // ambient следом (6px, дёшево): sun/moon dirs+cols
     {
         Vec3 sunCol, moonCol;
@@ -269,4 +269,5 @@ void sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY) {
         bake_draw(s->dev, s->queue, s->ambPipe, bg, s->ambView);
         wgpuBindGroupRelease(bg);
     }
+    return 1;
 }

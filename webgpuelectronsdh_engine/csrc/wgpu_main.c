@@ -54,6 +54,8 @@ typedef struct {
     double dayT;   // часы солнца (T — перемотка x36 как у них)
     double cloudT; // часы облаков/мерцания: реальный dt всегда (их cloud_time += dt)
     double timeScale;
+    float dtMax;   // диагностика: худший dt за окно лога
+    int rebakes;   // диагностика: ребейков неба за окно лога
     int frame;
     int maxFrames;
 } App;
@@ -105,8 +107,8 @@ static void on_mouse(GLFWwindow *w, double x, double y) {
     if (!g_locked || !g_app) { g_lx = x; g_ly = y; return; }
     g_app->yaw += (x - g_lx) * g_sens;
     g_app->pitch -= (y - g_ly) * g_sens;
-    if (g_app->pitch > 1.55) g_app->pitch = 1.55;
-    if (g_app->pitch < -1.55) g_app->pitch = -1.55;
+    if (g_app->pitch > 1.45) g_app->pitch = 1.45;
+    if (g_app->pitch < -1.45) g_app->pitch = -1.45;
     g_lx = x; g_ly = y;
 }
 static void on_btn(GLFWwindow *w, int b, int act, int m) {
@@ -297,6 +299,7 @@ static int app_frame(App *app) {
     float dt = (float)(now - app->prevT);
     app->prevT = now;
     if (dt > 0.05f) dt = 0.05f;
+    if (dt > app->dtMax) app->dtMax = dt;
     // Перемотка времени как у них: T вперёд x36, Shift+T назад (их wc_game.c:287).
     GLFWwindow *win = app->win;
     int tDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
@@ -344,7 +347,7 @@ static int app_frame(App *app) {
     memset(&u, 0, sizeof u);
     Vec3 sunDir = sdf_sun((float)app->dayT);
     Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
-    sky_luts_update(&app->sky, sunDir, moonDir, cy); // та же очередь: печка раньше кадра
+    app->rebakes += sky_luts_update(&app->sky, sunDir, moonDir, cy);
     u.camPos = app->camPos; u.time = (float)app->cloudT;
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
     u.sunDir = sunDir; u.maxSteps = app->maxSteps;
@@ -401,8 +404,11 @@ static int app_frame(App *app) {
 
     if (t - app->lastLog >= 4.0) {
         app->lastLog = t;
-        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f\n",
-            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps, app->timeScale);
+        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f dtmax=%.0fms rebake=%d\n",
+            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps, app->timeScale,
+            app->dtMax * 1000.0f, app->rebakes);
+        app->dtMax = 0.0f;
+        app->rebakes = 0;
     }
     app->frame++;
     if (app->maxFrames > 0 && app->frame >= app->maxFrames) return 1;
