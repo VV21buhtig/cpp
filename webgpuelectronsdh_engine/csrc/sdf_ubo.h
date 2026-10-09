@@ -4,6 +4,7 @@
 // WGSL std140: каждый vec3f+f32 = 16Б, весь UBO 48Б. Проверяем статически.
 #include "sdf_math.h"
 #include <assert.h>
+#include <math.h>
 
 typedef struct {
     Vec3 camPos;  float time;
@@ -24,9 +25,11 @@ static inline void sdf_camera_orbit(Vec3 target, float yaw, float pitch, float d
 }
 
 static inline Vec3 sdf_sun(float t) {
-    // как vulcan frame.cpp: sun=(cos(tod),sin(tod),0.35), здесь медленный дрейф
-    float sa = t * 0.05f;
-    Vec3 s = { cosf(sa), 0.55f, sinf(sa) };
+    // Дуга как в майне: восход -> зенит -> закат (vulcan делал так же:
+    // sun=(cos(tod), sin(tod), 0.35)). Было: высота 0.55 + круг азимута (муха).
+    // День 240с, старт утро (a0=0.3). Ночное небо — отдельным шагом, пока нет.
+    float a = 0.3f + t * (6.2831853f / 240.0f);
+    Vec3 s = { cosf(a), sinf(a), 0.35f };
     return v3_norm(s);
 }
 #endif
