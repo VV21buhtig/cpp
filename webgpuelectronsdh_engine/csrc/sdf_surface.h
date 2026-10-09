@@ -1,15 +1,31 @@
 #ifndef SDF_SURFACE_H
 #define SDF_SURFACE_H
-// Surface из GLFW-окна без glfw3webgpu (тот под старый webgpu.h, не собирается).
-// Wayland — нативно, Xlib — фолбэк (XWayland). В build dir Arch сейчас Wayland.
+// Surface без glfw3webgpu (тот под старый webgpu.h).
+// Натив: Wayland, фолбэк Xlib. Веб: селектор канваса (emdawnwebgpu).
 #include <GLFW/glfw3.h>
+#ifndef __EMSCRIPTEN__
 #define GLFW_EXPOSE_NATIVE_WAYLAND
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
 #include <wayland-client-core.h>
 #include <X11/Xlib.h>
+#endif
 #include <webgpu/webgpu.h>
 #include <string.h>
+
+#ifdef __EMSCRIPTEN__
+static inline WGPUSurface sdf_create_surface(WGPUInstance inst, GLFWwindow *win) {
+    (void)win;
+    WGPUSurfaceSourceCanvasHTMLSelector src;
+    memset(&src, 0, sizeof src);
+    src.chain.sType = WGPUSType_SurfaceSourceCanvasHTMLSelector;
+    src.selector = (WGPUStringView){"#canvas", 7};
+    WGPUSurfaceDescriptor desc;
+    memset(&desc, 0, sizeof desc);
+    desc.nextInChain = (const WGPUChainedStruct *)&src;
+    return wgpuInstanceCreateSurface(inst, &desc);
+}
+#else
 
 static inline WGPUSurface sdf_create_surface(WGPUInstance inst, GLFWwindow *win) {
     // 1) Wayland
@@ -52,4 +68,5 @@ static inline WGPUSurface sdf_create_surface(WGPUInstance inst, GLFWwindow *win)
     }
     return 0;
 }
+#endif
 #endif
