@@ -64,8 +64,8 @@ static void set_locked(GLFWwindow *w, int locked) {
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
     if (!g_locked) { g_lx = x; g_ly = y; return; }
-    g_yaw -= (x - g_lx) * g_sens;
-    g_pitch -= (y - g_ly) * g_sens;
+    g_yaw += (x - g_lx) * g_sens; // фрикам: мышь вправо = взгляд вправо (в орбите было -=, там тянешь сцену)
+    g_pitch -= (y - g_ly) * g_sens; // мышь вверх = взгляд вверх, стандарт
     if (g_pitch > 1.55) g_pitch = 1.55;
     if (g_pitch < -1.55) g_pitch = -1.55;
     g_lx = x; g_ly = y;
