@@ -47,6 +47,7 @@ typedef struct {
     WGPUBindGroup skyBind;
     WGPUTexture voxTex;
     WGPUTextureView voxView;
+    volatile int uboBusy[FRAMES_IN_FLIGHT]; // забор: слот занят, пока GPU не отработал кадр
     int ready; // труба собрана
     float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
     float maxSteps; // текущий лимит марша: 100 -> 25 по просадке, обратно по запасу
@@ -113,6 +114,8 @@ static int check_aabb(float x, float z, float y) {
            vox_floor(x - CAM_RADIUS, z + CAM_RADIUS, y) &&
            vox_floor(x + CAM_RADIUS, z + CAM_RADIUS, y);
 }
+
+static uint8_t g_vox[VOX_PW * VOX_SY * VOX_PZ]; // патч мира: заливка + CPU-зонд
 
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
@@ -257,12 +260,11 @@ static int app_frame(App *app) {
             vd.aspect = WGPUTextureAspect_All;
             app->voxView = wgpuTextureCreateView(app->voxTex, &vd);
             static uint8_t staging[256 * VOX_SY * VOX_PZ];
-            uint8_t vox[VOX_PW * VOX_SY * VOX_PZ];
-            vox_gen_patch(vox, 0, 0, 1337);
+            vox_gen_patch(g_vox, 0, 0, 1337);
             for (int z = 0; z < VOX_PZ; z++)
                 for (int y = 0; y < VOX_SY; y++)
                     memcpy(&staging[(size_t)(z * VOX_SY + y) * 256],
-                           &vox[((size_t)y * VOX_PZ + (size_t)z) * VOX_PW], VOX_PW);
+                           &g_vox[((size_t)y * VOX_PZ + (size_t)z) * VOX_PW], VOX_PW);
             WGPUTexelCopyTextureInfo dst;
             memset(&dst, 0, sizeof dst);
             dst.texture = app->voxTex;
@@ -371,7 +373,12 @@ static int app_frame(App *app) {
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
     u.sunDir = sunDir; u.maxSteps = app->maxSteps;
     u.resY = (float)hh;
-    int fi = app->frame % FRAMES_IN_FLIGHT; // свой UBO на кадр: GPU читает, CPU пишет
+    int fi = app->frame % FRAMES_IN_FLIGHT; // свой UBO на кадр (гигиена UMA)
+#ifndef __EMSCRIPTEN__
+    // NOTE: забора нет — wgpu-native не даёт помпы колбэков (ProcessEvents panic).
+    // writeBuffer идёт строго по очереди, гонки через API нет.
+    (void)fi;
+#endif
     wgpuQueueWriteBuffer(app->queue, app->ubo[fi], 0, &u, sizeof u);
 
     WGPUSurfaceTexture st;
