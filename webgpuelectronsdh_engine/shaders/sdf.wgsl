@@ -87,9 +87,8 @@ fn hash33(p: vec3f) -> vec3f {
   q += dot(q, q.yxz + vec3f(33.33));
   return fract((q.xxy + q.yxx) * q.zyx);
 }
-fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
-  // Вид из K: цвет неба живёт от высоты солнца — день/закат/ночь.
-  let sunAmt = max(dot(rd, sunDir), 0.0);
+fn skyGrad(rd: vec3f, sunDir: vec3f) -> vec3f {
+  // Градиент без облаков/звёзд: дешёвый фон для тумана.
   let dayF = clamp(sunDir.y, -1.0, 1.0);
   let sunset = pow(clamp(1.0 - abs(dayF), 0.0, 1.0), 3.0);
   let night = smoothstep(0.02, -0.12, dayF);
@@ -98,46 +97,58 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   hor = mix(hor, vec3f(1.0, 0.45, 0.20), sunset * clamp(rd.y * 3.0 + 0.6, 0.0, 1.0));
   var sk = mix(hor, zen, pow(clamp(rd.y, 0.0, 1.0), 0.6));
   sk *= (1.0 - night * 0.85);
-  let sunCol = mix(vec3f(1.0, 0.45, 0.20), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
+  return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0));
+}
+
+fn sunTerms(rd: vec3f, sunDir: vec3f, sunCol: vec3f, night: f32) -> vec3f {
+  let sunAmt = max(dot(rd, sunDir), 0.0);
   let disk = smoothstep(0.9993, 0.9997, sunAmt) * 4.0;
-  let hg = (1.0 - 0.36) / (12.56637 * pow(max(1.0 + 0.36 - 1.2 * sunAmt, 1e-4), 1.5)); // Henyey-Greenstein g=0.6 из K
+  let hg = (1.0 - 0.36) / (12.56637 * pow(max(1.0 + 0.36 - 1.2 * sunAmt, 1e-4), 1.5));
   let halo = pow(sunAmt, 350.0) * 0.5 + hg * 0.25 * (1.0 - night);
-  // Облака двумя слоями (глубина вместо наклейки): H=15 главный + H=32 верхний.
-  // Небо и тени — одно поле слоя 1 (у них общий weather). Камера выше слоя — без него.
-  var cloudCov = 0.0;
-  var cloudCol = vec3f(0.0);
-  let cw1 = vec2f(u.time * 0.020, u.time * 0.007);
-  let cw2 = vec2f(u.time * 0.034, u.time * 0.011) + vec2f(3.7, 1.3);
-  // Объём-заглушка вместо марша K: warp краёв (клубы вместо блинов) +
-  // просвет к солнцу одним тапом (густое темно, тонкое светится).
-  // Настоящий марш по 3D-полю Vega не потянет (уже fps~20) — это 80% вида за 20% цены.
-  if (rd.y > 0.015) {
-    let ct1 = (15.0 - u.camPos.y) / rd.y;
-    let ct2 = (32.0 - u.camPos.y) / rd.y;
-    var f1 = -1.0;
-    var f2v = -1.0;
-    var f1sun = 0.0;
-    if (ct1 > 0.0) {
-      let q1 = (u.camPos.xz + rd.xz * ct1) * 0.05 + cw1;
-      let wv = vec2f(vnoise(q1 * 2.1), vnoise(q1 * 2.1 + vec2f(7.3, 3.1))) - 0.5;
-      let qw = q1 + 0.45 * wv;
-      f1 = fbm4(qw);
-      let sdir = sunDir.xz / max(length(sunDir.xz), 0.25);
-      f1sun = fbm4(qw + sdir * 0.30);
+  return sunCol * (disk + halo) * (1.0 - night);
+}
+
+fn slabClouds(ro: vec3f, rd: vec3f, sunCol: vec3f, night: f32) -> vec4f {
+  // Объём как у WT: марш плиты [12,20], 6 проб, профиль высоты, самозатенение.
+  // Сбоку не исчезает (длинный сегмент копится), сверху — палуба, внутри — молоко.
+  // Ранний выход гасит худший случай. Туман берёт skyGrad (дешевле).
+  var t0 = (12.0 - ro.y) / rd.y;
+  var t1 = (20.0 - ro.y) / rd.y;
+  if (t0 > t1) { let tt = t0; t0 = t1; t1 = tt; }
+  t0 = max(t0, 0.0);
+  if (t1 <= t0) { return vec4f(0.0); }
+  let wind = vec2f(u.time * 0.020, u.time * 0.007);
+  let dark = mix(vec3f(0.10, 0.09, 0.12), vec3f(0.02, 0.02, 0.04), night);
+  var acc = 0.0;
+  var col = vec3f(0.0);
+  let seg = (t1 - t0) / 6.0;
+  for (var i = 0; i < 6; i++) {
+    let p = ro + rd * (t0 + seg * (f32(i) + 0.5));
+    let h01 = clamp((p.y - 12.0) / 8.0, 0.0, 1.0);
+    let prof = smoothstep(0.0, 0.15, h01) * (1.0 - smoothstep(0.45, 1.0, h01));
+    if (prof > 0.003) {
+      let q = p.xz * 0.05 + wind;
+      let wv = vec2f(vnoise(q * 2.1), vnoise(q * 2.1 + vec2f(7.3, 3.1))) - 0.5;
+      let d = smoothstep(0.52, 0.72, fbm4(q + 0.45 * wv)) * prof;
+      if (d > 0.003) {
+        let a = 1.0 - exp(-d * seg * 0.35);
+        let lite = mix(dark, sunCol * 1.25 * (0.35 + 0.65 * h01), exp(-acc * 1.8) * (1.0 - night));
+        col += (1.0 - acc) * a * lite;
+        acc += (1.0 - acc) * a;
+        if (acc > 0.97) { break; }
+      }
     }
-    if (ct2 > 0.0) { f2v = fbm4((u.camPos.xz + rd.xz * ct2) * 0.028 + cw2); }
-    let cov1 = select(0.0, smoothstep(0.52, 0.72, f1), f1 >= 0.0);
-    let cov2 = select(0.0, smoothstep(0.55, 0.75, f2v), f2v >= 0.0);
-    let e1 = select(0.0, smoothstep(0.45, 0.60, f1) - smoothstep(0.52, 0.72, f1), f1 >= 0.0);
-    let e2 = select(0.0, smoothstep(0.48, 0.62, f2v) - smoothstep(0.55, 0.75, f2v), f2v >= 0.0);
-    let edge = max(e1, e2 * 0.7);
-    cloudCov = max(cov1, cov2 * 0.85) * smoothstep(0.015, 0.12, rd.y);
-    let dark = mix(vec3f(0.10, 0.09, 0.12), vec3f(0.02, 0.02, 0.04), night);
-    let trans = exp(-max(f1sun - max(f1, 0.0) * 0.4, 0.0) * 5.0); // просвет: тонкое пропускает
-    let lit = sunCol * 1.3 * clamp(edge * (0.6 + 1.4 * trans) + pow(sunAmt, 3.0), 0.0, 1.0) * (1.0 - night);
-    cloudCol = mix(dark * (0.35 + 0.65 * trans), lit + dark, clamp(edge * 2.0 + pow(sunAmt, 3.0), 0.0, 1.0));
   }
-  sk = mix(sk, cloudCol, cloudCov);
+  return vec4f(col, clamp(acc, 0.0, 1.0));
+}
+
+fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
+  let dayF = clamp(sunDir.y, -1.0, 1.0);
+  let night = smoothstep(0.02, -0.12, dayF);
+  let sunCol = mix(vec3f(1.0, 0.45, 0.20), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
+  var sk = skyGrad(rd, sunDir);
+  let sl = slabClouds(u.camPos, rd, sunCol, night);
+  sk = mix(sk, sl.rgb, sl.a);
   // Звёзды и луна из K (упрощены: 1 слой сетки, диск без кратеров).
   // Луна opposite солнца — видна ночью. Всё гаснет днём и за облаками.
   let mdir = -sunDir;
@@ -158,8 +169,8 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   let mdisk = smoothstep(0.0155, 0.0143, mr);
   let mlum = (0.75 + 0.25 * sqrt(max(0.0, 1.0 - (mr / 0.0155) * (mr / 0.0155))));
   let moon = vec3f(0.95, 0.96, 1.0) * mlum * mdisk * 0.9;
-  sk += (star + moon) * night * (1.0 - cloudCov);
-  return mix(sk, sk * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0)) + sunCol * (disk + halo) * (1.0 - night) * (1.0 - cloudCov);
+  sk += (star + moon) * night * (1.0 - sl.a);
+  return sk + sunTerms(rd, sunDir, sunCol, night) * (1.0 - sl.a);
 }
 
 fn sdfAO(pos: vec3f, n: vec3f) -> f32 {
@@ -242,7 +253,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Высотный туман из K (fog_od): плотность падает с высотой, аналитика.
   let fogDen = 0.0006 * exp(-max(pos.y, 0.0) / 6.0);
   let fog = 1.0 - exp(-fogDen * m.x * m.x);
-  var fogCol = sky(rd, sunDir);
+  var fogCol = skyGrad(rd, sunDir) + sunTerms(rd, sunDir, lightCol, 1.0 - dayL);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   return vec4f(mix(col, fogCol, fog), 1.0);
 }
