@@ -30,6 +30,3 @@ webgpuelectronsdh_engine/build_c/
 
 # SDF-движок: доки локально (не в репо)
 webgpuelectronsdh_engine/README.md
-webgpuelectronsdh_engine/*.md
-webgpuelectronsdh_engine/*.txt
-!webgpuelectronsdh_engine/CMakeLists.txt
