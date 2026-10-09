@@ -17,7 +17,12 @@
 #include "sdf_gpu.h"
 #include "sky_lut.h"
 #include "vox/vox_gen.h"
+#include "vox/vox_world.h"
 #include "sdf_wgsl.h"
+
+#define VOX_STREAM_CH 11 // окно 11x11 чанков = 176 клеток (кольцо R=4 + борт)
+#define VOX_STEX (VOX_STREAM_CH * VOX_SX)
+#define VOX_UP_BUDGET 4 // заливок чанков за кадр
 
 #define FRAMES_IN_FLIGHT 2 // ring UBO: GPU читает свой, CPU пишет свой (иначе разрыв кадра на UMA)
 
@@ -47,6 +52,9 @@ typedef struct {
     WGPUBindGroup skyBind;
     WGPUTexture voxTex;
     WGPUTextureView voxView;
+    VoxWorld world;
+    float streamOX, streamOZ; // мировая клетка texel (0,*,0) — в UBO pad0/pad1
+    int mode; // дебаг-вид: 0 цвет, 1 нормали, 2 глубина (клавиша N)
     volatile int uboBusy[FRAMES_IN_FLIGHT]; // забор: слот занят, пока GPU не отработал кадр
     int ready; // труба собрана
     float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
@@ -115,7 +123,54 @@ static int check_aabb(float x, float z, float y) {
            vox_floor(x + CAM_RADIUS, z + CAM_RADIUS, y);
 }
 
-static uint8_t g_vox[VOX_PW * VOX_SY * VOX_PZ]; // патч мира: заливка + CPU-зонд
+static int g_slotCX[VOX_STREAM_CH][VOX_STREAM_CH];
+static int g_slotCZ[VOX_STREAM_CH][VOX_STREAM_CH];
+static unsigned char g_slotOk[VOX_STREAM_CH][VOX_STREAM_CH];
+
+static int wrap11(int c) { int r = c % VOX_STREAM_CH; return r < 0 ? r + VOX_STREAM_CH : r; }
+
+// Синк кольца в тороид: ensure + заливка грязных столбцов (бюджет).
+// Всегда: origin = pcx-5 (окно 11 вокруг игрока).
+static void vox_stream_sync(App *app, int pcx, int pcz) {
+    vox_world_ensure(&app->world, pcx, pcz);
+    int ox = pcx - 5, oz = pcz - 5;
+    app->streamOX = (float)(ox * VOX_SX);
+    app->streamOZ = (float)(oz * VOX_SZ);
+    static uint8_t staging[256 * VOX_SY * VOX_SZ];
+    int up = 0;
+    for (int i = 0; i < VOX_POOL && up < VOX_UP_BUDGET; i++) {
+        VoxSlot *s = &app->world.slots[i];
+        if (!s->used) continue;
+        int dx = s->cx - ox, dz = s->cz - oz;
+        if (dx < 0 || dz < 0 || dx >= VOX_STREAM_CH || dz >= VOX_STREAM_CH) continue;
+        int sx = wrap11(s->cx), sz = wrap11(s->cz);
+        if (g_slotOk[sx][sz] && g_slotCX[sx][sz] == s->cx && g_slotCZ[sx][sz] == s->cz) continue;
+        for (int y = 0; y < VOX_SY; y++)
+            for (int z = 0; z < VOX_SZ; z++)
+                memcpy(&staging[((size_t)z * VOX_SY + (size_t)y) * 256],
+                       &s->data.id[((size_t)y * VOX_SZ + (size_t)z) * VOX_SX], VOX_SX);
+        WGPUTexelCopyTextureInfo dst;
+        memset(&dst, 0, sizeof dst);
+        dst.texture = app->voxTex;
+        dst.aspect = WGPUTextureAspect_All;
+        dst.origin.x = (uint32_t)(sx * VOX_SX);
+        dst.origin.z = (uint32_t)(sz * VOX_SZ);
+        WGPUTexelCopyBufferLayout layout;
+        memset(&layout, 0, sizeof layout);
+        layout.bytesPerRow = 256;
+        layout.rowsPerImage = VOX_SY;
+        WGPUExtent3D extent;
+        memset(&extent, 0, sizeof extent);
+        extent.width = VOX_SX;
+        extent.height = VOX_SY;
+        extent.depthOrArrayLayers = VOX_SZ;
+        wgpuQueueWriteTexture(app->queue, &dst, staging, sizeof staging, &layout, &extent);
+        g_slotCX[sx][sz] = s->cx;
+        g_slotCZ[sx][sz] = s->cz;
+        g_slotOk[sx][sz] = 1;
+        up++;
+    }
+}
 
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
@@ -238,13 +293,14 @@ static int app_frame(App *app) {
             bgdef.entries = &be;
             app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
         }
-        // Воксельный патч 48x64x48 в 3D-текстуру (R8Uint, строки паддинг 256).
+        // Тороидальная 3D-текстура 176x64x176 (11x11 чанков): заливка — по грязным
+        // столбцам каждый кадр (см. vox_stream_sync ниже), wrap — на стороне C.
         {
             WGPUTextureDescriptor td;
             memset(&td, 0, sizeof td);
-            td.size.width = VOX_PW;
+            td.size.width = 176;
             td.size.height = VOX_SY;
-            td.size.depthOrArrayLayers = VOX_PZ;
+            td.size.depthOrArrayLayers = 176;
             td.mipLevelCount = 1;
             td.sampleCount = 1;
             td.dimension = WGPUTextureDimension_3D;
@@ -259,27 +315,8 @@ static int app_frame(App *app) {
             vd.arrayLayerCount = 1;
             vd.aspect = WGPUTextureAspect_All;
             app->voxView = wgpuTextureCreateView(app->voxTex, &vd);
-            static uint8_t staging[256 * VOX_SY * VOX_PZ];
-            vox_gen_patch(g_vox, 0, 0, 1337);
-            for (int z = 0; z < VOX_PZ; z++)
-                for (int y = 0; y < VOX_SY; y++)
-                    memcpy(&staging[(size_t)(z * VOX_SY + y) * 256],
-                           &g_vox[((size_t)y * VOX_PZ + (size_t)z) * VOX_PW], VOX_PW);
-            WGPUTexelCopyTextureInfo dst;
-            memset(&dst, 0, sizeof dst);
-            dst.texture = app->voxTex;
-            dst.aspect = WGPUTextureAspect_All;
-            WGPUTexelCopyBufferLayout layout;
-            memset(&layout, 0, sizeof layout);
-            layout.bytesPerRow = 256;
-            layout.rowsPerImage = VOX_SY;
-            WGPUExtent3D extent;
-            memset(&extent, 0, sizeof extent);
-            extent.width = VOX_PW;
-            extent.height = VOX_SY;
-            extent.depthOrArrayLayers = VOX_PZ;
-            wgpuQueueWriteTexture(app->queue, &dst, staging, sizeof staging, &layout, &extent);
-            printf("voxels OK: patch %dx%dx%d seed 1337\n", VOX_PW, VOX_SY, VOX_PZ);
+            vox_world_init(&app->world, 1337);
+            printf("voxels OK: stream 176x64x176 (11x11 chunks)\n");
         }
         // Печка неба + вторая бинд-группа (LUT): текстуры фиксированы.
         sky_luts_init(&app->sky, app->device, app->queue);
@@ -316,6 +353,10 @@ static int app_frame(App *app) {
     double t = now - app->t0;
     float dt = (float)(now - app->prevT);
     app->prevT = now;
+    static int nPrev = 0;
+    int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
+    if (nDown && !nPrev) { app->mode = (app->mode + 1) % 3; printf("view mode=%d\n", app->mode); }
+    nPrev = nDown;
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
     float logic_dt = dt > 0.033f ? 0.033f : dt; // физика без телепортов
@@ -369,11 +410,17 @@ static int app_frame(App *app) {
     memset(&u, 0, sizeof u);
     Vec3 sunDir = sdf_sun((float)app->dayT);
     Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
+    // Стриминг за игроком: чанк из позиции камеры (floor делит отрицательные верно).
+    {
+        int pcx = (int)floorf(cx / 16.0f), pcz = (int)floorf(cz / 16.0f);
+        vox_stream_sync(app, pcx, pcz);
+    }
     app->rebakes += sky_luts_update(&app->sky, sunDir, moonDir, cy);
     u.camPos = app->camPos; u.time = (float)app->cloudT;
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
     u.sunDir = sunDir; u.maxSteps = app->maxSteps;
-    u.resY = (float)hh;
+    u.resY = (float)hh; u.mode = (float)app->mode;
+    u.pad[0] = app->streamOX; u.pad[1] = app->streamOZ;
     int fi = app->frame % FRAMES_IN_FLIGHT; // свой UBO на кадр (гигиена UMA)
 #ifndef __EMSCRIPTEN__
     // NOTE: забора нет — wgpu-native не даёт помпы колбэков (ProcessEvents panic).
@@ -496,6 +543,7 @@ int main(int argc, char **argv) {
 
     app.camPos = v3(32.0f, 42.0f, 12.0f); // над патчем, взгляд в центр
     app.yaw = 2.16; app.pitch = -0.69; app.speed = 4.0;
+    app.mode = 0;
     app.dayT = 0.0; app.cloudT = 0.0; app.timeScale = 1.0;
     app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();

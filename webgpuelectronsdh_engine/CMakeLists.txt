@@ -14,12 +14,12 @@ target_include_directories(sdf_native PRIVATE csrc)
 target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
 # Тест вокселей шага 1: генерация чанка, без рендера.
-add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c)
+add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c csrc/vox/vox_world.c)
 target_include_directories(vox_test PRIVATE csrc)
 target_link_libraries(vox_test PRIVATE m)
 target_compile_options(vox_test PRIVATE -Wall -Wextra)
 # Тест стриминга: кольцо + бюджет + выселение, без рендера.
-add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_world.c)
+add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_world.c csrc/vox/vox_world.c)
 target_include_directories(vox_stream PRIVATE csrc)
 target_link_libraries(vox_stream PRIVATE m)
 target_compile_options(vox_stream PRIVATE -Wall -Wextra)
@@ -30,7 +30,7 @@ endif()
 # GPU-путь: натив — предсборка wgpu-native (без depot_tools/gn, качаем бинарники);
 # веб — emdawnwebgpu-порт (тот же webgpu.h, тот же C-исходник).
 if(EMSCRIPTEN)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c csrc/vox/vox_world.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   set_target_properties(sdf_native_webgpu PROPERTIES SUFFIX ".html")
   # Порты нужны и компиляции (заголовки), и линковке.
@@ -44,7 +44,7 @@ else()
     GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
     GIT_TAG dawn-7069)
   FetchContent_MakeAvailable(webgpu-distribution)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c csrc/vox/vox_world.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
 endif()

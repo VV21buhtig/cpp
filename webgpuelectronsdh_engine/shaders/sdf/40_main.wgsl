@@ -16,13 +16,15 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let up = cross(rt, fw);
   let rd = normalize(uv.x * rt + uv.y * up + 1.6 * fw);
 
-  // Мир — воксельный патч 48x64x48: analytic вход + DDA внутри.
-  let hit = voxMarch(u.camPos, rd, 200.0);
+  // Мир — окно стриминга 176x64x176: analytic вход + DDA внутри.
+  let hit = voxMarch(u.camPos, rd, 300.0);
   if (hit.t < 0.0) {
     return vec4f(sky(rd, normalize(u.sunDir)), 1.0);
   }
   let pos = u.camPos + rd * hit.t;
   let n = hit.n;
+  if (u.mode > 0.5 && u.mode < 1.5) { return vec4f(n * 0.5 + 0.5, 1.0); }
+  if (u.mode > 1.5) { let g = clamp(hit.t / 120.0, 0.0, 1.0); return vec4f(g, g, g, 1.0); }
   let sunDir = normalize(u.sunDir);
   // Тень — тем же DDA к солнцу (жёсткая). На весь чанк в поле зрения:
   // дальность 120, фейд 100-120. Луч рвётся первым вокселем.

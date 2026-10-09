@@ -15,6 +15,11 @@ void vox_gen(VoxChunk *c, uint32_t seed);
 int vox_height(int wx, int wz, uint32_t seed);
 // Патч чанков (cx0..cx0+2, cz0..cz0+2) плотно в dst[48*64*48], индекс (y*48+z)*48+x.
 void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed);
+// CPU-зеркало DDA для отладки (клавиша C зондирует центральный луч).
+// Возвращает t или -1; нормаль грани и id блока наружу.
+float vox_probe(const uint8_t *vox, float ox, float oy, float oz,
+                float dx, float dy, float dz, float maxT,
+                float *nx, float *ny, float *nz, uint8_t *id);
 // Пол для камеры: высота поверхности + 0.6 (вне патча 0.6).
 static inline float vox_floor_y(float x, float z) {
     int gx = (int)floorf(x), gz = (int)floorf(z);

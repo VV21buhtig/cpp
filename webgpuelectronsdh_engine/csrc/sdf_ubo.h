@@ -10,7 +10,7 @@ typedef struct {
     Vec3 camPos;  float time;
     Vec3 camTarget; float resX;   // resX/resY вместо dummy-текстуры (баг прототипа)
     Vec3 sunDir;  float maxSteps;
-    float resY; float pad[3];    // добивка до 64Б для queue.writeBuffer кратности
+    float resY; float mode; float pad[2]; // mode: 0 цвет, 1 нормали, 2 глубина
 } SdfUBO;
 
 _Static_assert(sizeof(SdfUBO) == 64, "SdfUBO must be 64B");

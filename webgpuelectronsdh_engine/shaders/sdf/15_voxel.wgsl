@@ -1,5 +1,6 @@
-// Воксели лучом: analytic вход в бокс патча + DDA Аманатидеса-Ву внутри.
-// Мир = мировые координаты вокселей (0..48, 0..64, 0..48). Вне патча — воздух.
+// Воксели лучом: analytic вход в окно стриминга + DDA Аманатидеса-Ву внутри.
+// Окно: origin из UBO (pad0/pad1 = мировая клетка texel 0,0), размер 176x64x176.
+// Вне окна — воздух. Тороид на заливке (C), в шейдере прямое смещение.
 @group(1) @binding(3) var voxTex: texture_3d<u32>;
 
 struct VoxHit {
@@ -8,16 +9,18 @@ struct VoxHit {
   id: u32,
 };
 
-// Сегмент луча в боксе [0,48]x[0,64]x[0,48]: x=tEnter, y=tExit, (-1,-1) мимо.
+// Сегмент луча в окне: x=tEnter, y=tExit, (-1,-1) мимо.
 fn boxSeg(ro: vec3f, rd: vec3f) -> vec2f {
+  let omin = vec3f(u.pad0, 0.0, u.pad1);
+  let omax = omin + vec3f(176.0, 64.0, 176.0);
   let ax = abs(rd.x);
   let ay = abs(rd.y);
   let az = abs(rd.z);
   let ix = select(1e9, 1.0 / rd.x, ax > 1e-9);
   let iy = select(1e9, 1.0 / rd.y, ay > 1e-9);
   let iz = select(1e9, 1.0 / rd.z, az > 1e-9);
-  let t0 = (vec3f(0.0) - ro) * vec3f(ix, iy, iz);
-  let t1 = (vec3f(48.0, 64.0, 48.0) - ro) * vec3f(ix, iy, iz);
+  let t0 = (omin - ro) * vec3f(ix, iy, iz);
+  let t1 = (omax - ro) * vec3f(ix, iy, iz);
   let tmin = min(t0, t1);
   let tmax = max(t0, t1);
   let enter = max(tmin.x, max(tmin.y, tmin.z));
@@ -54,7 +57,7 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
   var tm = (vec3f(p) + vec3f(bx, by, bz) - ro) * vec3f(idx, idy, idz);
   var n = vec3f(0.0);
   var t = seg.x;
-  for (var i = 0; i < 192; i++) {
+  for (var i = 0; i < 320; i++) { // диагональ окна ~257 клеток
     if (tm.x < tm.y && tm.x < tm.z) {
       p.x += step.x; t = tm.x; tm.x += tdx; n = vec3f(-srd.x, 0.0, 0.0);
     } else if (tm.y < tm.z) {
@@ -63,8 +66,11 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
       p.z += step.z; t = tm.z; tm.z += tdz; n = vec3f(0.0, 0.0, -srd.z);
     }
     if (t > tEnd) { break; }
-    if (p.x < 0 || p.y < 0 || p.z < 0 || p.x >= 48 || p.y >= 64 || p.z >= 48) { continue; }
-    let id = textureLoad(voxTex, p, 0).r;
+    // Вне окна — воздух (и дальше не вернётся: окно выпуклое, DDA монотонен).
+    let ox = i32(u.pad0);
+    let oz = i32(u.pad1);
+    if (p.x < ox || p.y < 0 || p.z < oz || p.x >= ox + 176 || p.y >= 64 || p.z >= oz + 176) { continue; }
+    let id = textureLoad(voxTex, p - vec3i(ox, 0, oz), 0).r;
     if (id != 0u) {
       h.t = t;
       h.n = n;
