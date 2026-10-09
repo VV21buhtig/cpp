@@ -50,7 +50,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
   COMMAND ${CMAKE_COMMAND} -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/shaders
     -DDST=${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
-  DEPENDS ${SDF_WGSL_PARTS}
+  DEPENDS ${SDF_WGSL_PARTS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
   COMMENT "embed shaders (sdf+sky)")
 target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)
