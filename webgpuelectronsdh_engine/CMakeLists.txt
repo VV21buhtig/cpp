@@ -19,7 +19,14 @@ FetchContent_Declare(webgpu-distribution
   GIT_TAG dawn-7069)
 FetchContent_MakeAvailable(webgpu-distribution)
 
-add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c)
-target_include_directories(sdf_native_webgpu PRIVATE csrc)
+add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c
+  ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf.wgsl
+    -DDST=${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf.wgsl
+  COMMENT "embed sdf.wgsl")
+target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
 target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)

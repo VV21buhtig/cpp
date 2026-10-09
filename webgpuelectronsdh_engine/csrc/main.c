@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
     memset(uboMirror, 0, sizeof uboMirror);
     const SdfMemKind memKind = SDF_MEM_COHERENT; // Vega UMA; на RTX переключить в NONCOHERENT+flush
 
-    Vec3 target = v3(0.0f, 1.0f, 0.0f);
+    Vec3 target = v3(0.0f, 0.0f, 0.0f); // шаг 0: куб в нуле
     int frame = 0;
     double t0 = glfwGetTime();
     double lastLog = -10.0; // первый лог сразу, дальше раз в 4с (не спамить)

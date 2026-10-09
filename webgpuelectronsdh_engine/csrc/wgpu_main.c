@@ -1,19 +1,19 @@
-// C + WebGPU: окно GLFW -> surface -> adapter -> device -> swapchain-clear.
-// Веха: доказать путь на Vega (RADV/Vulkan) без JS. SDF-пайплайн — следующим шагом.
+// Шаг 0: ОДИН КУБ через SDF-пайплайн (sdf.wgsl -> модуль -> треугольник).
+// Лестница: куб -> +шар -> +пол -> +тени -> +небо. Сюда правим только трубу,
+// сцену — в shaders/sdf.wgsl (+ зеркало csrc/sdf_scene.h).
 #include <GLFW/glfw3.h>
 #include <webgpu/webgpu.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include "sdf_surface.h"
-
-// wgpu-native: wgpuInstanceProcessEvents не реализован (panic), запросы
-// дозревают во внутренних тредах — ждём слипом, не помпой.
-static void wait_for(volatile int *done) {
-    struct timespec ts = {0, 2000000}; // 2мс
-    for (int i = 0; i < 5000 && !*done; i++) nanosleep(&ts, 0);
-}
+#include "sdf_math.h"
+#include "sdf_ubo.h"
+#include "sdf_scene.h"
+#include "sdf_gpu.h"
+#include "sdf_wgsl.h"
 
 typedef struct { WGPUAdapter adapter; int done; } AdapterSlot;
 typedef struct { WGPUDevice device; int done; } DeviceSlot;
@@ -44,6 +44,47 @@ static void onDevice(WGPURequestDeviceStatus st, WGPUDevice d, WGPUStringView ms
     s->done = 1;
 }
 
+// wgpu-native: wgpuInstanceProcessEvents не реализован — ждём слипом.
+static void wait_for(volatile int *done) {
+    struct timespec ts = {0, 2000000};
+    for (int i = 0; i < 5000 && !*done; i++) nanosleep(&ts, 0);
+}
+
+static double g_yaw = -0.6, g_pitch = 0.3, g_dist = 5.0;
+static double g_lx, g_ly;
+static int g_drag = 0;
+
+static void on_mouse(GLFWwindow *w, double x, double y) {
+    (void)w;
+    if (!g_drag) { g_lx = x; g_ly = y; return; }
+    g_yaw -= (x - g_lx) * 0.005;
+    g_pitch += (y - g_ly) * 0.005;
+    if (g_pitch > 1.45) g_pitch = 1.45;
+    if (g_pitch < -1.45) g_pitch = -1.45;
+    g_lx = x; g_ly = y;
+}
+static void on_btn(GLFWwindow *w, int b, int act, int m) {
+    (void)w; (void)m;
+    if (b == GLFW_MOUSE_BUTTON_LEFT) g_drag = (act == GLFW_PRESS);
+}
+static void on_scroll(GLFWwindow *w, double dx, double dy) {
+    (void)w; (void)dx;
+    g_dist *= (1.0 + (dy > 0 ? -0.1 : dy < 0 ? 0.1 : 0.0));
+    if (g_dist < 2.0) g_dist = 2.0;
+    if (g_dist > 20.0) g_dist = 20.0;
+}
+
+static WGPUShaderModule make_module(WGPUDevice device) {
+    WGPUShaderSourceWGSL wgsl;
+    memset(&wgsl, 0, sizeof wgsl);
+    wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgsl.code = (WGPUStringView){SDF_WGSL, strlen(SDF_WGSL)};
+    WGPUShaderModuleDescriptor def;
+    memset(&def, 0, sizeof def);
+    def.nextInChain = (const WGPUChainedStruct *)&wgsl;
+    return wgpuDeviceCreateShaderModule(device, &def);
+}
+
 int main(int argc, char **argv) {
     int maxFrames = -1;
     for (int i = 1; i < argc; i++)
@@ -51,14 +92,16 @@ int main(int argc, char **argv) {
 
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf engine — C/WebGPU", 0, 0);
+    GLFWwindow *win = glfwCreateWindow(1280, 720, "sdf step0 — one cube", 0, 0);
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
+    glfwSetCursorPosCallback(win, on_mouse);
+    glfwSetMouseButtonCallback(win, on_btn);
+    glfwSetScrollCallback(win, on_scroll);
 
     WGPUInstanceDescriptor idef;
     memset(&idef, 0, sizeof idef);
     WGPUInstance inst = wgpuCreateInstance(&idef);
     if (!inst) { fprintf(stderr, "instance fail\n"); return 1; }
-
     WGPUSurface surface = sdf_create_surface(inst, win);
     if (!surface) { fprintf(stderr, "surface fail\n"); return 1; }
 
@@ -106,8 +149,57 @@ int main(int argc, char **argv) {
     cfg.presentMode = WGPUPresentMode_Fifo;
     cfg.alphaMode = WGPUCompositeAlphaMode_Opaque;
     wgpuSurfaceConfigure(surface, &cfg);
-    printf("webgpu OK: format=%d (surface 1280x720, clear-loop)\n", (int)fmt);
 
+    // Труба SDF: модуль из канона + треугольник без буферов + 1 UBO.
+    WGPUShaderModule mod = make_module(device);
+    printf("WGSL module created (валидация — глазами: куб должен быть виден)\n");
+    WGPUBufferDescriptor bdef;
+    memset(&bdef, 0, sizeof bdef);
+    bdef.size = 64;
+    bdef.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    WGPUBuffer ubo = wgpuDeviceCreateBuffer(device, &bdef);
+
+    WGPUColorTargetState color;
+    memset(&color, 0, sizeof color);
+    color.format = fmt;
+    color.writeMask = WGPUColorWriteMask_All;
+    WGPUFragmentState frag;
+    memset(&frag, 0, sizeof frag);
+    frag.module = mod;
+    frag.entryPoint = (WGPUStringView){"fs", 2};
+    frag.targetCount = 1;
+    frag.targets = &color;
+    WGPUVertexState vert;
+    memset(&vert, 0, sizeof vert);
+    vert.module = mod;
+    vert.entryPoint = (WGPUStringView){"vs", 2};
+    WGPURenderPipelineDescriptor pipe;
+    memset(&pipe, 0, sizeof pipe);
+    pipe.vertex = vert;
+    pipe.fragment = &frag;
+    pipe.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pipe.primitive.frontFace = WGPUFrontFace_CCW;
+    pipe.primitive.cullMode = WGPUCullMode_None;
+    pipe.multisample.count = 1;
+    pipe.multisample.mask = 0xFFFFFFFFu;
+    WGPURenderPipeline pipeline = wgpuDeviceCreateRenderPipeline(device, &pipe);
+    WGPUBindGroupLayout bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline, 0);
+    WGPUBindGroupEntry be;
+    memset(&be, 0, sizeof be);
+    be.binding = 0;
+    be.buffer = ubo;
+    be.size = 64;
+    WGPUBindGroupDescriptor bgdef;
+    memset(&bgdef, 0, sizeof bgdef);
+    bgdef.layout = bgl;
+    bgdef.entryCount = 1;
+    bgdef.entries = &be;
+    WGPUBindGroup bind = wgpuDeviceCreateBindGroup(device, &bgdef);
+    printf("step0 pipe OK: cube, flat light, dark bg\n");
+
+    Vec3 target = v3(0.0f, 0.0f, 0.0f);
+    double t0 = glfwGetTime();
+    double lastLog = -10.0;
     int frame = 0;
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
@@ -118,6 +210,20 @@ int main(int argc, char **argv) {
             cfg.height = (uint32_t)hh;
             wgpuSurfaceConfigure(surface, &cfg);
         }
+        double t = glfwGetTime() - t0;
+        Vec3 pos;
+        sdf_camera_orbit(target, (float)g_yaw, (float)g_pitch, (float)g_dist, &pos);
+        float cx = pos.x, cy = pos.y, cz = pos.z;
+        sdf_guard(&cx, &cy, &cz, target.x, target.y, target.z);
+
+        SdfUBO u;
+        memset(&u, 0, sizeof u);
+        u.camPos = v3(cx, cy, cz); u.time = (float)t;
+        u.camTarget = target;      u.resX = (float)ww;
+        u.sunDir = sdf_sun((float)t); u.maxSteps = 100.0f;
+        u.resY = (float)hh;
+        wgpuQueueWriteBuffer(queue, ubo, 0, &u, sizeof u);
+
         WGPUSurfaceTexture st;
         memset(&st, 0, sizeof st);
         wgpuSurfaceGetCurrentTexture(surface, &st);
@@ -143,27 +249,40 @@ int main(int argc, char **argv) {
         ca.view = view;
         ca.loadOp = WGPULoadOp_Clear;
         ca.storeOp = WGPUStoreOp_Store;
-        ca.clearValue = (WGPUColor){0.05, 0.10, 0.22, 1.0};
+        ca.clearValue = (WGPUColor){0.02, 0.03, 0.06, 1.0};
         WGPURenderPassDescriptor rp;
         memset(&rp, 0, sizeof rp);
         rp.colorAttachmentCount = 1;
         rp.colorAttachments = &ca;
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
+        wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, bind, 0, 0);
+        wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
-        WGPUCommandBufferDescriptor bdef;
-        memset(&bdef, 0, sizeof bdef);
-        WGPUCommandBuffer buf = wgpuCommandEncoderFinish(enc, &bdef);
-        wgpuQueueSubmit(queue, 1, &buf);
+        WGPUCommandBufferDescriptor cbdef;
+        memset(&cbdef, 0, sizeof cbdef);
+        WGPUCommandBuffer cbuf = wgpuCommandEncoderFinish(enc, &cbdef);
+        wgpuQueueSubmit(queue, 1, &cbuf);
         wgpuSurfacePresent(surface);
 
-        wgpuCommandBufferRelease(buf);
+        wgpuCommandBufferRelease(cbuf);
         wgpuCommandEncoderRelease(enc);
         wgpuTextureViewRelease(view);
         wgpuTextureRelease(st.texture);
+
+        if (t - lastLog >= 4.0) {
+            lastLog = t;
+            printf("f=%d pos=(%.2f,%.2f,%.2f)\n", frame, cx, cy, cz);
+        }
         if (++frame == maxFrames) break;
     }
-    printf("wgpu-render OK: %d frames\n", frame);
+    printf("step0 OK: %d frames\n", frame);
+    wgpuBindGroupRelease(bind);
+    wgpuBindGroupLayoutRelease(bgl);
+    wgpuRenderPipelineRelease(pipeline);
+    wgpuBufferRelease(ubo);
+    wgpuShaderModuleRelease(mod);
     wgpuSurfaceUnconfigure(surface);
     wgpuQueueRelease(queue);
     wgpuDeviceRelease(device);
