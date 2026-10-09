@@ -108,12 +108,23 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   var cloudCol = vec3f(0.0);
   let cw1 = vec2f(u.time * 0.020, u.time * 0.007);
   let cw2 = vec2f(u.time * 0.034, u.time * 0.011) + vec2f(3.7, 1.3);
+  // Объём-заглушка вместо марша K: warp краёв (клубы вместо блинов) +
+  // просвет к солнцу одним тапом (густое темно, тонкое светится).
+  // Настоящий марш по 3D-полю Vega не потянет (уже fps~20) — это 80% вида за 20% цены.
   if (rd.y > 0.015) {
     let ct1 = (15.0 - u.camPos.y) / rd.y;
     let ct2 = (32.0 - u.camPos.y) / rd.y;
     var f1 = -1.0;
     var f2v = -1.0;
-    if (ct1 > 0.0) { f1 = fbm4((u.camPos.xz + rd.xz * ct1) * 0.05 + cw1); }
+    var f1sun = 0.0;
+    if (ct1 > 0.0) {
+      let q1 = (u.camPos.xz + rd.xz * ct1) * 0.05 + cw1;
+      let wv = vec2f(vnoise(q1 * 2.1), vnoise(q1 * 2.1 + vec2f(7.3, 3.1))) - 0.5;
+      let qw = q1 + 0.45 * wv;
+      f1 = fbm4(qw);
+      let sdir = sunDir.xz / max(length(sunDir.xz), 0.25);
+      f1sun = fbm4(qw + sdir * 0.30);
+    }
     if (ct2 > 0.0) { f2v = fbm4((u.camPos.xz + rd.xz * ct2) * 0.028 + cw2); }
     let cov1 = select(0.0, smoothstep(0.52, 0.72, f1), f1 >= 0.0);
     let cov2 = select(0.0, smoothstep(0.55, 0.75, f2v), f2v >= 0.0);
@@ -122,8 +133,9 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
     let edge = max(e1, e2 * 0.7);
     cloudCov = max(cov1, cov2 * 0.85) * smoothstep(0.015, 0.12, rd.y);
     let dark = mix(vec3f(0.10, 0.09, 0.12), vec3f(0.02, 0.02, 0.04), night);
-    let lit = sunCol * 1.3 * clamp(edge * 1.5 + pow(sunAmt, 3.0), 0.0, 1.0) * (1.0 - night);
-    cloudCol = mix(dark, lit + dark, clamp(edge * 2.0 + pow(sunAmt, 3.0), 0.0, 1.0));
+    let trans = exp(-max(f1sun - max(f1, 0.0) * 0.4, 0.0) * 5.0); // просвет: тонкое пропускает
+    let lit = sunCol * 1.3 * clamp(edge * (0.6 + 1.4 * trans) + pow(sunAmt, 3.0), 0.0, 1.0) * (1.0 - night);
+    cloudCol = mix(dark * (0.35 + 0.65 * trans), lit + dark, clamp(edge * 2.0 + pow(sunAmt, 3.0), 0.0, 1.0));
   }
   sk = mix(sk, cloudCol, cloudCov);
   // Звёзды и луна из K (упрощены: 1 слой сетки, диск без кратеров).
@@ -220,7 +232,9 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let st = (15.0 - pos.y) / max(sunDir.y, 0.001);
     var shf = 0.0;
     if (st > 0.0) {
-      shf = fbm4((pos.xz + sunDir.xz * st) * 0.05 + vec2f(u.time * 0.020, u.time * 0.007));
+      let sq = (pos.xz + sunDir.xz * st) * 0.05 + vec2f(u.time * 0.020, u.time * 0.007);
+      let swv = vec2f(vnoise(sq * 2.1), vnoise(sq * 2.1 + vec2f(7.3, 3.1))) - 0.5;
+      shf = fbm4(sq + 0.45 * swv); // тот же warp, что небо: пятно = облако
     }
     col *= mix(1.0, mix(1.0, 0.25, smoothstep(0.45, 0.75, shf)), shFade);
   }
