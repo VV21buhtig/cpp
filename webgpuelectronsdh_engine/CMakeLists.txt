@@ -3,7 +3,9 @@ project(sdf_engine LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-find_package(glfw3 REQUIRED)
+if(NOT EMSCRIPTEN)
+  find_package(glfw3 REQUIRED)
+endif()
 
 # CPU-каркас (окно+математика+арены), без GPU — только натив.
 if(NOT EMSCRIPTEN)
@@ -21,8 +23,11 @@ if(EMSCRIPTEN)
   add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   set_target_properties(sdf_native_webgpu PROPERTIES SUFFIX ".html")
+  # Порты нужны и компиляции (заголовки), и линковке.
+  target_compile_options(sdf_native_webgpu PRIVATE
+    "--use-port=emdawnwebgpu" "-sUSE_GLFW=3")
   target_link_options(sdf_native_webgpu PRIVATE
-    "--use-port=emdawnwebgpu" "-sUSE_GLFW=3" "-sALLOW_MEMORY_GROWTH=1")
+    "--use-port=emdawnwebgpu" "-sUSE_GLFW=3" "-sALLOW_MEMORY_GROWTH=1" "-sDEFAULT_TO_CXX=1")
 else()
   include(FetchContent)
   FetchContent_Declare(webgpu-distribution
@@ -40,5 +45,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf.wgsl
   COMMENT "embed sdf.wgsl")
 target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen)
-target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
 target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)
+if(NOT EMSCRIPTEN)
+  target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
+endif()

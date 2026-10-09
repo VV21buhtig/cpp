@@ -27,6 +27,7 @@ voxel-render/worlds/*.bin
 webgpuelectronsdh_engine/node_modules/
 webgpuelectronsdh_engine/dist/
 webgpuelectronsdh_engine/build_c/
+webgpuelectronsdh_engine/build_web/
 
 # SDF-движок: доки локально (не в репо)
 webgpuelectronsdh_engine/README.md

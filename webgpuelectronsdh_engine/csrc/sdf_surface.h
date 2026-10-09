@@ -16,9 +16,9 @@
 #ifdef __EMSCRIPTEN__
 static inline WGPUSurface sdf_create_surface(WGPUInstance inst, GLFWwindow *win) {
     (void)win;
-    WGPUSurfaceSourceCanvasHTMLSelector src;
+    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector src;
     memset(&src, 0, sizeof src);
-    src.chain.sType = WGPUSType_SurfaceSourceCanvasHTMLSelector;
+    src.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
     src.selector = (WGPUStringView){"#canvas", 7};
     WGPUSurfaceDescriptor desc;
     memset(&desc, 0, sizeof desc);
