@@ -45,3 +45,24 @@ void vox_gen(VoxChunk *c, uint32_t seed) {
         }
     }
 }
+
+void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed) {
+    VoxChunk c;
+    for (int pz = 0; pz < VOX_PATCH; pz++) {
+        for (int px = 0; px < VOX_PATCH; px++) {
+            c.cx = cx0 + px;
+            c.cz = cz0 + pz;
+            vox_gen(&c, seed);
+            for (int y = 0; y < VOX_SY; y++) {
+                for (int z = 0; z < VOX_SZ; z++) {
+                    for (int x = 0; x < VOX_SX; x++) {
+                        int wx = px * VOX_SX + x;
+                        int wz = pz * VOX_SZ + z;
+                        dst[((size_t)y * VOX_PZ + (size_t)wz) * VOX_PW + (size_t)wx] =
+                            c.id[vox_idx(x, y, z)];
+                    }
+                }
+            }
+        }
+    }
+}

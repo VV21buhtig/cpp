@@ -1,4 +1,4 @@
-// Главный проход: фулскрин-треугольник, сферотрассировка, туман.
+// Главный проход: фулскрин-треугольник, воксельный мир DDA, туман.
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let v = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -14,35 +14,31 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let up = cross(rt, fw);
   let rd = normalize(uv.x * rt + uv.y * up + 1.6 * fw);
 
-  var t = 0.0;
-  var m = vec2f(-1.0, -1.0);
-  for (var i = 0; i < 100; i++) {
-    if (f32(i) >= u.maxSteps) { break; }
-    let h = map(u.camPos + rd * t);
-    if (h.x < max(0.001 * t, 0.0002)) { m = vec2f(t, h.y); break; }
-    t += h.x;
-    if (t > 60.0) { break; }
-  }
-  // Аналитический пол: выигрывает ближний.
-  let tP = -u.camPos.y / rd.y;
-  if (rd.y < -0.0005 && tP > 0.0 && (m.x < 0.0 || tP < m.x)) { m = vec2f(tP, 2.0); }
-
-  if (m.x < 0.0) {
+  // Мир — воксельный патч 48x64x48: analytic вход + DDA внутри.
+  let hit = voxMarch(u.camPos, rd, 200.0);
+  if (hit.t < 0.0) {
     return vec4f(sky(rd, normalize(u.sunDir)), 1.0);
   }
-  let pos = u.camPos + rd * m.x;
-  let n = calcNormal(pos, m.x);
+  let pos = u.camPos + rd * hit.t;
+  let n = hit.n;
   let sunDir = normalize(u.sunDir);
-  let sh = softShadow(pos + n * 0.02, sunDir); // bias: без него полосы акне
+  // Тень — тем же DDA к солнцу (жёсткая, 40 единиц).
+  var sh = 1.0;
+  if (dot(n, sunDir) > 0.0) {
+    let shHit = voxMarch(pos + n * 0.02, sunDir, 40.0);
+    sh = select(0.0, 1.0, shHit.t < 0.0);
+  }
   // Живой свет из K: тёплый низко, белый высоко, ночью гаснет.
   let dayF = clamp(sunDir.y, -1.0, 1.0);
   let dayL = clamp(dayF * 2.0 + 0.25, 0.04, 1.0);
   let lightCol = mix(vec3f(1.0, 0.50, 0.25), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
   let skyAmb = sky(vec3f(0.0, 1.0, 0.0), sunDir);
-  var base = vec3f(0.60, 0.65, 0.75); // куб
-  if (m.y > 0.5 && m.y < 1.5) { base = vec3f(0.75, 0.45, 0.35); } // шар
-  else if (m.y > 1.5) { base = vec3f(0.55, 0.60, 0.45); } // пол
-  let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL) * sdfAO(pos, n);
+  var base = vec3f(0.5, 0.5, 0.52); // камень
+  if (hit.id == 1u) { // трава: верх зелёный, бока земля
+    base = select(vec3f(0.45, 0.32, 0.20), vec3f(0.35, 0.62, 0.25), n.y > 0.5);
+  } else if (hit.id == 2u) { base = vec3f(0.45, 0.32, 0.20); } // земля
+  else if (hit.id == 8u) { base = vec3f(0.12, 0.12, 0.13); } // бедрок
+  let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL);
   let ndl = max(dot(n, sunDir), 0.0);
   var col = base * (amb + lightCol * ndl * sh * dayL);
   // Контровой рим из K: край против солнца подсвечен — силуэты не плоские.
@@ -52,7 +48,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   col += base * lightCol * rim * (0.15 + 0.85 * sunset);
   // Воздушная перспектива: туман греется к солнцу. Плотность падает с высотой.
   let fogDen = 0.0006 * exp(-max(pos.y, 0.0) / 6.0);
-  let fog = 1.0 - exp(-fogDen * m.x * m.x);
+  let fog = 1.0 - exp(-fogDen * hit.t * hit.t);
   var fogCol = skyGrad(rd, sunDir) + sunTerms(rd, sunDir, lightCol, 1.0 - dayL);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   return vec4f(mix(col, fogCol, fog), 1.0);

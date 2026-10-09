@@ -16,6 +16,7 @@
 #include "sdf_scene.h"
 #include "sdf_gpu.h"
 #include "sky_lut.h"
+#include "vox/vox_gen.h"
 #include "sdf_wgsl.h"
 
 #ifdef __EMSCRIPTEN__
@@ -42,6 +43,8 @@ typedef struct {
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
     WGPUBindGroup skyBind;
+    WGPUTexture voxTex;
+    WGPUTextureView voxView;
     int ready; // труба собрана
     float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
     float maxSteps; // текущий лимит марша: 100 -> 25 по просадке, обратно по запасу
@@ -215,19 +218,64 @@ static int app_frame(App *app) {
         bgdef.entryCount = 1;
         bgdef.entries = &be;
         app->bind = wgpuDeviceCreateBindGroup(app->device, &bgdef);
+        // Воксельный патч 48x64x48 в 3D-текстуру (R8Uint, строки паддинг 256).
+        {
+            WGPUTextureDescriptor td;
+            memset(&td, 0, sizeof td);
+            td.size.width = VOX_PW;
+            td.size.height = VOX_SY;
+            td.size.depthOrArrayLayers = VOX_PZ;
+            td.mipLevelCount = 1;
+            td.sampleCount = 1;
+            td.dimension = WGPUTextureDimension_3D;
+            td.format = WGPUTextureFormat_R8Uint;
+            td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+            app->voxTex = wgpuDeviceCreateTexture(app->device, &td);
+            WGPUTextureViewDescriptor vd;
+            memset(&vd, 0, sizeof vd);
+            vd.format = WGPUTextureFormat_R8Uint;
+            vd.dimension = WGPUTextureViewDimension_3D;
+            vd.mipLevelCount = 1;
+            vd.arrayLayerCount = 1;
+            vd.aspect = WGPUTextureAspect_All;
+            app->voxView = wgpuTextureCreateView(app->voxTex, &vd);
+            static uint8_t staging[256 * VOX_SY * VOX_PZ];
+            uint8_t vox[VOX_PW * VOX_SY * VOX_PZ];
+            vox_gen_patch(vox, 0, 0, 1337);
+            for (int z = 0; z < VOX_PZ; z++)
+                for (int y = 0; y < VOX_SY; y++)
+                    memcpy(&staging[(size_t)(z * VOX_SY + y) * 256],
+                           &vox[((size_t)y * VOX_PZ + (size_t)z) * VOX_PW], VOX_PW);
+            WGPUTexelCopyTextureInfo dst;
+            memset(&dst, 0, sizeof dst);
+            dst.texture = app->voxTex;
+            dst.aspect = WGPUTextureAspect_All;
+            WGPUTexelCopyBufferLayout layout;
+            memset(&layout, 0, sizeof layout);
+            layout.bytesPerRow = 256;
+            layout.rowsPerImage = VOX_SY;
+            WGPUExtent3D extent;
+            memset(&extent, 0, sizeof extent);
+            extent.width = VOX_PW;
+            extent.height = VOX_SY;
+            extent.depthOrArrayLayers = VOX_PZ;
+            wgpuQueueWriteTexture(app->queue, &dst, staging, sizeof staging, &layout, &extent);
+            printf("voxels OK: patch %dx%dx%d seed 1337\n", VOX_PW, VOX_SY, VOX_PZ);
+        }
         // Печка неба + вторая бинд-группа (LUT): текстуры фиксированы.
         sky_luts_init(&app->sky, app->device, app->queue);
         {
             WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(app->pipeline, 1);
-            WGPUBindGroupEntry e[3];
+            WGPUBindGroupEntry e[4];
             memset(e, 0, sizeof e);
             e[0].binding = 0; e[0].textureView = app->sky.sunView;
             e[1].binding = 1; e[1].textureView = app->sky.moonView;
             e[2].binding = 2; e[2].sampler = app->sky.smp;
+            e[3].binding = 3; e[3].textureView = app->voxView;
             WGPUBindGroupDescriptor d;
             memset(&d, 0, sizeof d);
             d.layout = l;
-            d.entryCount = 3;
+            d.entryCount = 4;
             d.entries = e;
             app->skyBind = wgpuDeviceCreateBindGroup(app->device, &d);
             wgpuBindGroupLayoutRelease(l);
@@ -277,7 +325,14 @@ static int app_frame(App *app) {
     if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
         glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) app->camPos.y -= sp;
     float cx = app->camPos.x, cy = app->camPos.y, cz = app->camPos.z;
-    sdf_guard_fly(&cx, &cy, &cz, fwd);
+    // Guard по высоте рельефа: не ниже поверхности + 0.6 (мир воксельный).
+    int gx = (int)floorf(cx), gz = (int)floorf(cz);
+    if (gx >= 0 && gz >= 0 && gx < VOX_PW && gz < VOX_PZ) {
+        float minY = (float)vox_height(gx, gz, 1337) + 0.6f;
+        if (cy < minY) cy = minY;
+    } else if (cy < 0.6f) {
+        cy = 0.6f;
+    }
     app->camPos = v3(cx, cy, cz);
 
     SdfUBO u;
@@ -387,8 +442,8 @@ int main(int argc, char **argv) {
     aci.userdata1 = &app;
     wgpuInstanceRequestAdapter(app.inst, &aopt, aci);
 
-    app.camPos = v3(3.94f, 1.48f, -2.70f);
-    app.yaw = 2.54; app.pitch = -0.30; app.speed = 4.0;
+    app.camPos = v3(32.0f, 42.0f, 12.0f); // над патчем, взгляд в центр
+    app.yaw = 2.16; app.pitch = -0.69; app.speed = 4.0;
     app.dayT = 0.0; app.cloudT = 0.0; app.timeScale = 1.0;
     app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();

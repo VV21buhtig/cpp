@@ -25,7 +25,7 @@ endif()
 # GPU-путь: натив — предсборка wgpu-native (без depot_tools/gn, качаем бинарники);
 # веб — emdawnwebgpu-порт (тот же webgpu.h, тот же C-исходник).
 if(EMSCRIPTEN)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   set_target_properties(sdf_native_webgpu PROPERTIES SUFFIX ".html")
   # Порты нужны и компиляции (заголовки), и линковке.
@@ -39,15 +39,19 @@ else()
     GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
     GIT_TAG dawn-7069)
   FetchContent_MakeAvailable(webgpu-distribution)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/sdf_math.c csrc/sky_lut.c csrc/vox/vox_gen.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
 endif()
+file(GLOB SDF_WGSL_PARTS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf/*.wgsl"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky/*.wgsl")
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
   COMMAND ${CMAKE_COMMAND} -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/shaders
     -DDST=${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
-  COMMENT "embed shaders/sdf/*.wgsl")
+  DEPENDS ${SDF_WGSL_PARTS}
+  COMMENT "embed shaders (sdf+sky)")
 target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)
 if(NOT EMSCRIPTEN)
