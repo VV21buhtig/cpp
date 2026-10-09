@@ -104,6 +104,16 @@ static void set_locked(GLFWwindow *w, int locked) {
     glfwGetWindowSize(w, &ww, &hh);
     g_lx = ww * 0.5; g_ly = hh * 0.5;
 }
+#define CAM_RADIUS 0.25f // толщина камеры: центр не подходит к стене ближе
+
+// AABB: ни один из 4 углов не должен залезть в стену
+static int check_aabb(float x, float z, float y) {
+    return vox_floor(x - CAM_RADIUS, z - CAM_RADIUS, y) &&
+           vox_floor(x + CAM_RADIUS, z - CAM_RADIUS, y) &&
+           vox_floor(x - CAM_RADIUS, z + CAM_RADIUS, y) &&
+           vox_floor(x + CAM_RADIUS, z + CAM_RADIUS, y);
+}
+
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
     if (!g_locked || !g_app) { g_lx = x; g_ly = y; return; }
@@ -337,9 +347,12 @@ static int app_frame(App *app) {
     // Скольжение вдоль холма: целиком -> только X -> только Z -> стоим.
     float cy0 = app->camPos.y;
     float nx = app->camPos.x + wish.x, nz = app->camPos.z + wish.z;
-    if (vox_floor(nx, nz, cy0)) { app->camPos.x = nx; app->camPos.z = nz; }
-    else if (vox_floor(app->camPos.x + wish.x, app->camPos.z, cy0)) { app->camPos.x += wish.x; }
-    else if (vox_floor(app->camPos.x, app->camPos.z + wish.z, cy0)) { app->camPos.z += wish.z; }
+    if (check_aabb(nx, nz, cy0)) {
+        app->camPos.x = nx;
+        app->camPos.z = nz;
+    }
+    else if (check_aabb(app->camPos.x + wish.x, app->camPos.z, cy0)) { app->camPos.x += wish.x; }
+    else if (check_aabb(app->camPos.x, app->camPos.z + wish.z, cy0)) { app->camPos.z += wish.z; }
     if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) app->camPos.y += sp;
     if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
         glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) app->camPos.y -= sp;
