@@ -15,6 +15,7 @@
 #include "sdf_ubo.h"
 #include "sdf_scene.h"
 #include "sdf_gpu.h"
+#include "sky_lut.h"
 #include "sdf_wgsl.h"
 
 #ifdef __EMSCRIPTEN__
@@ -39,6 +40,8 @@ typedef struct {
     WGPURenderPipeline pipeline;
     WGPUBindGroup bind;
     WGPUBindGroupLayout bgl;
+    SkyLuts sky;
+    WGPUBindGroup skyBind;
     int ready; // труба собрана
     float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
     float maxSteps; // текущий лимит марша: 100 -> 25 по просадке, обратно по запасу
@@ -212,6 +215,23 @@ static int app_frame(App *app) {
         bgdef.entryCount = 1;
         bgdef.entries = &be;
         app->bind = wgpuDeviceCreateBindGroup(app->device, &bgdef);
+        // Печка неба + вторая бинд-группа (LUT): текстуры фиксированы.
+        sky_luts_init(&app->sky, app->device, app->queue);
+        {
+            WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(app->pipeline, 1);
+            WGPUBindGroupEntry e[3];
+            memset(e, 0, sizeof e);
+            e[0].binding = 0; e[0].textureView = app->sky.sunView;
+            e[1].binding = 1; e[1].textureView = app->sky.moonView;
+            e[2].binding = 2; e[2].sampler = app->sky.smp;
+            WGPUBindGroupDescriptor d;
+            memset(&d, 0, sizeof d);
+            d.layout = l;
+            d.entryCount = 3;
+            d.entries = e;
+            app->skyBind = wgpuDeviceCreateBindGroup(app->device, &d);
+            wgpuBindGroupLayoutRelease(l);
+        }
         app->ready = 1;
         printf("pipe OK: sdf.wgsl -> triangle + UBO\n");
         return 0;
@@ -262,9 +282,12 @@ static int app_frame(App *app) {
 
     SdfUBO u;
     memset(&u, 0, sizeof u);
+    Vec3 sunDir = sdf_sun((float)app->dayT);
+    Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
+    sky_luts_update(&app->sky, sunDir, moonDir, cy); // та же очередь: печка раньше кадра
     u.camPos = app->camPos; u.time = (float)app->cloudT;
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
-    u.sunDir = sdf_sun((float)app->dayT); u.maxSteps = app->maxSteps;
+    u.sunDir = sunDir; u.maxSteps = app->maxSteps;
     u.resY = (float)hh;
     wgpuQueueWriteBuffer(app->queue, app->ubo, 0, &u, sizeof u);
 
@@ -301,6 +324,7 @@ static int app_frame(App *app) {
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
     wgpuRenderPassEncoderSetPipeline(pass, app->pipeline);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, app->bind, 0, 0);
+    wgpuRenderPassEncoderSetBindGroup(pass, 1, app->skyBind, 0, 0);
     wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);

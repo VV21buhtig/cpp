@@ -5,6 +5,42 @@ fn hash33(p: vec3f) -> vec3f {
   return fract((q.xxy + q.yxx) * q.zyx);
 }
 
+// LUT неба из печки (см. shaders/sky/): сэмплятся тут, пекутся в sky_lut.c.
+@group(1) @binding(0) var skySunTex: texture_2d<f32>;
+@group(1) @binding(1) var skyMoonTex: texture_2d<f32>;
+@group(1) @binding(2) var skySmp: sampler;
+
+fn safeacosM(x: f32) -> f32 { return acos(clamp(x, -1.0, 1.0)); }
+
+fn skyLutUv(ray_dir: vec3f, sun_dir: vec3f) -> vec2f {
+  let hFrac = clamp((u.camPos.y - 62.0) / 64.0, 0.0, 1.0);
+  let vp = vec3f(0.0, 6.360 + 0.0003 + hFrac * 0.002, 0.0);
+  let height = length(vp);
+  let up = vp / height;
+  let horizon_angle = safeacosM(sqrt(height * height - 6.360 * 6.360) / height);
+  let altitude_angle = horizon_angle - acos(clamp(dot(ray_dir, up), -1.0, 1.0));
+  var azimuth_angle: f32;
+  if (abs(altitude_angle) > (0.5 * 3.14159265 - 0.0001)) {
+    azimuth_angle = 0.0;
+  } else {
+    let right = cross(sun_dir, up);
+    let forward = cross(up, right);
+    let projected = normalize(ray_dir - up * dot(ray_dir, up) + vec3f(1e-6, 0.0, 0.0));
+    azimuth_angle = atan2(dot(projected, right), dot(projected, forward)) + 3.14159265;
+  }
+  let v = 0.5 + 0.5 * sign(altitude_angle) * sqrt(abs(altitude_angle) * 2.0 / 3.14159265);
+  return vec2f(azimuth_angle / (2.0 * 3.14159265), v);
+}
+
+fn lum3(c: vec3f) -> f32 { return dot(c, vec3f(0.2126, 0.7152, 0.0722)); }
+
+// Сырая физика из LUT. Уровни нормируются формой (см. sky): точные SUN_I/MOON_I
+// их illuminance нам неизвестны, в отношении почти сокращаются.
+fn skyPhys(dir: vec3f, sunDir: vec3f, moonDir: vec3f) -> vec3f {
+  return textureSampleLevel(skySunTex, skySmp, skyLutUv(dir, sunDir), 0.0).rgb * 3.0
+       + textureSampleLevel(skyMoonTex, skySmp, skyLutUv(dir, moonDir), 0.0).rgb * 0.02;
+}
+
 fn skyGrad(rd: vec3f, sunDir: vec3f) -> vec3f {
   let dayF = clamp(sunDir.y, -1.0, 1.0);
   let sunset = pow(clamp(1.0 - abs(dayF), 0.0, 1.0), 3.0);
@@ -30,6 +66,13 @@ fn sky(rd: vec3f, sunDir: vec3f) -> vec3f {
   let night = smoothstep(0.02, -0.12, dayF);
   let sunCol = mix(vec3f(1.0, 0.45, 0.20), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
   var sk = skyGrad(rd, sunDir);
+  // Форма из физики: отношение к зениту модулирует градиент (уровни наши).
+  let moonDir0 = -sunDir;
+  let up0 = vec3f(0.0, 1.0, 0.0);
+  let zen = skyPhys(up0, sunDir, moonDir0);
+  let raw = skyPhys(rd, sunDir, moonDir0);
+  let ratio = clamp(raw / max(lum3(zen), 1e-3), vec3f(0.0), vec3f(3.0));
+  sk *= (0.35 + 0.65 * ratio);
   // Звёзды и луна из K (упрощены: 1 слой сетки, диск без кратеров).
   // Луна opposite солнца — видна ночью. Всё гаснет днём.
   let mdir = -sunDir;
