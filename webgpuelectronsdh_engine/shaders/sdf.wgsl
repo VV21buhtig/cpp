@@ -30,8 +30,11 @@ fn map(p: vec3f) -> vec2f {
   return m;
 }
 
-fn calcNormal(p: vec3f) -> vec3f {
-  let e = vec2f(0.001, -0.001);
+fn calcNormal(p: vec3f, t: f32) -> vec3f {
+  // Эпсилон от дистанции: фиксированный на дальняке даёт шум нормали
+  // (оплавленные грани) — канон iq: масштаб от t.
+  let ee = max(0.001 * t, 0.0005);
+  let e = vec2f(ee, -ee);
   return normalize(
     e.xyy * map(p + e.xyy).x + e.yyx * map(p + e.yyx).x +
     e.yxy * map(p + e.yxy).x + e.xxx * map(p + e.xxx).x);
@@ -57,15 +60,15 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   for (var i = 0; i < 100; i++) {
     if (f32(i) >= u.maxSteps) { break; }
     let h = map(u.camPos + rd * t).x;
-    if (h < 0.001) { hit = t; break; }
+    if (h < max(0.001 * t, 0.0002)) { hit = t; break; } // порог от t: иначе на дальняке шаги мельчают и лимит съедает хит
     t += h;
-    if (t > 20.0) { break; }
+    if (t > 60.0) { break; } // maxT > макс. dist (20) + сцена: дальнее не режем
   }
 
   if (hit < 0.0) {
     return vec4f(vec3f(0.02, 0.03, 0.06), 1.0); // фон: тёмный, не небо
   }
-  let n = calcNormal(u.camPos + rd * hit);
+  let n = calcNormal(u.camPos + rd * hit, hit);
   let l = normalize(vec3f(-0.5, 0.8, 0.35));
   let col = vec3f(0.60, 0.65, 0.75) * (0.25 + 0.90 * max(dot(n, l), 0.0));
   return vec4f(col, 1.0);
