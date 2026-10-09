@@ -51,7 +51,7 @@ fn voxAO(pos: vec3f, n: vec3f, t: f32) -> f32 {
     occ += voxOcc(c) * sca;
     sca *= 0.7;
   }
-  let ao = clamp(1.0 - occ * 0.2, 0.0, 1.0);
+  let ao = clamp(1.0 - occ * 0.1, 0.0, 1.0);
   // Усечение по дальности: дальше 60 AO не видно — не считаем тьму.
   return mix(1.0, ao, clamp(1.0 - t / 60.0, 0.0, 1.0));
 }
