@@ -43,11 +43,15 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {
   let tdx = select(1e9, abs(1.0 / rd.x), ax > 1e-9);
   let tdy = select(1e9, abs(1.0 / rd.y), ay > 1e-9);
   let tdz = select(1e9, abs(1.0 / rd.z), az > 1e-9);
-  let cell0 = vec3f(p) + vec3f(0.5);
+  // Инит — знаком: (p-ro) отрицательно при луче назад, abs давал tm<0
+  // и порядок обхода ломался (стоя — стабильно-криво, в движении — гармошка).
+  let idx = select(1e9, 1.0 / rd.x, ax > 1e-9);
+  let idy = select(1e9, 1.0 / rd.y, ay > 1e-9);
+  let idz = select(1e9, 1.0 / rd.z, az > 1e-9);
   let bx = select(select(0.5, 1.0, step.x > 0), 0.0, step.x < 0);
   let by = select(select(0.5, 1.0, step.y > 0), 0.0, step.y < 0);
   let bz = select(select(0.5, 1.0, step.z > 0), 0.0, step.z < 0);
-  var tm = (vec3f(p) + vec3f(bx, by, bz) - ro) * vec3f(tdx, tdy, tdz);
+  var tm = (vec3f(p) + vec3f(bx, by, bz) - ro) * vec3f(idx, idy, idz);
   var n = vec3f(0.0);
   var t = seg.x;
   for (var i = 0; i < 192; i++) {

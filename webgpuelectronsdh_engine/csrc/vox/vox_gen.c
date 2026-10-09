@@ -46,8 +46,7 @@ void vox_gen(VoxChunk *c, uint32_t seed) {
     }
 }
 
-void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed) {
-    VoxChunk c;
+void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed) {    VoxChunk c;
     for (int pz = 0; pz < VOX_PATCH; pz++) {
         for (int px = 0; px < VOX_PATCH; px++) {
             c.cx = cx0 + px;
@@ -65,4 +64,63 @@ void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed) {
             }
         }
     }
+}
+
+static uint8_t probe_at(const uint8_t *vox, int x, int y, int z) {
+    if (x < 0 || y < 0 || z < 0 || x >= VOX_PW || y >= VOX_SY || z >= VOX_PZ) return B_AIR;
+    return vox[((size_t)y * VOX_PZ + (size_t)z) * VOX_PW + (size_t)x];
+}
+
+float vox_probe(const uint8_t *vox, float ox, float oy, float oz,
+                float dx, float dy, float dz, float maxT,
+                float *nx, float *ny, float *nz, uint8_t *id) {
+    *nx = 0; *ny = 0; *nz = 0; *id = 0;
+    float len = sqrtf(dx*dx + dy*dy + dz*dz);
+    if (len < 1e-9f) return -1.0f;
+    dx /= len; dy /= len; dz /= len;
+    // Вход в бокс (slab).
+    float tEnter = 0.0f, tExit = maxT;
+    {
+        float t0x = (0.0f - ox) / dx, t1x = (48.0f - ox) / dx;
+        float t0y = (0.0f - oy) / dy, t1y = (64.0f - oy) / dy;
+        float t0z = (0.0f - oz) / dz, t1z = (48.0f - oz) / dz;
+        float mnx = t0x < t1x ? t0x : t1x, mxx = t0x > t1x ? t0x : t1x;
+        float mny = t0y < t1y ? t0y : t1y, mxy = t0y > t1y ? t0y : t1y;
+        float mnz = t0z < t1z ? t0z : t1z, mxz = t0z > t1z ? t0z : t1z;
+        float en = mnx > mny ? (mnx > mnz ? mnx : mnz) : (mny > mnz ? mny : mnz);
+        float ex = mxx < mxy ? (mxx < mxz ? mxx : mxz) : (mxy < mxz ? mxy : mxz);
+        if (en > ex || ex < 0.0f) return -1.0f;
+        if (en > 0.0f) tEnter = en;
+        if (ex < tExit) tExit = ex;
+    }
+    int px = (int)floorf(ox + dx * tEnter);
+    int py = (int)floorf(oy + dy * tEnter);
+    int pz = (int)floorf(oz + dz * tEnter);
+    int sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+    float tdx = fabsf(dx) > 1e-9f ? fabsf(1.0f / dx) : 1e9f;
+    float tdy = fabsf(dy) > 1e-9f ? fabsf(1.0f / dy) : 1e9f;
+    float tdz = fabsf(dz) > 1e-9f ? fabsf(1.0f / dz) : 1e9f;
+    float idx = fabsf(dx) > 1e-9f ? 1.0f / dx : 1e9f;
+    float idy = fabsf(dy) > 1e-9f ? 1.0f / dy : 1e9f;
+    float idz = fabsf(dz) > 1e-9f ? 1.0f / dz : 1e9f;
+    float tmx = ((sx > 0 ? (float)(px + 1) : (float)px) - ox) * idx;
+    float tmy = ((sy > 0 ? (float)(py + 1) : (float)py) - oy) * idy;
+    float tmz = ((sz > 0 ? (float)(pz + 1) : (float)pz) - oz) * idz;
+    float t = tEnter;
+    for (int i = 0; i < 256; i++) {
+        if (tmx < tmy && tmx < tmz) {
+            px += sx; t = tmx; tmx += tdx;
+            *nx = -(float)sx; *ny = 0; *nz = 0;
+        } else if (tmy < tmz) {
+            py += sy; t = tmy; tmy += tdy;
+            *nx = 0; *ny = -(float)sy; *nz = 0;
+        } else {
+            pz += sz; t = tmz; tmz += tdz;
+            *nx = 0; *ny = 0; *nz = -(float)sz;
+        }
+        if (t > tExit) return -1.0f;
+        uint8_t v = probe_at(vox, px, py, pz);
+        if (v != B_AIR) { *id = v; return t; }
+    }
+    return -1.0f;
 }
