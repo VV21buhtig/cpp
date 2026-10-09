@@ -40,6 +40,8 @@ typedef struct {
     WGPUBindGroup bind;
     WGPUBindGroupLayout bgl;
     int ready; // труба собрана
+    float fpsEma; // сглаженный fps для губернатора шагов (идея из boids BOID_MIN_FPS)
+    float maxSteps; // текущий лимит марша: 100 -> 25 по просадке, обратно по запасу
     Vec3 camPos;
     double yaw, pitch, speed;
     double t0, prevT, lastLog;
@@ -224,6 +226,13 @@ static int app_frame(App *app) {
     float dt = (float)(now - app->prevT);
     app->prevT = now;
     if (dt > 0.05f) dt = 0.05f;
+    if (dt > 0.0f) {
+        float fps = 1.0f / dt;
+        app->fpsEma = app->fpsEma > 0.0f ? app->fpsEma * 0.95f + fps * 0.05f : fps;
+        // Губернатор: держим >=45 fps шагами марша (Vega). Гистерезис: вниз быстро, вверх медленно.
+        if (app->fpsEma < 45.0f && app->maxSteps > 25.0f) app->maxSteps -= 5.0f;
+        else if (app->fpsEma > 57.0f && app->maxSteps < 100.0f) app->maxSteps += 1.0f;
+    }
 
     float cp = cosf((float)app->pitch);
     Vec3 fwd = v3(cp * cosf((float)app->yaw), sinf((float)app->pitch), cp * sinf((float)app->yaw));
@@ -245,7 +254,7 @@ static int app_frame(App *app) {
     memset(&u, 0, sizeof u);
     u.camPos = app->camPos; u.time = (float)t;
     u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
-    u.sunDir = sdf_sun((float)t); u.maxSteps = 100.0f;
+    u.sunDir = sdf_sun((float)t); u.maxSteps = app->maxSteps;
     u.resY = (float)hh;
     wgpuQueueWriteBuffer(app->queue, app->ubo, 0, &u, sizeof u);
 
@@ -298,8 +307,8 @@ static int app_frame(App *app) {
 
     if (t - app->lastLog >= 4.0) {
         app->lastLog = t;
-        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f\n",
-            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed);
+        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f\n",
+            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps);
     }
     app->frame++;
     if (app->maxFrames > 0 && app->frame >= app->maxFrames) return 1;
@@ -346,6 +355,7 @@ int main(int argc, char **argv) {
 
     app.camPos = v3(3.94f, 1.48f, -2.70f);
     app.yaw = 2.54; app.pitch = -0.30; app.speed = 4.0;
+    app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();
     app.lastLog = -10.0;
 
