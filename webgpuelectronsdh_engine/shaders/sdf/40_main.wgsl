@@ -44,6 +44,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   if (hit.id == 1u) { // трава: верх зелёный, бока земля
     base = select(vec3f(0.45, 0.32, 0.20), vec3f(0.35, 0.62, 0.25), n.y > 0.5);
   } else if (hit.id == 2u) { base = vec3f(0.45, 0.32, 0.20); } // земля
+  else if (hit.id == 4u) { base = vec3f(0.35, 0.22, 0.12); } // ствол
+  else if (hit.id == 5u) { base = vec3f(0.15, 0.35, 0.12); } // листва
   else if (hit.id == 8u) { base = vec3f(0.12, 0.12, 0.13); } // бедрок
   let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL);
   let ndl = max(dot(n, sunDir), 0.0);

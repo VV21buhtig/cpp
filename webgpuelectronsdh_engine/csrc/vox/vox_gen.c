@@ -44,6 +44,28 @@ void vox_gen(VoxChunk *c, uint32_t seed) {
             vox_set(c, x, 0, z, B_BEDROCK);
         }
     }
+    // Деревья: кандидат каждые ~8 клеток, крона 5x3 может лезть к соседям —
+    // считаем в мировых, пишем через vox_set (клиппит), сосед построит своё.
+    for (int lz = -2; lz < VOX_SZ + 2; lz++) {
+        for (int lx = -2; lx < VOX_SX + 2; lx++) {
+            int wx = c->cx * VOX_SX + lx;
+            int wz = c->cz * VOX_SZ + lz;
+            if ((hash2(wx, wz, seed ^ 0x7ee5) & 63u) != 0) continue;
+            int h = vox_height(wx, wz, seed);
+            int x = wx - c->cx * VOX_SX, z = wz - c->cz * VOX_SZ;
+            for (int y = h + 1; y <= h + 4; y++) vox_set(c, x, y, z, B_LOG);
+            for (int dy = 3; dy <= 5; dy++) {
+                int r = dy == 5 ? 1 : 2;
+                for (int ox = -r; ox <= r; ox++)
+                    for (int oz = -r; oz <= r; oz++) {
+                        if (ox * ox + oz * oz > r * r + 1) continue;
+                        int ex = x + ox, ez = z + oz, ey = h + dy;
+                        if (vox_in(ex, ey, ez) && vox_get(c, ex, ey, ez) == B_AIR)
+                            vox_set(c, ex, ey, ez, B_LEAVES);
+                    }
+            }
+        }
+    }
 }
 
 void vox_gen_patch(uint8_t *dst, int cx0, int cz0, uint32_t seed) {    VoxChunk c;
