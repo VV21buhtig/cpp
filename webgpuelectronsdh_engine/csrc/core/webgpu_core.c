@@ -301,7 +301,9 @@ static void core_build_all(VoxCore *c, const RcView *v) {
     printf("pipe OK: core ready\n");
 }
 
-static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox16) {
+static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox16,
+                             const VoxChunk *nb[6]) {
+    (void)nb; // DDA читает сырые воксели, соседи не нужны
     VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
     if (!c->ready) return 0; // устройства нет — app повторит (dirty не гасим)
     int sx = wrap11(cx), sz = wrap11(cz);
