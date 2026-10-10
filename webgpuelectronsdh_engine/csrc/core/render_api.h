@@ -1,13 +1,21 @@
 #ifndef RENDER_API_H
 #define RENDER_API_H
-// Ядро рендера: API, которое реализует каждый пайплайн (webgpu/gl/vulkan).
+// Ядра рендера: РАЗНЫЕ движки на выбор (воксель-DDA, воксель-растр, SDF,
+// вектор, пиксели). Общее только рамка кадра (RcView + init/frame/fps),
+// входы у каждого домена свои. Ядро объявляет caps, app/редактор льют то,
+// что ядро ест. Неподдерживаемый вход = NULL.
 // Механики (камера, ввод, меню, время, стриминг-решения) — снаружи, в app.
-// Ядро владеет: surface/device, пайплайны, текстуры, UBO, заливки, present.
 #include "sdf_math.h"
 #include "vox/vox_chunk.h"
 
+// Домен данных ядра (битмаска caps).
+#define RC_CAP_VOXEL  (1u << 0) // чанки 16x64x16: upload_chunk/set_origin
+#define RC_CAP_SDF    (1u << 1) // сцена примитивов: upload_sdf
+#define RC_CAP_VECTOR (1u << 2) // 2D-примитивы: upload_vector
+#define RC_CAP_PIXEL  (1u << 3) // CPU-кадр RGBA: upload_pixels
+
 typedef struct {
-    // Кадр вида (рендер-камера)
+    // Кадр вида (рендер-камера). 2D-доменам нужны в основном resW/resH/time.
     Vec3 camPos;
     float yaw, pitch, fov;
     int resW, resH;
@@ -27,26 +35,53 @@ typedef struct {
     float mainYaw, mainPitch;
 } RcView;
 
+// SDF-примитив (домен RC_CAP_SDF). p0 — центр/точка, p1 — второй конец/
+// размер, r — радиус/скругление, mat — индекс материала палитры ядра.
+typedef struct {
+    int kind; // 0 сфера, 1 коробка, 2 тор, 3 плоскость, 4 капсула
+    Vec3 p0, p1;
+    float r;
+    int mat;
+} RcSdfObj;
+
+// 2D-примитив (домен RC_CAP_VECTOR). a,b,c,d — параметры фигуры:
+// rect: x,y,w,h; circle: cx,cy,r,-; line: x0,y0,x1,y1.
+typedef struct {
+    int kind; // 0 rect, 1 circle, 2 line
+    float a, b, c, d;
+    float rgba[4];
+} RcVecShape;
+
 typedef struct RenderCore RenderCore;
 struct RenderCore {
     void *ctx;
+    unsigned caps; // RC_CAP_* — что ядро умеет
+    const char *name; // "webgpu", "gl", ... — для выбора в редакторе
     // Окно уже создано (GLFW), surface/устройство/ресурсы — тут.
     int (*init)(RenderCore *rc, void *glfwWindow);
     void (*shutdown)(RenderCore *rc);
     // Кадр мира из вида. Внутри: bake-if-needed, заливки, сабмит, present.
     void (*frame)(RenderCore *rc, const RcView *v);
-    // Стриминг: app решает ЧТО (dirty из мира), ядро — КАК (текстура+теги).
+    // --- Домен VOXEL (NULL если нет RC_CAP_VOXEL) ---
     // Стриминг: app решает ЧТО (dirty из мира), ядро — КАК.
     // nb[6]: соседи (-x,+x,-y,+y,-z,+z) для швов, NULL = воздух.
     // Возвращает 1 если залил (тогда гасить dirty), 0 если рано.
     int (*upload_chunk)(RenderCore *rc, int cx, int cz, const uint8_t *vox16,
                         const VoxChunk *nb[6]); // 16x64x16
     void (*set_origin)(RenderCore *rc, int ox, int oz); // чанк texel (0,*,0)
+    // --- Домен SDF (NULL если нет RC_CAP_SDF). Полная сцена каждый раз. ---
+    int (*upload_sdf)(RenderCore *rc, const RcSdfObj *objs, int n);
+    // --- Домен VECTOR (NULL если нет RC_CAP_VECTOR). Кадр примитивов. ---
+    int (*upload_vector)(RenderCore *rc, const RcVecShape *shapes, int n);
+    // --- Домен PIXEL (NULL если нет RC_CAP_PIXEL). CPU-кадр на весь экран. ---
+    int (*upload_pixels)(RenderCore *rc, const uint8_t *rgba, int w, int h);
     // fps кадра для губернатора снаружи (0 пока нет данных)
     float (*fps)(RenderCore *rc);
 };
 
 RenderCore *rc_webgpu_create(void);
 RenderCore *rc_gl_create(void); // натив only (GL 4.5, не WebGL)
+// Выбор по имени ("webgpu", "gl"). NULL если нет такого. Для редактора.
+RenderCore *rc_create(const char *name);
 void rc_destroy(RenderCore *rc);
 #endif

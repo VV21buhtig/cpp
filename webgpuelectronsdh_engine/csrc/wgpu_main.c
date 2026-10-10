@@ -369,9 +369,15 @@ int main(int argc, char **argv) {
     glfwSetScrollCallback(app.win, on_scroll);
     set_locked(app.win, 1);
 
-    app.rc = wantGL ? rc_gl_create() : rc_webgpu_create();
-    if (!app.rc || !app.rc->init(app.rc, app.win)) { fprintf(stderr, "core init fail\n"); return 1; }
-    printf("core: %s\n", wantGL ? "gl" : "webgpu");
+    app.rc = rc_create(coreName);
+    if (!app.rc) { fprintf(stderr, "no core '%s'\n", coreName); return 1; }
+    // Это воксельное app: ядру без воксельного входа тут делать нечего.
+    if (!(app.rc->caps & RC_CAP_VOXEL) || !app.rc->upload_chunk) {
+        fprintf(stderr, "core '%s' has no voxel input\n", app.rc->name);
+        return 1;
+    }
+    if (!app.rc->init(app.rc, app.win)) { fprintf(stderr, "core init fail\n"); return 1; }
+    printf("core: %s caps=0x%x\n", app.rc->name, app.rc->caps);
     vox_world_init(&app.world, 1337);
     sdf_settings_load(&app.settings, "settings.cfg");
     printf("settings: gamma=%.2f exposure=%.2f fog=%.2f fov=%.2f shadow=%.0f\n",

@@ -402,6 +402,8 @@ RenderCore *rc_gl_create(void) {
     GLCoreWrap *w = (GLCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
+    w->api.caps = RC_CAP_VOXEL; // растр мешей по вокселям, других входов нет
+    w->api.name = "gl";
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;

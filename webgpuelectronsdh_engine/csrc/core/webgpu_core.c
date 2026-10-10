@@ -525,6 +525,8 @@ RenderCore *rc_webgpu_create(void) {
     VoxCoreWrap *w = (VoxCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
+    w->api.caps = RC_CAP_VOXEL; // DDA-луч по вокселям, других входов нет
+    w->api.name = "webgpu";
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;
@@ -532,6 +534,17 @@ RenderCore *rc_webgpu_create(void) {
     w->api.set_origin = core_set_origin;
     w->api.fps = core_fps;
     return &w->api;
+}
+
+RenderCore *rc_create(const char *name) {
+    if (!name) return 0;
+    if (!strcmp(name, "webgpu")) return rc_webgpu_create();
+#ifndef __EMSCRIPTEN__
+    if (!strcmp(name, "gl")) return rc_gl_create();
+#else
+    (void)rc_gl_create;
+#endif
+    return 0;
 }
 
 void rc_destroy(RenderCore *rc) {
