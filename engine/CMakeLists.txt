@@ -9,9 +9,9 @@ find_package(glfw3 REQUIRED)
 add_executable(engine_test engine_test.c engine.c)
 # render_api.h тянет sdf_math.h/vox_chunk.h из игры (математика переедет
 # в engine/ вместе с игровым кодом — сейчас только путь, не копия).
+# render_api.h самодостаточен (vec.h + fwd VoxChunk): путей в игру нет.
 target_include_directories(engine_test PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../webgpuelectronsdh_engine/csrc)
+  ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine_test PRIVATE glfw m)
 target_compile_options(engine_test PRIVATE -Wall -Wextra)
 

@@ -16,8 +16,9 @@ endif()
 
 # CPU-каркас (окно+математика+арены), без GPU — только натив.
 if(NOT EMSCRIPTEN)
-add_executable(sdf_native csrc/main.c csrc/sdf_math.c)
-target_include_directories(sdf_native PRIVATE csrc)
+add_executable(sdf_native csrc/main.c)
+target_include_directories(sdf_native PRIVATE csrc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
 # Тест вокселей шага 1: генерация чанка, без рендера.
@@ -28,7 +29,7 @@ target_compile_options(vox_test PRIVATE -Wall -Wextra)
 # Тест матриц растровых ядер (GL/VK конвенции: глубина, lookAt).
 # mat4_test переехал в engine/ (математика движка).
 # SDF-демо: окно + sdf-ядро + сцена примитивов (натив, без webgpu).
-add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c ../engine/corelib.c csrc/sdf_math.c)
+add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c ../engine/corelib.c)
 target_include_directories(sdf_demo PRIVATE csrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
@@ -61,7 +62,7 @@ endif()
 # GPU-путь: натив — предсборка wgpu-native (без depot_tools/gn, качаем бинарники);
 # веб — emdawnwebgpu-порт (тот же webgpu.h, тот же C-исходник).
 if(EMSCRIPTEN)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   set_target_properties(sdf_native_webgpu PROPERTIES SUFFIX ".html")
   # Порты нужны и компиляции (заголовки), и линковке.
@@ -85,7 +86,7 @@ else()
       COMMENT "glslc ${SH}")
     list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
   endforeach()
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c ../engine/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/core/pix_core.c csrc/core/vec_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c csrc/vox/vox_sdf.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c ../engine/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/core/pix_core.c csrc/core/vec_core.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c csrc/vox/vox_sdf.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
   target_compile_definitions(sdf_native_webgpu PRIVATE
     VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")

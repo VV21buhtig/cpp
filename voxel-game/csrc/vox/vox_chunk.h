@@ -9,7 +9,7 @@
 #define VOX_SZ 16
 #define VOX_N (VOX_SX * VOX_SY * VOX_SZ)
 
-typedef struct {
+typedef struct VoxChunk {
     int cx, cz; // координаты чанка
     uint8_t id[VOX_N];
 } VoxChunk;
