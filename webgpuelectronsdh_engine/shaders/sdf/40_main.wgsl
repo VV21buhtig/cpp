@@ -116,13 +116,14 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   else if (u.mode > 2.5) { let c = clamp(hit.steps / 320.0, 0.0, 1.0); outc = vec3f(c, c * 0.3, 0.1); }
   else {
   let sunDir = normalize(u.sunDir);
-  // Тень — тем же DDA к солнцу (жёсткая). На весь чанк в поле зрения:
-  // дальность 120, фейд 100-120. Луч рвётся первым вокселем.
+  // Тень — тем же DDA к солнцу (жёсткая). Дальность от губернатора:
+  // steps 25..100 -> 30..120 (раньше maxSteps никто не читал, губернатор был плацебо).
   var sh = 1.0;
-  if (view.y > 0.5 && dot(n, sunDir) > 0.0 && hit.t < 120.0) {
-    let shHit = voxMarch(pos + n * 0.05, sunDir, 120.0);
+  float shRange = u.maxSteps * 1.2;
+  if (view.y > 0.5 && dot(n, sunDir) > 0.0 && hit.t < shRange) {
+    let shHit = voxMarch(pos + n * 0.05, sunDir, shRange);
     let shRaw = select(0.0, 1.0, shHit.t < 0.0);
-    let shFade = 1.0 - smoothstep(100.0, 120.0, hit.t);
+    let shFade = 1.0 - smoothstep(shRange - 20.0, shRange, hit.t);
     sh = mix(1.0, shRaw, shFade);
   }
   // Живой свет из K: тёплый низко, белый высоко, ночью гаснет.
