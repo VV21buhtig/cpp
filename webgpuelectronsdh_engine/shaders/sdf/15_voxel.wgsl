@@ -7,13 +7,19 @@
 @group(1) @binding(5) var tileSmp: sampler;
 
 fn tileUV(pos: vec3f, n: vec3f) -> vec2f {
+  // V перевёрнут: строка 0 PNG (верх картинки) = верх блока.
+  // Без флипа трава росла вниз, а низ боков зеленел.
   if (abs(n.y) > 0.5) { return fract(pos.xz); }
-  if (abs(n.x) > 0.5) { return fract(pos.zy); }
-  return fract(pos.xy);
+  if (abs(n.x) > 0.5) { return vec2f(fract(pos.z), 1.0 - fract(pos.y)); }
+  return vec2f(fract(pos.x), 1.0 - fract(pos.y));
 }
 
 fn tileLayer(id: u32, n: vec3f) -> i32 {
-  if (id == 1u) { return select(1, 0, n.y > 0.5); } // трава: верх/бок
+  if (id == 1u) { // трава: верх/низ/бок
+    if (n.y > 0.5) { return 0; }
+    if (n.y < -0.5) { return 2; } // снизу — земля, не трава
+    return 1;
+  }
   if (id == 2u) { return 2; } // земля
   if (id == 4u) { return select(4, 5, abs(n.y) > 0.5); } // бревно: бок/торец
   if (id == 5u) { return 6; } // листва
