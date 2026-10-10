@@ -212,13 +212,14 @@ static void vox_stream_sync(App *app, int pcx, int pcz) {
 
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
-    // Мышь — только своей камере: в дебаге без Ctrl главная едет вслепую, вид не трогаем.
     if (!g_locked || !g_app) { g_lx = x; g_ly = y; return; }
-    if (g_app->debugCam && !g_app->ctrlHeld) { g_lx = x; g_ly = y; return; }
-    g_app->yaw += (x - g_lx) * g_sens;
-    g_app->pitch -= (y - g_ly) * g_sens;
-    if (g_app->pitch > 1.45) g_app->pitch = 1.45;
-    if (g_app->pitch < -1.45) g_app->pitch = -1.45;
+    // В дебаге без Ctrl мышь крутит главную (вслепую), вид от свободной.
+    double *YW = &g_app->yaw, *PT = &g_app->pitch;
+    if (g_app->debugCam && !g_app->ctrlHeld) { YW = &g_app->mainYaw; PT = &g_app->mainPitch; }
+    *YW += (x - g_lx) * g_sens;
+    *PT -= (y - g_ly) * g_sens;
+    if (*PT > 1.45) *PT = 1.45;
+    if (*PT < -1.45) *PT = -1.45;
     g_lx = x; g_ly = y;
 }
 static void on_btn(GLFWwindow *w, int b, int act, int m) {
