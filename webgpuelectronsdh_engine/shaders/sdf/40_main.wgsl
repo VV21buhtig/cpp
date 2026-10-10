@@ -123,42 +123,25 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       cn[k] = MP + (sx * ax * MR + sy * 0.5 * MU + f * MF) * (dd / f);
     }
     var md = 1e9;
-    // Один расчёт пересечения с пирамидой: объём + маска.
-    // Вне конуса — почти чёрный: в дебаге видишь ровно то, что видит главная.
+    // Маска дебага: ТОЧКА хита внутри пирамиды главной (а не луч).
+    // Луч изнутри конуса всегда его «пересекает» — так маска никогда не срабатывала.
     {
-      let rel = u.camPos - MP;
-      let rof = vec3f(dot(rel, MR), dot(rel, MU), dot(rel, MF));
-      let rdf = vec3f(dot(rd, MR), dot(rd, MU), dot(rd, MF));
-      var tN = 0.0;
-      var tF = 1e9;
-      var ok = true;
-      if (abs(rdf.z) < 1e-9) {
-        if (rof.z < 1.0 || rof.z > 60.0) { ok = false; }
-      } else {
-        let ta = (1.0 - rof.z) / rdf.z;
-        let tb = (60.0 - rof.z) / rdf.z;
-        tN = max(tN, min(ta, tb));
-        tF = min(tF, max(ta, tb));
+      var fp = u.camPos + rd * 500.0;
+      if (hit.t >= 0.0) { fp = u.camPos + rd * hit.t; }
+      let rel = fp - MP;
+      let fz = dot(rel, MF);
+      var inside = fz >= 0.0 && fz <= 60.0;
+      if (inside) {
+        let fx = dot(rel, MR);
+        let fy = dot(rel, MU);
+        let ex = 0.3 + (fz / f) * ax;
+        let ey = 0.3 + (fz / f) * 0.5;
+        inside = abs(fx) <= ex && abs(fy) <= ey;
       }
-      let kx = ax / f;
-      let ky = 0.5 / f;
-      for (var s = 0; s < 4; s++) {
-        var A = 0.0;
-        var B = 0.0;
-        if (s == 0) { A = rdf.x - kx * rdf.z; B = -(rof.x - kx * rof.z); }
-        else if (s == 1) { A = -rdf.x - kx * rdf.z; B = -(-rof.x - kx * rof.z); }
-        else if (s == 2) { A = rdf.y - ky * rdf.z; B = -(rof.y - ky * rof.z); }
-        else { A = -rdf.y - ky * rdf.z; B = -(-rof.y - ky * rof.z); }
-        if (A > 1e-9) { tF = min(tF, B / A); }
-        else if (A < -1e-9) { tN = max(tN, B / A); }
-        else if (B < 0.0) { ok = false; }
-      }
-      if (ok && tN < tF && tF > 0.0) {
-        var tFw = tF;
-        if (hit.t >= 0.0) { tFw = min(tFw, hit.t); }
-        if (tN < tFw) { outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.16); }
-      } else {
+      if (!inside) {
         outc = vec3f(0.015);
+      } else {
+        outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.10);
       }
     }
     // ближний/дальний прямоугольники
