@@ -62,6 +62,8 @@ typedef struct {
     VoxWorld world;
     float streamOX, streamOZ; // мировая клетка texel (0,*,0) — в UBO pad0/pad1
     int mode; // дебаг-вид: 0 цвет, 1 нормали, 2 глубина (клавиша N)
+    int menuOpen; // меню настроек (Tab)
+    int menuSel;  // выбранная строка 0..2
     volatile int uboBusy[FRAMES_IN_FLIGHT]; // забор: слот занят, пока GPU не отработал кадр
     int ready; // труба собрана
     float fpsEma; // сглаженный fps для губернатора шагов (идея из B)
@@ -209,7 +211,32 @@ static void on_mouse(GLFWwindow *w, double x, double y) {
 }
 static void on_btn(GLFWwindow *w, int b, int act, int m) {
     (void)m;
-    if (b == GLFW_MOUSE_BUTTON_LEFT && act == GLFW_PRESS && !g_locked) set_locked(w, 1);
+    if (b != GLFW_MOUSE_BUTTON_LEFT || act != GLFW_PRESS) return;
+    if (!g_locked && g_app && !g_app->menuOpen) { set_locked(w, 1); return; }
+    // Клик по меню: строка по y (16..136 шаг 40), значение по x (120..280).
+    if (g_app && g_app->menuOpen) {
+        double cx, cy;
+        glfwGetCursorPos(w, &cx, &cy);
+        int ww, hh, fw, fh;
+        glfwGetWindowSize(w, &ww, &hh);
+        glfwGetFramebufferSize(w, &fw, &fh);
+        double px = ww > 0 ? cx * fw / ww : cx;
+        double py = hh > 0 ? cy * fh / hh : cy;
+        if (px >= 16 && px < 300 && py >= 16 && py < 140) {
+            int row = (int)((py - 16) / 40);
+            if (row < 0) row = 0;
+            if (row > 2) row = 2;
+            g_app->menuSel = row;
+            if (px >= 120) {
+                double f = (px - 120) / 160;
+                if (f < 0) f = 0;
+                if (f > 1) f = 1;
+                if (row == 0) g_app->settings.gamma = (float)(0.5 + f * 3.5);
+                else if (row == 1) g_app->settings.exposure = (float)(0.1 + f * 3.9);
+                else g_app->settings.fog = (float)(f * 3.0);
+            }
+        }
+    }
 }
 static void on_scroll(GLFWwindow *w, double dx, double dy) {
     (void)w; (void)dx;
@@ -331,7 +358,7 @@ static int app_frame(App *app) {
             app->gradeBuf = wgpuDeviceCreateBuffer(app->device, &gd);
             float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
             wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
-            printf("grade: gamma=%.2f exposure=%.2f (F5/F6, F7/F8)\n",
+            printf("grade: gamma=%.2f exposure=%.2f (Tab-меню)\n",
                 app->settings.gamma, app->settings.exposure);
         }
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
@@ -417,35 +444,45 @@ static int app_frame(App *app) {
     int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
     if (nDown && !nPrev) { app->mode = (app->mode + 1) % 3; printf("view mode=%d\n", app->mode); }
     nPrev = nDown;
-    // Грейд-хоткеи как слайдеры s_gamma: F5/F6 гамма, F7/F8 экспозиция. Сохраняем сразу.
-    {
-        static int p5 = 0, p6 = 0, p7 = 0, p8 = 0, p9 = 0, p10 = 0;
-        int k5 = glfwGetKey(app->win, GLFW_KEY_F5) == GLFW_PRESS;
-        int k6 = glfwGetKey(app->win, GLFW_KEY_F6) == GLFW_PRESS;
-        int k7 = glfwGetKey(app->win, GLFW_KEY_F7) == GLFW_PRESS;
-        int k8 = glfwGetKey(app->win, GLFW_KEY_F8) == GLFW_PRESS;
-        int k9 = glfwGetKey(app->win, GLFW_KEY_F9) == GLFW_PRESS;
-        int k10 = glfwGetKey(app->win, GLFW_KEY_F10) == GLFW_PRESS;
-        int ch = 0;
-        if (k5 && !p5) { app->settings.gamma -= 0.1f; ch = 1; }
-        if (k6 && !p6) { app->settings.gamma += 0.1f; ch = 1; }
-        if (k7 && !p7) { app->settings.exposure -= 0.1f; ch = 1; }
-        if (k8 && !p8) { app->settings.exposure += 0.1f; ch = 1; }
-        if (k9 && !p9) { app->settings.fog -= 0.1f; ch = 1; }
-        if (k10 && !p10) { app->settings.fog += 0.1f; ch = 1; }
-        p5 = k5; p6 = k6; p7 = k7; p8 = k8; p9 = k9; p10 = k10;
-        if (ch) {
-            if (app->settings.gamma < 0.5f) app->settings.gamma = 0.5f;
-            if (app->settings.gamma > 4.0f) app->settings.gamma = 4.0f;
-            if (app->settings.exposure < 0.1f) app->settings.exposure = 0.1f;
-            if (app->settings.exposure > 4.0f) app->settings.exposure = 4.0f;
-            if (app->settings.fog < 0.0f) app->settings.fog = 0.0f;
-            if (app->settings.fog > 3.0f) app->settings.fog = 3.0f;
-            float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
-            wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+    // Меню настроек (Tab): стрелки вместо хоткеев. Открыто — курсор свободен.
+    static int tabPrev = 0;
+    int tabDown = glfwGetKey(app->win, GLFW_KEY_TAB) == GLFW_PRESS;
+    if (tabDown && !tabPrev) {
+        app->menuOpen = !app->menuOpen;
+        if (app->menuOpen) { set_locked(app->win, 0); }
+        else {
+            set_locked(app->win, 1);
             sdf_settings_save(&app->settings, "settings.cfg");
-            printf("grade: gamma=%.2f exposure=%.2f fog=%.2f\n", app->settings.gamma, app->settings.exposure, app->settings.fog);
+            printf("grade: saved gamma=%.2f exposure=%.2f fog=%.2f\n",
+                app->settings.gamma, app->settings.exposure, app->settings.fog);
         }
+    }
+    tabPrev = tabDown;
+    if (app->menuOpen) {
+        static int upPrev = 0, dnPrev = 0;
+        int upD = glfwGetKey(app->win, GLFW_KEY_UP) == GLFW_PRESS;
+        int dnD = glfwGetKey(app->win, GLFW_KEY_DOWN) == GLFW_PRESS;
+        if (upD && !upPrev) { app->menuSel = (app->menuSel + 2) % 3; }
+        if (dnD && !dnPrev) { app->menuSel = (app->menuSel + 1) % 3; }
+        upPrev = upD; dnPrev = dnD;
+        // Удержание = плавно (1 ед/с). Без автоповтора клавы — по кадрам.
+        float rate = dt * 1.0f;
+        if (glfwGetKey(app->win, GLFW_KEY_LEFT) == GLFW_PRESS) {
+            if (app->menuSel == 0) app->settings.gamma -= rate;
+            else if (app->menuSel == 1) app->settings.exposure -= rate;
+            else app->settings.fog -= rate;
+        }
+        if (glfwGetKey(app->win, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+            if (app->menuSel == 0) app->settings.gamma += rate;
+            else if (app->menuSel == 1) app->settings.exposure += rate;
+            else app->settings.fog += rate;
+        }
+        if (app->settings.gamma < 0.5f) app->settings.gamma = 0.5f;
+        if (app->settings.gamma > 4.0f) app->settings.gamma = 4.0f;
+        if (app->settings.exposure < 0.1f) app->settings.exposure = 0.1f;
+        if (app->settings.exposure > 4.0f) app->settings.exposure = 4.0f;
+        if (app->settings.fog < 0.0f) app->settings.fog = 0.0f;
+        if (app->settings.fog > 3.0f) app->settings.fog = 3.0f;
     }
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
@@ -518,6 +555,12 @@ static int app_frame(App *app) {
     (void)fi;
 #endif
     wgpuQueueWriteBuffer(app->queue, app->ubo[fi], 0, &u, sizeof u);
+    // Грейд каждый кадр (16Б): значения + состояние меню (w=-1 закрыто).
+    {
+        float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog,
+                      app->menuOpen ? (float)app->menuSel : -1.0f};
+        wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+    }
 
     WGPUSurfaceTexture st;
     memset(&st, 0, sizeof st);
@@ -574,8 +617,6 @@ static int app_frame(App *app) {
             SdfSettings r;
             sdf_settings_load(&r, "settings.cfg");
             app->settings = r;
-            float g[4] = {r.gamma, r.exposure, r.fog, 0};
-            wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
             printf("grade: reload gamma=%.2f exposure=%.2f fog=%.2f\n", r.gamma, r.exposure, r.fog);
         }
     }
@@ -645,7 +686,7 @@ int main(int argc, char **argv) {
 
     app.camPos = v3(32.0f, 42.0f, 12.0f); // над патчем, взгляд в центр
     app.yaw = 2.16; app.pitch = -0.69; app.speed = 4.0;
-    app.mode = 0;
+    app.mode = 0; app.menuOpen = 0; app.menuSel = 0;
     app.dayT = 0.0; app.cloudT = 0.0; app.timeScale = 1.0;
     app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();

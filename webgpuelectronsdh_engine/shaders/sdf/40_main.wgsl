@@ -62,5 +62,32 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   var outc = mix(col, fogCol, fog);
   outc = pow(max(outc * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
+  // Меню настроек (Tab): шрифтов нет — строки-полосы (гамма/экспозиция/туман).
+  if (grade.w > -0.5) {
+    let mp = vec2f(frag.x, frag.y);
+    if (mp.x >= 16.0 && mp.x < 300.0 && mp.y >= 16.0 && mp.y < 140.0) {
+      var mcol = vec3f(0.06, 0.07, 0.09);
+      let row = min(i32((mp.y - 16.0) / 40.0), 2);
+      let sel = i32(grade.w + 0.5);
+      if (row == sel) { mcol = vec3f(0.10, 0.13, 0.18); }
+      // кубики слева: номер строки (0..2 -> 1..3 шт)
+      let bx = mp.x - 24.0;
+      let by = mp.y - (16.0 + f32(row) * 40.0) - 6.0;
+      if (bx >= 0.0 && bx < f32(row + 1) * 12.0 - 4.0 && by >= 0.0 && by < 8.0
+          && (bx % 12.0) < 8.0) {
+        mcol = vec3f(0.48, 0.63, 1.0);
+      }
+      // полоса значения x 120..280
+      if (mp.x >= 120.0) {
+        let f = (mp.x - 120.0) / 160.0;
+        var vv = 0.0;
+        if (row == 0) { vv = (grade.x - 0.5) / 3.5; }
+        else if (row == 1) { vv = (grade.y - 0.1) / 3.9; }
+        else { vv = grade.z / 3.0; }
+        if (f <= vv) { mcol = vec3f(0.48, 0.63, 1.0); }
+      }
+      outc = mcol;
+    }
+  }
   return vec4f(outc, 1.0);
 }
