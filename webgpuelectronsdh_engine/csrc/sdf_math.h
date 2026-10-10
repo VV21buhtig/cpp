@@ -1,6 +1,7 @@
 #ifndef SDF_MATH_H
 #define SDF_MATH_H
 // свой vec3, без glm: детерминизм + потом в asm 1:1.
+#include <math.h>
 typedef struct { float x, y, z; } Vec3;
 static inline Vec3 v3(float x, float y, float z) { Vec3 v = {x,y,z}; return v; }
 static inline Vec3 v3_add(Vec3 a, Vec3 b) { return v3(a.x+b.x, a.y+b.y, a.z+b.z); }
@@ -14,5 +15,12 @@ float v3_len(Vec3 a);
 static inline Vec3 v3_norm(Vec3 a) {
     float l = v3_len(a);
     return l > 1e-8f ? v3_mul(a, 1.0f / l) : v3(0, 0, 0);
+}
+// Базис камеры из yaw/pitch — общий для всех ядер (GL/Vulkan переиспользуют).
+static inline void cam_basis(float yaw, float pitch, Vec3 *f, Vec3 *r, Vec3 *u) {
+    float cp = cosf(pitch);
+    *f = v3(cp * cosf(yaw), sinf(pitch), cp * sinf(yaw));
+    *r = v3_norm(v3_cross(*f, v3(0.0f, 1.0f, 0.0f)));
+    *u = v3_cross(*r, *f);
 }
 #endif

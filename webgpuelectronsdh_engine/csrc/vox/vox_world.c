@@ -49,6 +49,7 @@ int vox_world_ensure(VoxWorld *w, int pcx, int pcz) {
                 s->used = 1;
                 s->cx = cx;
                 s->cz = cz;
+                s->dirty = 1;
                 s->data.cx = cx;
                 s->data.cz = cz;
                 vox_gen(&s->data, w->seed);
