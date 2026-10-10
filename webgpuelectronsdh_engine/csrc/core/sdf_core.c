@@ -206,13 +206,22 @@ static void sdf_shutdown(RenderCore *rc) {
     if (c->ubo) glDeleteBuffers(1, &c->ubo);
 }
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("sdf", RC_CAP_SDF, RC_BACKEND_GL, rc_sdf_create);
+}
+
 RenderCore *rc_sdf_create(void) {
     SDFCoreWrap *w = (SDFCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_SDF;
-    w->api.caps |= RC_WINDOW_GL; // бэкенд GL 4.5
     w->api.name = "sdf";
+    w->api.backend = RC_BACKEND_GL;
     w->api.init = sdf_init;
     w->api.shutdown = sdf_shutdown;
     w->api.frame = sdf_frame;

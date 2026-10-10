@@ -26,7 +26,7 @@ typedef struct {
     void (*input)(void *ctx, const EngInput *in);
 } EngHandlers;
 
-// Окно w×h создаётся здесь; хинты контекста — по флагам ядра (RC_WINDOW_GL).
+// Окно w×h создаётся здесь; хинты контекста — по бэкенду ядра (RC_BACKEND_*).
 // rc должно жить дольше движка (создаёт игра). NULL-колбэки разрешены.
 EngEngine *eng_create(RenderCore *rc, int w, int h, const char *title,
                       const EngHandlers *hh);

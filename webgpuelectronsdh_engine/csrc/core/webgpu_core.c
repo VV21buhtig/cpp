@@ -551,12 +551,22 @@ static void core_shutdown(RenderCore *rc) {
     wgpuInstanceRelease(c->inst);
 }
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("webgpu", RC_CAP_VOXEL, RC_BACKEND_WEBGPU, rc_webgpu_create);
+}
+
 RenderCore *rc_webgpu_create(void) {
     VoxCoreWrap *w = (VoxCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_VOXEL; // DDA-луч по вокселям, других входов нет
     w->api.name = "webgpu";
+    w->api.backend = RC_BACKEND_WEBGPU;
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;
@@ -567,17 +577,3 @@ RenderCore *rc_webgpu_create(void) {
     return &w->api;
 }
 
-RenderCore *rc_create(const char *name) {
-    if (!name) return 0;
-    if (!strcmp(name, "webgpu")) return rc_webgpu_create();
-#ifndef __EMSCRIPTEN__
-    if (!strcmp(name, "gl")) return rc_gl_create();
-    if (!strcmp(name, "vk")) return rc_vk_create();
-    if (!strcmp(name, "sdf")) return rc_sdf_create();
-    if (!strcmp(name, "pix")) return rc_pix_create();
-    if (!strcmp(name, "vec")) return rc_vec_create();
-#else
-    (void)rc_gl_create;
-#endif
-    return 0;
-}

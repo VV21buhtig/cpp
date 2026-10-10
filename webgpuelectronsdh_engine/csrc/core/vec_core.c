@@ -129,12 +129,22 @@ static void vec_shutdown(RenderCore *rc) {
     p->fb = 0;
 }
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("vec", RC_CAP_VECTOR, RC_BACKEND_GL, rc_vec_create);
+}
+
 RenderCore *rc_vec_create(void) {
     VecWrap *w = (VecWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
-    w->api.caps = RC_CAP_VECTOR | RC_WINDOW_GL;
+    w->api.caps = RC_CAP_VECTOR;
     w->api.name = "vec";
+    w->api.backend = RC_BACKEND_GL;
     w->api.init = vec_init;
     w->api.shutdown = vec_shutdown;
     w->api.frame = vec_frame;

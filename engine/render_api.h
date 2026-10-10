@@ -8,13 +8,12 @@
 #include "sdf_math.h"
 #include "vox/vox_chunk.h"
 
-// Домен данных ядра (битмаска caps).
+// Домен данных ядра (битмаска caps). Что рисуем — отдельно от того,
+// ЧЕРЕЗ ЧТО рисуем (см. backend ниже). Ядро = домен × бэкенд.
 #define RC_CAP_VOXEL  (1u << 0) // чанки 16x64x16: upload_chunk/set_origin
 #define RC_CAP_SDF    (1u << 1) // сцена примитивов: upload_sdf
 #define RC_CAP_VECTOR (1u << 2) // 2D-примитивы: upload_vector
 #define RC_CAP_PIXEL  (1u << 3) // CPU-кадр RGBA: upload_pixels
-// Флаг окна (не домен): ядру нужен GL-контекст 4.5, иначе NO_API.
-#define RC_WINDOW_GL (1u << 31)
 
 typedef struct {
     // Кадр вида (рендер-камера). 2D-доменам нужны в основном resW/resH/time.
@@ -55,10 +54,17 @@ typedef struct {
 } RcVecShape;
 
 typedef struct RenderCore RenderCore;
+// Бэкенд ядра (на чём рисуем). Только три: Metal нет (не на чем запускать),
+// DX12 не нужен (Vulkan удобнее и шире), DX11 хуже GL. Точка.
+#define RC_BACKEND_NONE 0
+#define RC_BACKEND_WEBGPU 1
+#define RC_BACKEND_GL 2
+#define RC_BACKEND_VK 3
 struct RenderCore {
     void *ctx;
-    unsigned caps; // RC_CAP_* — что ядро умеет
-    const char *name; // "webgpu", "gl", ... — для выбора в редакторе
+    unsigned caps; // RC_CAP_* — домен (что ест)
+    unsigned backend; // RC_BACKEND_* — через что рисует
+    const char *name; // ключ создания ("webgpu", "gl", ...)
     // Окно уже создано (GLFW), surface/устройство/ресурсы — тут.
     int (*init)(RenderCore *rc, void *glfwWindow);
     void (*shutdown)(RenderCore *rc);
@@ -97,5 +103,12 @@ RenderCore *rc_pix_create(void); // натив only (GL 4.5 блит, caps=PIXEL
 RenderCore *rc_vec_create(void); // натив only (GL 4.5 + CPU-растр, caps=VECTOR)
 // Выбор по имени ("webgpu", "gl"). NULL если нет такого. Для редактора.
 RenderCore *rc_create(const char *name);
+// Выбор по двум осям: домен (RC_CAP_*, один бит) + бэкенд (RC_BACKEND_*).
+// NULL если такой ячейки нет. Это и есть таблица «домен × бэкенд».
+RenderCore *rc_create_by(unsigned domain, unsigned backend);
+// Саморегистрация ядра (дергает конструктор ядра, не человек).
+// fn: указатель на rc_*_create. Повторная регистрация того же имени — игнор.
+void rc_register(const char *name, unsigned domain, unsigned backend,
+                 RenderCore *(*fn)(void));
 void rc_destroy(RenderCore *rc);
 #endif

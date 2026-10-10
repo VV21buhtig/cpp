@@ -602,12 +602,22 @@ static void core_frame(RenderCore *rc, const RcView *v);
 static int core_init(RenderCore *rc, void *glfwWindow);
 static void core_shutdown(RenderCore *rc);
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("vk", RC_CAP_VOXEL, RC_BACKEND_VK, rc_vk_create);
+}
+
 RenderCore *rc_vk_create(void) {
     VKCoreWrap *w = (VKCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_VOXEL; // растр мешей по вокселям
     w->api.name = "vk";
+    w->api.backend = RC_BACKEND_VK;
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;

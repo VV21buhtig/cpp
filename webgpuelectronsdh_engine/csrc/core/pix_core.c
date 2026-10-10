@@ -58,12 +58,22 @@ static void pix_shutdown(RenderCore *rc) {
     p->fb = 0;
 }
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("pix", RC_CAP_PIXEL, RC_BACKEND_GL, rc_pix_create);
+}
+
 RenderCore *rc_pix_create(void) {
     PixWrap *w = (PixWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
-    w->api.caps = RC_CAP_PIXEL | RC_WINDOW_GL;
+    w->api.caps = RC_CAP_PIXEL;
     w->api.name = "pix";
+    w->api.backend = RC_BACKEND_GL;
     w->api.init = pix_init;
     w->api.shutdown = pix_shutdown;
     w->api.frame = pix_frame;

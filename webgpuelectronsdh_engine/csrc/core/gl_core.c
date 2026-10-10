@@ -417,13 +417,22 @@ static void core_shutdown(RenderCore *rc) {
     if (c->skyVAO) glDeleteVertexArrays(1, &c->skyVAO);
 }
 
+
+// Саморегистрация в реестре corelib (выбор по имени/домену безifndef).
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static void rc_reg_self(void) {
+    rc_register("gl", RC_CAP_VOXEL, RC_BACKEND_GL, rc_gl_create);
+}
+
 RenderCore *rc_gl_create(void) {
     GLCoreWrap *w = (GLCoreWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_VOXEL; // растр мешей по вокселям, других входов нет
-    w->api.caps |= RC_WINDOW_GL; // нужен GL-контекст 4.5
     w->api.name = "gl";
+    w->api.backend = RC_BACKEND_GL;
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;

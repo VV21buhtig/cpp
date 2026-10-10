@@ -42,7 +42,7 @@ EngEngine *eng_create(RenderCore *rc, int w, int h, const char *title,
                       const EngHandlers *hh) {
     if (!rc || !rc->frame || !rc->init) return 0;
     if (!glfwInit()) return 0;
-    if (rc->caps & RC_WINDOW_GL) {
+    if (rc->backend == RC_BACKEND_GL) {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
