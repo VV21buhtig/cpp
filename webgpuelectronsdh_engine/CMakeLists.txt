@@ -35,6 +35,11 @@ add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c csrc/core/corelib.c
 target_include_directories(sdf_demo PRIVATE csrc)
 target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
+# Тест SDF-бейка (точный EDT, без GPU).
+add_executable(sdf_test csrc/vox_sdf_test.c csrc/vox/vox_gen.c csrc/vox/vox_sdf.c)
+target_include_directories(sdf_test PRIVATE csrc)
+target_link_libraries(sdf_test PRIVATE m)
+target_compile_options(sdf_test PRIVATE -Wall -Wextra)
 # Тест стриминга: кольцо + бюджет + выселение, без рендера.
 add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_world.c)
 target_include_directories(vox_stream PRIVATE csrc)
