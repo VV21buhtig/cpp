@@ -55,10 +55,56 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let up = cross(rt, fw);
   let rd = normalize(uv.x * rt + uv.y * up + view.x * fw);
 
+  // Фрустум-куллинг лучей (дебаг F1): вне конуса главной марша нет вообще.
+  // В обычном режиме свои лучи всегда внутри своего конуса — тест пропускаем.
+  let MP = frustum[0].xyz;
+  let MF = frustum[1].xyz;
+  let MR = frustum[2].xyz;
+  let MU = frustum[3].xyz;
+  var dbgOut = false;
+  var roS = u.camPos;
+  var tMaxF = 300.0;
+  var tShift = 0.0;
+  if (view.z > 0.5) {
+    let ax0 = (u.resX / max(u.resY, 1.0)) * 0.5;
+    let f0 = max(view.x, 0.2);
+    let rel = u.camPos - MP;
+    let rof = vec3f(dot(rel, MR), dot(rel, MU), dot(rel, MF));
+    let rdf = vec3f(dot(rd, MR), dot(rd, MU), dot(rd, MF));
+    var tN = 0.0;
+    var tF = 1e9;
+    var ok = true;
+    if (abs(rdf.z) < 1e-9) {
+      if (rof.z < 1.0 || rof.z > 60.0) { ok = false; }
+    } else {
+      let ta = (1.0 - rof.z) / rdf.z;
+      let tb = (60.0 - rof.z) / rdf.z;
+      tN = max(tN, min(ta, tb));
+      tF = min(tF, max(ta, tb));
+    }
+    let kx = ax0 / f0;
+    let ky = 0.5 / f0;
+    for (var s = 0; s < 4; s++) {
+      var A = 0.0;
+      var B = 0.0;
+      if (s == 0) { A = rdf.x - kx * rdf.z; B = -(rof.x - kx * rof.z); }
+      else if (s == 1) { A = -rdf.x - kx * rdf.z; B = -(-rof.x - kx * rof.z); }
+      else if (s == 2) { A = rdf.y - ky * rdf.z; B = -(rof.y - ky * rof.z); }
+      else { A = -rdf.y - ky * rdf.z; B = -(-rof.y - ky * rof.z); }
+      if (A > 1e-9) { tF = min(tF, B / A); }
+      else if (A < -1e-9) { tN = max(tN, B / A); }
+      else if (B < 0.0) { ok = false; }
+    }
+    if (!(ok && tN < tF && tF > 0.0)) { dbgOut = true; }
+    else { tShift = max(tN, 0.0); roS = u.camPos + rd * tShift; tMaxF = min(300.0, tF - tShift); }
+  }
   // Мир — окно стриминга 176x64x176: analytic вход + DDA внутри.
-  let hit = voxMarch(u.camPos, rd, 300.0);
+  var hit = voxMarch(roS, rd, tMaxF);
+  if (hit.t >= 0.0) { hit.t = hit.t + tShift; } // t всегда от камеры
   var outc = vec3f(0.0);
-  if (hit.t < 0.0) {
+  if (dbgOut) {
+    outc = vec3f(0.01); // вне конуса: марша не было, красить нечего
+  } else if (hit.t < 0.0) {
     var miss = sky(rd, normalize(u.sunDir));
     miss = pow(max(miss * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
     outc = miss;
@@ -123,28 +169,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       cn[k] = MP + (sx * ax * MR + sy * 0.5 * MU + f * MF) * (dd / f);
     }
     var md = 1e9;
-    // Маска дебага: ТОЧКА хита внутри пирамиды главной (а не луч).
-    // Луч изнутри конуса всегда его «пересекает» — так маска никогда не срабатывала.
-    {
-      var fp = u.camPos + rd * 500.0;
-      if (hit.t >= 0.0) { fp = u.camPos + rd * hit.t; }
-      let rel = fp - MP;
-      let fz = dot(rel, MF);
-      var inside = fz >= 0.0 && fz <= 60.0;
-      if (inside) {
-        let fx = dot(rel, MR);
-        let fy = dot(rel, MU);
-        let ex = 0.3 + (fz / f) * ax;
-        let ey = 0.3 + (fz / f) * 0.5;
-        inside = abs(fx) <= ex && abs(fy) <= ey;
-      }
-      if (!inside) {
-        // Призрак, а не стена: вне конуса видно, но темно — конус не перекрыть.
-        outc = mix(outc, vec3f(0.015), 0.75);
-      } else {
-        outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.10);
-      }
-    }
+    // Гейт выше уже выкинул лучи вне конуса (марша не было) — красить нечего.
+    // Рёбра и точка рисуются поверх всегда.
     // ближний/дальний прямоугольники
     for (var k = 0; k < 4; k++) {
       md = min(md, segDist(u.camPos + rd * 0.5, cn[k], cn[(k + 1) & 3]));
