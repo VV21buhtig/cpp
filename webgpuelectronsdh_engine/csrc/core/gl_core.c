@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "core/render_api.h"
+#include "render_api.h"
 #include "core/mat4.h"
 #include "sdf_math.h"
 #include "vox/vox_mesh.h"
@@ -422,6 +422,7 @@ RenderCore *rc_gl_create(void) {
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_VOXEL; // растр мешей по вокселям, других входов нет
+    w->api.caps |= RC_WINDOW_GL; // нужен GL-контекст 4.5
     w->api.name = "gl";
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;

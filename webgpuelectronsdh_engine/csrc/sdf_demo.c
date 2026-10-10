@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "core/render_api.h"
+#include "render_api.h"
 
 RenderCore *rc_sdf_create(void);
 

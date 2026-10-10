@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "core/render_api.h"
+#include "render_api.h"
 #include "sdf_math.h"
 
 #define SDF_SHADER_DIR "shaders/sdf_gl"
@@ -211,6 +211,7 @@ RenderCore *rc_sdf_create(void) {
     if (!w) return 0;
     w->api.ctx = w;
     w->api.caps = RC_CAP_SDF;
+    w->api.caps |= RC_WINDOW_GL; // бэкенд GL 4.5
     w->api.name = "sdf";
     w->api.init = sdf_init;
     w->api.shutdown = sdf_shutdown;

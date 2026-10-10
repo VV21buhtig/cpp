@@ -12,7 +12,7 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
-#include "core/render_api.h"
+#include "render_api.h"
 #include "sdf_surface.h"
 #include "sdf_math.h"
 #include "sdf_ubo.h"

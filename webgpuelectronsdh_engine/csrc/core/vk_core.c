@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
-#include "core/render_api.h"
+#include "render_api.h"
 #include "core/mat4.h"
 #include "core/vk_conv.h" // все GL/VK-противоречия — там, см. шапку
 #include "sdf_math.h"

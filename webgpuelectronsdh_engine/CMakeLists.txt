@@ -32,7 +32,8 @@ target_link_libraries(mat4_test PRIVATE m)
 target_compile_options(mat4_test PRIVATE -Wall -Wextra)
 # SDF-демо: окно + sdf-ядро + сцена примитивов (натив, без webgpu).
 add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c csrc/core/corelib.c csrc/sdf_math.c)
-target_include_directories(sdf_demo PRIVATE csrc)
+target_include_directories(sdf_demo PRIVATE csrc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
 # Тест SDF-бейка (точный EDT, без GPU).
@@ -93,7 +94,9 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
   DEPENDS ${SDF_WGSL_PARTS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
   COMMENT "embed shaders (sdf+sky)")
-target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen)
+target_include_directories(sdf_native_webgpu PRIVATE csrc ${CMAKE_CURRENT_BINARY_DIR}/gen
+  # Контракт ядер живёт в engine/ (не копия — один файл на всех).
+  ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_compile_options(sdf_native_webgpu PRIVATE -Wall -Wextra)
 if(NOT EMSCRIPTEN)
   target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu m)
