@@ -1,0 +1,18 @@
+#version 450
+// demo-5b dual Kawase down: 4 диагональных тапа, среднее (сглаживание+даунсэмпл).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D srcImg;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D dstImg;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dsz = imageSize(dstImg);
+    if (t.x >= dsz.x || t.y >= dsz.y) return;
+    vec2 uv = (vec2(t) + 0.5) / vec2(dsz);
+    vec2 d = 1.0 / vec2(textureSize(srcImg, 0));
+    vec3 c = texture(srcImg, uv + vec2(-1.0, -1.0) * d).rgb
+           + texture(srcImg, uv + vec2(1.0, -1.0) * d).rgb
+           + texture(srcImg, uv + vec2(-1.0, 1.0) * d).rgb
+           + texture(srcImg, uv + vec2(1.0, 1.0) * d).rgb;
+    imageStore(dstImg, t, vec4(c * 0.25, 1.0));
+}

@@ -1,0 +1,1107 @@
+// frame: см. vk/frame.h.
+#include "vk/frame.h"
+#include "vk/targets.h"
+#include "vk/descriptors.h"
+#include "vk/pipelines.h"
+#include "vk/fsr2.h"
+#include "ffx_fsr2.h"
+#include "vk/ffx_fsr2_vk.h"
+#include "engine/world.h"
+#include "engine/blocks.h"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/geometric.hpp>
+#include <cstdio>
+#include <cstring>
+#include <cmath>
+#include <thread>
+#include <chrono>
+
+void makeSync(VkCore& core, FrameSync& sy) {
+    // Синхра: acquire-семафор по кадру, render-семафор + layout по картинке,
+    // fence кадра ждётся ПЕРЕД acquire (сабмит позапрошлого кадра выполнен —
+    // cmdbuf свободен, acquire-семафор потреблён). acquire ПЕРЕД fence картинки
+    // не нужен: acquire сам ждёт present. Так велят слои (3 бага найдено ими).
+    const int NIMGS = (int)core.swapImages.size();
+    if (NIMGS > 8) { printf("too many swap images %d\n", NIMGS); exit(1); }
+    for (int i = 0; i < NIMGS; i++) {
+        VkSemaphoreCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VK_CHECK(vkCreateSemaphore(core.device, &si, nullptr, &sy.acquireSem[i]));
+        VK_CHECK(vkCreateSemaphore(core.device, &si, nullptr, &sy.renderSem[i]));
+        sy.imgLayout[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+        int j = i;
+        core.del.push([corep = &core, syp = &sy, j]() {
+            vkDestroySemaphore(corep->device, syp->acquireSem[j], nullptr);
+            vkDestroySemaphore(corep->device, syp->renderSem[j], nullptr);
+        });
+    }
+    {
+        // Кадровые заборы отдельно: их ровно FRAMES, не путать с картинками.
+        VkFenceCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (int i = 0; i < FrameSync::FRAMES; i++)
+            VK_CHECK(vkCreateFence(core.device, &fi, nullptr, &sy.frameFence[i]));
+        core.del.push([corep = &core, syp = &sy]() {
+            for (int i = 0; i < FrameSync::FRAMES; i++)
+                vkDestroyFence(corep->device, syp->frameFence[i], nullptr);
+        });
+    }
+    // ---- кадровые комманд-буферы (2 в полёте, синхра — по картинкам выше) ----
+    VK_CHECK([&]() {
+        VkCommandPoolCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        ci.queueFamilyIndex = core.gfxFamily;
+        return vkCreateCommandPool(core.device, &ci, nullptr, &sy.cmdPool);
+    }());
+    core.del.push([corep = &core, syp = &sy]() {
+        vkDestroyCommandPool(corep->device, syp->cmdPool, nullptr);
+    });
+    {
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = sy.cmdPool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = FrameSync::FRAMES;
+        VK_CHECK(vkAllocateCommandBuffers(core.device, &ai, sy.cmdBufs));
+    }
+    sy.nimgs = NIMGS;
+}
+
+// FSR2 даёт свою последовательность (ffxFsr2GetJitterOffset) — Halton убран.
+
+int runFrameLoop(VkCore& core, World& world, const glm::vec3& worldOffset,
+                 Targets& tg, Sets& st, Pipes& pp, FrameSync& sy, const FrameArgs& a) {
+    // ---- камера: старт у холма, WASD+мышь+стрелки, Space/C, ESC выход ----
+    glm::vec3 camPos, camFront;
+    {
+        int hx = 64, hz = 64, top = 20;
+        for (int z = 20; z < 108; z++)
+            for (int x = 20; x < 108; x++) {
+                int t = -1;
+                for (int y = 63; y >= 0; y--)
+                    if (World::isSolid(world.getBlock(x, y, z))) { t = y; break; }
+                if (t > top) { top = t; hx = x; hz = z; }
+            }
+        glm::vec3 target = worldOffset + glm::vec3(hx + 0.5f, top, hz + 0.5f);
+        camPos = target + glm::vec3(20.0f, 12.0f, 28.0f);
+        camFront = glm::normalize(target - camPos);
+        core.ctl.yaw = glm::degrees(atan2(camFront.z, camFront.x));
+        core.ctl.pitch = glm::degrees(asin(camFront.y));
+        printf("hill (%d,%d,%d)\n", hx, top, hz);
+        // Вода для прицела: самая большая гладь (для --cam).
+        {
+            int bx = 64, bz = 64, bn = 0;
+            for (int z = 4; z < 124; z += 4)
+                for (int x = 4; x < 124; x += 4) {
+                    int n = 0;
+                    for (int dz = 0; dz < 4; dz++)
+                        for (int dx = 0; dx < 4; dx++)
+                            if (world.getBlock(x + dx, 20, z + dz) == B_WATER) n++;
+                    if (n > bn) { bn = n; bx = x; bz = z; }
+                }
+            printf("water (%d,%d) n=%d/16\n", bx, bz, bn);
+        }
+        if (a.camOverride) {
+            camPos = a.camPosOvr;
+            core.ctl.yaw = a.yawOvr;
+            core.ctl.pitch = a.pitchOvr;
+            camFront.x = cos(glm::radians(core.ctl.yaw)) * cos(glm::radians(core.ctl.pitch));
+            camFront.y = sin(glm::radians(core.ctl.pitch));
+            camFront.z = sin(glm::radians(core.ctl.yaw)) * cos(glm::radians(core.ctl.pitch));
+            camFront = glm::normalize(camFront);
+            printf("cam override (%g,%g,%g) yaw %g pitch %g\n",
+                   camPos.x, camPos.y, camPos.z, core.ctl.yaw, core.ctl.pitch);
+        }
+    }
+    auto updFront = [&]() {
+        camFront.x = cos(glm::radians(core.ctl.yaw)) * cos(glm::radians(core.ctl.pitch));
+        camFront.y = sin(glm::radians(core.ctl.pitch));
+        camFront.z = sin(glm::radians(core.ctl.yaw)) * cos(glm::radians(core.ctl.pitch));
+        camFront = glm::normalize(camFront);
+    };
+
+    glm::mat4 proj = glm::perspective(glm::radians(70.0f),
+        (float)core.swapExtent.width / (float)core.swapExtent.height, 0.1f, 600.0f);
+    proj[1][1] *= -1.0f; // Y-flip под Vulkan (идиома vkguide)
+    float tod = 1.5707f; // полдень (1/2/3 утро/день/вечер, F1 рентген карты)
+    if (getenv("VK_TOD")) tod = (float)atof(getenv("VK_TOD")); // рентген: фикс солнца
+    bool dbgShadow = false, prevF1 = false;
+    bool useSsao = true, prevF2 = false; // F2: SSAO вкл/выкл
+    bool useFsr = false, prevF8 = false; // F8: FSR2 вкл (по дефолту ВЫКЛ: на слабом железе дороже профита)
+    int fsrMode = 0, prevF9 = false; // F9: скейл Native/Quality/Balanced/Performance
+    int prevFsrMode = -1; // -1 = первый кадр тоже резетит историю FSR2
+    static const float FSR_SCALES[4] = {1.0f, 0.67f, 0.59f, 0.5f};
+    static const char* FSR_NAMES[4] = {"Native", "Quality", "Balanced", "Performance"};
+    if (getenv("VK_FSR_MODE")) fsrMode = atoi(getenv("VK_FSR_MODE")) % 4; // headless: стартовый режим
+    bool useRtAo = true, prevF4 = false; // F4: RT AO поверх вершинного
+    bool dbgNdl = false, prevF5 = false; // F5: подсветка «куда светит» (не освещение!)
+    bool noShadow = false, prevF6 = false; // F6: карта теней выкл (диагностика!)
+    bool useA2c = true, prevF7 = false; // F7: A2C вкл/выкл (+сброс истории FSR2)
+    double prevT = glfwGetTime();
+    int frame = 0, drawn = 0;
+    double fpsT = prevT;
+    int fpsN = 0;
+    glm::mat4 prevVpNJ(1.0f); // FSR2/MV: прошлый VP без джиттера
+    float prevTod = tod;
+    bool prevUseFsr = true;
+    bool prevUseA2c = true;
+    while (!glfwWindowShouldClose(core.window)) {
+        glfwPollEvents();
+        double now = glfwGetTime();
+        float dt = (float)(now - prevT);
+        prevT = now;
+        if (dt > 0.05f) dt = 0.05f;
+        // ввод
+        {
+            float sp = (glfwGetKey(core.window, GLFW_KEY_LEFT_SHIFT) ? 30.0f : 12.0f) * dt;
+            glm::vec3 right = glm::normalize(glm::cross(camFront, glm::vec3(0, 1, 0)));
+            if (glfwGetKey(core.window, GLFW_KEY_W)) camPos += camFront * sp;
+            if (glfwGetKey(core.window, GLFW_KEY_S)) camPos -= camFront * sp;
+            if (glfwGetKey(core.window, GLFW_KEY_A)) camPos -= right * sp;
+            if (glfwGetKey(core.window, GLFW_KEY_D)) camPos += right * sp;
+            if (glfwGetKey(core.window, GLFW_KEY_SPACE)) camPos.y += sp;
+            if (glfwGetKey(core.window, GLFW_KEY_C)) camPos.y -= sp;
+            float rs = 60.0f * dt;
+            if (glfwGetKey(core.window, GLFW_KEY_LEFT)) core.ctl.yaw -= rs;
+            if (glfwGetKey(core.window, GLFW_KEY_RIGHT)) core.ctl.yaw += rs;
+            if (glfwGetKey(core.window, GLFW_KEY_UP)) core.ctl.pitch += rs;
+            if (glfwGetKey(core.window, GLFW_KEY_DOWN)) core.ctl.pitch -= rs;
+            if (core.ctl.pitch > 89.0f) core.ctl.pitch = 89.0f;
+            if (core.ctl.pitch < -89.0f) core.ctl.pitch = -89.0f;
+            updFront();
+            if (glfwGetKey(core.window, GLFW_KEY_ESCAPE)) glfwSetWindowShouldClose(core.window, 1);
+            if (glfwGetKey(core.window, GLFW_KEY_1)) tod = 0.5f;   // утро: длинные тени
+            if (glfwGetKey(core.window, GLFW_KEY_2)) tod = 1.5707f; // полдень
+            if (glfwGetKey(core.window, GLFW_KEY_3)) tod = 2.6f;    // вечер: длинные тени
+            // Тогглы F1-F7 игнорируем первые кадры: при получении фокуса окном
+            // ОС может отдать залипшее состояние клавиш (фантомный xray на старте).
+            bool f1 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F1) != 0);
+            if (f1 && !prevF1) { dbgShadow = !dbgShadow; printf("shadow xray %d\n", dbgShadow); }
+            prevF1 = f1;
+            bool f2 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F2) != 0);
+            if (f2 && !prevF2) { useSsao = !useSsao; printf("ssao %d\n", useSsao); }
+            prevF2 = f2;
+            bool f4 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F4) != 0);
+            if (f4 && !prevF4) { useRtAo = !useRtAo; printf("rtao %d\n", useRtAo); }
+            prevF4 = f4;
+            bool f5 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F5) != 0);
+            if (f5 && !prevF5) { dbgNdl = !dbgNdl; printf("sundir view %d\n", dbgNdl); }
+            prevF5 = f5;
+            bool f6 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F6) != 0);
+            if (f6 && !prevF6) { noShadow = !noShadow; printf("shadowmap %d\n", !noShadow); }
+            prevF6 = f6;
+            bool f7 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F7) != 0);
+            if (f7 && !prevF7) { useA2c = !useA2c; printf("a2c %d\n", useA2c); }
+            prevF7 = f7;
+            bool f8 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F8) != 0);
+            if (f8 && !prevF8) { useFsr = !useFsr; printf("fsr2 %d\n", useFsr); }
+            prevF8 = f8;
+            bool f9 = (drawn >= 3) && (glfwGetKey(core.window, GLFW_KEY_F9) != 0);
+            if (f9 && !prevF9) {
+                fsrMode = (fsrMode + 1) % 4;
+                printf("fsr scale %s\n", FSR_NAMES[fsrMode]);
+            }
+            prevF9 = f9;
+        }
+        int fi = frame % FrameSync::FRAMES;
+        uint32_t imgIdx = 0;
+        // Кадровый fence ПЕРЕД acquire: сабмит двухкадровой давности точно
+        // выполнен → cmdbuf свободен, acquire-семафор потреблён. Без этого
+        // слои орут про pending semaphore/commandbuffer (проверено).
+        VK_CHECK(vkWaitForFences(core.device, 1, &sy.frameFence[fi], VK_TRUE, 1000000000ull));
+        VK_CHECK(vkResetFences(core.device, 1, &sy.frameFence[fi]));
+        // acquire ПЕРЕД записью: картинка вернётся только после своего present,
+        // layout трекаем сами. Кадровый fence выше уже гарантирует свободный cmdbuf.
+        VK_CHECK(vkAcquireNextImageKHR(core.device, core.swapchain, 1000000000ull,
+                                       sy.acquireSem[fi], VK_NULL_HANDLE, &imgIdx));
+        // Render-scale: шейдим меньшую область в те же цели (память та же, fps растёт).
+        // FSR2 тянет до display. Смена режима = сброс истории.
+        uint32_t renderW = ((uint32_t)(core.swapExtent.width * FSR_SCALES[fsrMode])) & ~1u;
+        uint32_t renderH = ((uint32_t)(core.swapExtent.height * FSR_SCALES[fsrMode])) & ~1u;
+        if (renderW < 8) renderW = 8;
+        if (renderH < 8) renderH = 8;
+        bool modeChanged = (fsrMode != prevFsrMode);
+        prevFsrMode = fsrMode;
+        // Фолбэк без FSR2 — всегда native (иначе копия тащила бы мусор за рект).
+        uint32_t RW = (useFsr && st.fsr.ready) ? renderW : core.swapExtent.width;
+        uint32_t RH = (useFsr && st.fsr.ready) ? renderH : core.swapExtent.height;
+        VkExtent2D rExtEff{RW, RH};
+        // FSR2-джиттер: их последовательность (доки дословно: NDC = +2x/W, -2y/H).
+        // Рендер и jitterOffset идут из одних значений — конвенция сходится сама.
+        // FSR2 пользуется тем же jproj.
+        int32_t jphase = ffxFsr2GetJitterPhaseCount((int32_t)RW, (int32_t)core.swapExtent.width);
+        float jox = 0.0f, joy = 0.0f;
+        ffxFsr2GetJitterOffset(&jox, &joy, (int32_t)(drawn % (unsigned)jphase), jphase);
+        float jx = 2.0f * jox / (float)RW;
+        float jy = -2.0f * joy / (float)RH;
+        glm::mat4 jproj = proj;
+        if (useFsr) {
+            jproj[2][0] += jx;
+            jproj[2][1] += jy;
+        }
+        bool fsrReset = (drawn == 0) || modeChanged || (fabsf(tod - prevTod) > 1e-6f) || (useA2c != prevUseA2c) || (useFsr && !prevUseFsr);
+        prevTod = tod;
+        prevUseFsr = useFsr;
+        prevUseA2c = useA2c;
+        // UBO кадра
+        {
+            FrameUBO u{};
+            glm::mat4 view = glm::lookAt(camPos, camPos + camFront, glm::vec3(0, 1, 0));
+            u.viewProj = jproj * view;
+            u.invViewProj = glm::inverse(u.viewProj);
+            u.viewProjNJ = proj * view; // FSR2/MV: чисто, без Halton
+            u.invViewProjNJ = glm::inverse(u.viewProjNJ);
+            u.prevViewProjNJ = prevVpNJ;
+            glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
+            u.sunDir = glm::vec4(sun, 0.0f);
+            u.sunCol = glm::vec4(1.25f, 1.21f, 1.12f, 0.0f);
+            u.ambSky = glm::vec4(0.54f, 0.60f, 0.69f, 0.0f);
+            u.ambGnd = glm::vec4(0.27f, 0.24f, 0.21f, 0.0f);
+            u.fog = glm::vec4(0.55f, 0.65f, 0.80f, 260.0f);
+            u.misc = glm::vec4(40.0f, 1.1f, useA2c ? 1.0f : 0.0f, (float)now); // z: F7 A2C
+            u.viewPos = glm::vec4(camPos, 0.0f);
+            void* dst = nullptr;
+            VK_CHECK(vmaMapMemory(core.alloc, st.uboAlloc[fi], &dst));
+            memcpy(dst, &u, sizeof(u));
+            vmaFlushAllocation(core.alloc, st.uboAlloc[fi], 0, sizeof(u)); // non-coherent safety
+            vmaUnmapMemory(core.alloc, st.uboAlloc[fi]);
+            prevVpNJ = u.viewProjNJ; // FSR2/MV: чистая следующему кадру
+        }
+        VK_CHECK(vkResetCommandBuffer(sy.cmdBufs[fi], 0));
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VK_CHECK(vkBeginCommandBuffer(sy.cmdBufs[fi], &bi));
+        VkImageMemoryBarrier toDraw{};
+        toDraw.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toDraw.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toDraw.oldLayout = sy.imgLayout[imgIdx]; // трекаем: первый раз UNDEFINED
+        toDraw.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        toDraw.image = core.swapImages[imgIdx];
+        toDraw.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toDraw);
+        // demo-3c + вода: обнулить оба счётчика (fill + барьер transfer->compute).
+        vkCmdFillBuffer(sy.cmdBufs[fi], tg.indBuf, 0, 4, 0);
+        vkCmdFillBuffer(sy.cmdBufs[fi], tg.waterIndBuf, 0, 4, 0);
+        {
+            VkBufferMemoryBarrier b[2]{};
+            VkBuffer bbs[2] = {tg.indBuf, tg.waterIndBuf};
+            for (int i = 0; i < 2; i++) {
+                b[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                b[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                b[i].buffer = bbs[i]; b[i].offset = 0; b[i].size = VK_WHOLE_SIZE;
+            }
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 2, b, 0, nullptr);
+        }
+        // 2) плоскости фрустума (строки viewProj, нормированные).
+        // Каллинг ВЫКЛЮЧЕН: теневой проход делит indBuf с камерой, и кастеры
+        // за спиной вырезались вместе с тенью (прямоугольная ползущая граница).
+        // Правильно — два каллинга (свет/глаза), это P3. Пока рисуем всё (8x8 статичен).
+        // (фрустум из proj*lookAt — восстановить в P3 с lightSpace для теней)
+        glm::vec4 planes[6];
+        for (int i = 0; i < 6; i++) planes[i] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.cullPipe);
+        vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                st.cullPipeLayout, 0, 1, &st.cullSet, 0, nullptr);
+        vkCmdPushConstants(sy.cmdBufs[fi], st.cullPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(planes), planes);
+        vkCmdDispatch(sy.cmdBufs[fi], 1, 1, 1); // 64 потока = 64 чанка
+        // 3) барьер: compute-write -> indirect-read + vertex-read (оба indirect!).
+        {
+            VkBufferMemoryBarrier b[3]{};
+            VkBuffer bbs[3] = {tg.indBuf, tg.visBuf, tg.waterIndBuf};
+            for (int i = 0; i < 3; i++) {
+                b[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                b[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b[i].buffer = bbs[i];
+                b[i].offset = 0; b[i].size = VK_WHOLE_SIZE;
+            }
+            b[0].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            b[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b[2].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                                 0, 0, nullptr, 3, b, 0, nullptr);
+        }
+        // demo-4: матрица солнца (снап в light-space + scale/bias fold, GL-рецепт).
+        // Солнце фикс-полдень; квант не нужен (нет цикла дня), снап нужен (камера едет).
+        glm::mat4 lightSpace;
+        {
+            glm::vec3 sun = glm::normalize(glm::vec3(cos(tod), sin(tod), 0.35f));
+            const float SE = 100.0f; // бокс шире дальности теней (dFade 25-60): край не виден
+            float texel = 2.0f * SE / (float)SHADOW_S;
+            glm::vec3 L = sun;
+            glm::vec3 up0 = fabs(L.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+            glm::vec3 xx = glm::normalize(glm::cross(up0, L));
+            glm::vec3 yx = glm::cross(L, xx);
+            glm::vec3 center = camPos;
+            float lx = glm::dot(center, xx), ly = glm::dot(center, yx), lz = glm::dot(center, L);
+            lx = floor(lx / texel + 0.5f) * texel;
+            ly = floor(ly / texel + 0.5f) * texel;
+            lz = floor(lz / texel + 0.5f) * texel; // снап глубины: иначе дрожь краёв
+            center = xx * lx + yx * ly + L * lz;
+            // Глаз ОТКАТЫВАЕМ назад по лучу: иначе он внутри террейна и near=1
+            // режет всё (в полдень карта пуста — проверено дампом!). Сцена ложится
+            // на ~200±100 при far=400.
+            glm::vec3 eye = center - L * 200.0f;
+            // БЕЗ sb: растеризатор ждёт clip [-1,1] (иначе карта в четверти!).
+            // НО глубину GLM [-1,1] Vulkan режет (Z<0 invalid!) — жмём её в [0,1]
+            // здесь. XY не трогаем (Y-flip для карты не нужен — всё самосогласовано).
+            glm::mat4 lightProj = glm::ortho(-SE, SE, -SE, SE, 1.0f, 400.0f);
+            lightProj[2][2] *= 0.5f;
+            lightProj[3][2] = lightProj[3][2] * 0.5f + 0.5f;
+            lightSpace = lightProj * glm::lookAt(eye, center + L, yx);
+        }
+        // demo-4 shadow pass: та же видимость (indirect), только глубина.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = (tg.shadowLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                  ? 0 : VK_ACCESS_SHADER_READ_BIT;
+            b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b.oldLayout = tg.shadowLayout;
+            b.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            b.image = tg.shadowImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi],
+                                 (tg.shadowLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                     ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                     : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            tg.shadowLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        }
+        VkRenderingAttachmentInfo sdepth{};
+        sdepth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        sdepth.imageView = tg.shadowView;
+        sdepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        sdepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        sdepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // карту читаем дальше — DONT_CARE запрещён!
+        sdepth.clearValue.depthStencil = {1.0f, 0};
+        VkRenderingInfo sri{};
+        sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        sri.renderArea = {{0, 0}, {(uint32_t)SHADOW_S, (uint32_t)SHADOW_S}};
+        sri.layerCount = 1;
+        sri.colorAttachmentCount = 0;
+        sri.pDepthAttachment = &sdepth;
+        vkCmdBeginRendering(sy.cmdBufs[fi], &sri);
+        vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.shadowPipe);
+        {
+            VkViewport svp{0, 0, (float)SHADOW_S, (float)SHADOW_S, 0.0f, 1.0f};
+            VkRect2D ssc{{0, 0}, {(uint32_t)SHADOW_S, (uint32_t)SHADOW_S}};
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &svp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &ssc);
+        }
+        vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
+        vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                           (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                VK_SHADER_STAGE_FRAGMENT_BIT),
+                           0, sizeof(lightSpace), &lightSpace);
+        vkCmdSetDepthBias(sy.cmdBufs[fi], 2.5f, 0.0f, 3.5f); // воксели: давим акне (было 1.1/2.0 из книги)
+        vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
+                               64, sizeof(VkDrawIndirectCommand));
+        vkCmdEndRendering(sy.cmdBufs[fi]);
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image = tg.shadowImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            tg.shadowLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        // demo-5a: HDR-цепочка. Небо и террейн пишут HDR, дальше compute + тонемэппинг.
+        // HDR-переход (трекаем как своп) + MSAA-цели + копия глубины в аттачмент.
+        {
+            VkImageMemoryBarrier b[3]{};
+            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[0].srcAccessMask = (tg.hdrLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                  ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[0].oldLayout = tg.hdrLayout;
+            b[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[0].image = tg.hdrImg;
+            b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[1].srcAccessMask = (drawn == 0) ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[1].oldLayout = (drawn == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
+                                          : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[1].image = tg.hdrMsImg;
+            b[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            b[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[2].srcAccessMask = VK_ACCESS_SHADER_READ_BIT; // прошлый кадр сэмплил
+            b[2].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b[2].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[2].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b[2].image = tg.depthCopyImg;
+            b[2].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier b3{};
+            b3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b3.srcAccessMask = (drawn == 0) ? VkAccessFlags(0)
+                                            : VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            b3.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b3.oldLayout = (drawn == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
+                                        : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b3.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b3.image = tg.depthMsImg;
+            b3.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi],
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT),
+                                 0, 0, nullptr, 0, nullptr, 3, b);
+            vkCmdPipelineBarrier(sy.cmdBufs[fi],
+                                 (drawn == 0) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                              : VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b3);
+            tg.hdrLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        VkViewport svwp{0, 0, (float)RW, (float)RH, 0.0f, 1.0f};
+        VkRect2D ssc{{0, 0}, rExtEff};
+        // Небо первым (MSAA CLEAR + резолв в HDR).
+        {
+            VkRenderingAttachmentInfo sky{};
+            sky.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            sky.imageView = tg.hdrMsView;
+            sky.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            sky.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            sky.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // террейн делает LOAD: DONT_CARE = мусор на NVIDIA
+            sky.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            sky.resolveImageView = tg.hdrView;
+            sky.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            sky.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            VkRenderingInfo sri{};
+            sri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            sri.renderArea = {{0, 0}, rExtEff};
+            sri.layerCount = 1;
+            sri.colorAttachmentCount = 1;
+            sri.pColorAttachments = &sky;
+            vkCmdBeginRendering(sy.cmdBufs[fi], &sri);
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.skyPipe);
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &svwp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &ssc);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pp.skyPipeLayout, 0, 1, &st.skySets[fi], 0, nullptr);
+            glm::vec4 viewSize((float)RW, (float)RH, 0, 0);
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.skyPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(viewSize), &viewSize);
+            vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(sy.cmdBufs[fi]);
+        }
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageView = tg.hdrMsView; // террейн — в MSAA поверх неба (LOAD!)
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // вода делает LOAD: DONT_CARE = мусор на NVIDIA
+        color.resolveImageView = tg.hdrView;
+        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        VkRenderingAttachmentInfo depth{};
+        depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth.imageView = tg.depthMsView;
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // воду + копию: резолв идёт в копию, MSAA читает вода
+        depth.clearValue.depthStencil = {1.0f, 0};
+        depth.resolveImageView = tg.depthCopyView;
+        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.resolveMode = VK_RESOLVE_MODE_MIN_BIT; // ближний побеждает (края для FSR2)
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea = {{0, 0}, rExtEff};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        ri.pDepthAttachment = &depth;
+        vkCmdBeginRendering(sy.cmdBufs[fi], &ri);
+        vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.pipeline);
+        VkViewport vwp{0, 0, (float)RW, (float)RH, 0.0f, 1.0f};
+        VkRect2D sc{{0, 0}, rExtEff};
+        vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &vwp);
+        vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
+        vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
+        // 4) один indirect-count draw на всё видимое (команды пишет compute).
+        vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                           (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                VK_SHADER_STAGE_FRAGMENT_BIT),
+                           0, sizeof(lightSpace), &lightSpace);
+        // demo-8 объём RT AO: min+k, size (мир статичен — World.sizeX/Z, SY).
+        {
+            struct OccPush { float mix, miy, miz, k, sx, sy, sz, dbg; } op{
+                worldOffset.x, 0.0f, worldOffset.z, useRtAo ? 1.0f : 0.0f,
+                (float)world.sizeX(), (float)Chunk::SY, (float)world.sizeZ(),
+                dbgNdl ? 1.0f : 0.0f};
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               64, sizeof(op), &op);
+            float ns = noShadow ? 1.0f : 0.0f; // F6
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               96, sizeof(ns), &ns);
+        }
+        vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.indBuf, sizeof(uint32_t) * 4, tg.indBuf, 0,
+                               64, sizeof(VkDrawIndirectCommand));
+        vkCmdEndRendering(sy.cmdBufs[fi]);
+        // demo-9: глубина уже в копии (резолв террейна) — отдать в сэмпл воде/SSAO.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = tg.depthCopyImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        // FSR2/MV: векторы движения. Только для FSR2 (TAA-путь их не читает).
+        // Сет fi: UBO привязан при создании (fence гарантирует завершение прошлого).
+        if (useFsr && st.fsr.ready) {
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.mvPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    st.mvPipeLayout, 0, 1, &st.mvSet[fi], 0, nullptr);
+            glm::vec4 mres((float)RW, (float)RH, 1.0f / (float)RW, 1.0f / (float)RH);
+            vkCmdPushConstants(sy.cmdBufs[fi], st.mvPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(mres), &mres);
+            vkCmdDispatch(sy.cmdBufs[fi], (RW + 15) / 16, (RH + 15) / 16, 1);
+            VkImageMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            mb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            mb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            mb.image = st.mvImg;
+            mb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &mb);
+        }
+        // demo-6 SSAO по копии глубины террейна (вода depth ещё не писала — ей AO
+        // ложится от рельефа за ней, малозаметно). Барьер transfer->compute,
+        // после — compute->fragment для тонемэппа.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            (void)b; // барьер выше уже отдал копию в SHADER_READ (FRAGMENT|COMPUTE)
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.ssaoPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    st.ssaoPipeLayout, 0, 1, &st.ssaoSet, 0, nullptr);
+            struct SsaoPush { float rw, rh, rw2, rh2, zn, zf, rad, dist; };
+            SsaoPush push{(float)RW, (float)RH, 1.0f / (float)RW, 1.0f / (float)RH,
+                          0.1f, 600.0f, 0.6f, 1.5f};
+            vkCmdPushConstants(sy.cmdBufs[fi], st.ssaoPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDispatch(sy.cmdBufs[fi], (RW + 15) / 16, (RH + 15) / 16, 1);
+            VkImageMemoryBarrier b2s{};
+            b2s.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b2s.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b2s.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b2s.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2s.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b2s.image = st.ssaoImg;
+            b2s.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b2s);
+        }
+        {
+            VkRenderingAttachmentInfo wcol{};
+            wcol.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            wcol.imageView = tg.hdrMsView; // вода в MSAA поверх террейна (LOAD!)
+            wcol.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            wcol.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            wcol.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // резолв в HDR читает все сэмплы
+            wcol.resolveImageView = tg.hdrView;
+            wcol.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            wcol.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            VkRenderingAttachmentInfo wdep{};
+            wdep.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            wdep.imageView = tg.depthMsView; // LOAD террейна, резолва нет (копия уже снята)
+            wdep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            wdep.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            wdep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo wri{};
+            wri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            wri.renderArea = {{0, 0}, rExtEff};
+            wri.layerCount = 1;
+            wri.colorAttachmentCount = 1;
+            wri.pColorAttachments = &wcol;
+            wri.pDepthAttachment = &wdep;
+            vkCmdBeginRendering(sy.cmdBufs[fi], &wri);
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.waterPipe);
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &vwp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &sc);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
+            glm::vec2 wres((float)RW, (float)RH);
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               0, sizeof(wres), &wres);
+            vkCmdDrawIndirectCount(sy.cmdBufs[fi], tg.waterIndBuf, sizeof(uint32_t) * 4, tg.waterIndBuf, 0,
+                                   64, sizeof(VkDrawIndirectCommand));
+            vkCmdEndRendering(sy.cmdBufs[fi]);
+        }
+        // demo-5a пост: HDR -> lum -> adapt -> тонемэппинг в своп.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image = tg.hdrImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            tg.hdrLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        // FSR2 (1.0x). Пост всегда читает fsrOut:
+        // FSR2 пишет его сам; фолбэк (F8 выкл) — копией HDR->fsrOut.
+        if (useFsr && st.fsr.ready) {
+            FfxFsr2DispatchDescription dd{};
+            dd.commandList = sy.cmdBufs[fi];
+            uint32_t DW = core.swapExtent.width, DH = core.swapExtent.height;
+            dd.color = ffxGetTextureResourceVK(&st.fsr.ctx, tg.hdrImg, tg.hdrView,
+                DW, DH, VK_FORMAT_R16G16B16A16_SFLOAT,
+                L"hdr", FFX_RESOURCE_STATE_COMPUTE_READ);
+            dd.depth = ffxGetTextureResourceVK(&st.fsr.ctx, tg.depthCopyImg, tg.depthCopyView,
+                DW, DH, VK_FORMAT_D32_SFLOAT,
+                L"depth", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.motionVectors = ffxGetTextureResourceVK(&st.fsr.ctx, st.mvImg, st.mvView,
+                DW, DH, VK_FORMAT_R16G16_SFLOAT,
+                L"mv", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.output = ffxGetTextureResourceVK(&st.fsr.ctx, tg.fsrImg, tg.fsrView,
+                core.swapExtent.width, core.swapExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                L"fsrOut", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+            dd.exposure = ffxGetTextureResourceVK(&st.fsr.ctx,
+                (frame % 2 == 0) ? tg.expImg[1] : tg.expImg[0],
+                (frame % 2 == 0) ? tg.expView[1] : tg.expView[0],
+                1, 1, VK_FORMAT_R16_SFLOAT, L"exp", FFX_RESOURCE_STATE_GENERIC_READ);
+            dd.jitterOffset = {jox, joy};
+            dd.motionVectorScale = {(float)RW, (float)RH};
+            dd.renderSize = {RW, RH};
+            dd.enableSharpening = false;
+            dd.sharpness = 0.0f;
+            dd.frameTimeDelta = dt * 1000.0f < 1.0f ? 1.0f : dt * 1000.0f; // мс, иначе варнинг FSR2
+            dd.preExposure = 1.0f;
+            dd.reset = fsrReset;
+            dd.cameraNear = 0.1f;
+            dd.cameraFar = 600.0f;
+            dd.cameraFovAngleVertical = 70.0f * 3.14159265f / 180.0f;
+            dd.viewSpaceToMetersFactor = 1.0f;
+            FfxErrorCode fsrRc = ffxFsr2ContextDispatch(&st.fsr.ctx, &dd);
+            if (fsrRc != FFX_OK) printf("FSR2 dispatch failed: %d\n", (int)fsrRc);
+            // fsrOut: UAV-запись -> сэмпл поста.
+            VkImageMemoryBarrier fb{};
+            fb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fb.image = tg.fsrImg;
+            fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &fb);
+            // HDR остаётся SHADER_READ (FSR2 только читает): трекинг цел.
+            // depthCopy/MV вернуть в GENERAL (наши сэмплеры ждут его).
+            VkImageMemoryBarrier fr[3]{};
+            fr[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[0].image = tg.depthCopyImg;
+            fr[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            fr[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fr[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[1].image = st.mvImg;
+            fr[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            fr[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fr[2].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[2].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fr[2].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fr[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fr[2].image = (frame % 2 == 0) ? tg.expImg[1] : tg.expImg[0];
+            fr[2].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 3, fr);
+        } else {
+        // (TAA удалён: только копия HDR->fsrOut)
+
+            // Пост всегда читает fsrOut: подтянуть туда HDR.
+            VkImageMemoryBarrier cb1{};
+            cb1.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb1.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb1.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            cb1.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cb1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            cb1.image = tg.hdrImg;
+            cb1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &cb1);
+            VkImageCopy ccp{};
+            ccp.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            ccp.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            ccp.extent = {core.swapExtent.width, core.swapExtent.height, 1};
+            vkCmdCopyImage(sy.cmdBufs[fi], tg.hdrImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           tg.fsrImg, VK_IMAGE_LAYOUT_GENERAL, 1, &ccp);
+            VkImageMemoryBarrier cb3{};
+            cb3.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb3.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            cb3.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb3.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            cb3.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            cb3.image = tg.fsrImg;
+            cb3.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 (VkPipelineStageFlags)(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+                                 0, 0, nullptr, 0, nullptr, 1, &cb3);
+            VkImageMemoryBarrier cb2{};
+            cb2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cb2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            cb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            cb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            cb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            cb2.image = tg.hdrImg;
+            cb2.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &cb2);
+        }
+
+        // exp для тонемэппа: binding 1 -> только что записанный.
+        // ДО всех биндов сета в кадре (апдейт после бинда инвалидирует запись)!
+        // (parity объявлен ниже у adapt; здесь inline по frame.)
+        {
+            VkDescriptorImageInfo ei{};
+            ei.sampler = tg.expSmp;
+            ei.imageView = (frame % 2 == 0) ? tg.expView[1] : tg.expView[0];
+            ei.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = st.postSet[fi]; w.dstBinding = 1;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &ei;
+            vkUpdateDescriptorSets(core.device, 1, &w, 0, nullptr);
+        }
+        // demo-5b bloom-цепочка: bright HDR->A, down A->B, up B->A2(+base A).
+        {
+            struct BloomPass { VkPipeline pipe; VkDescriptorSet set; uint32_t w, h; };
+            uint32_t hw = (core.swapExtent.width + 1) / 2, hh = (core.swapExtent.height + 1) / 2;
+            uint32_t qw = (core.swapExtent.width + 3) / 4, qh = (core.swapExtent.height + 3) / 4;
+            BloomPass ps[3] = {{st.brightPipe, st.bloomSet[0], hw, hh},
+                               {st.kdownPipe, st.bloomSet[1], qw, qh},
+                               {st.kupPipe, st.bloomSet[2], hw, hh}};
+            for (int i = 0; i < 3; i++) {
+                vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, ps[i].pipe);
+                vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        st.bloomPipeLayout, 0, 1, &ps[i].set, 0, nullptr);
+                vkCmdDispatch(sy.cmdBufs[fi], (ps[i].w + 7) / 8, (ps[i].h + 7) / 8, 1);
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = (i == 0) ? st.bloomImg[0] : ((i == 1) ? st.bloomImg[1] : st.bloomImg[2]);
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     (i == 2) ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                              : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &b);
+            }
+        }
+        vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.lumPipe);
+        vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                st.postComputeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
+        vkCmdDispatch(sy.cmdBufs[fi], 8, 5, 1); // 64x36 тайлов
+        {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = tg.lumImg;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        float parity = (frame % 2 == 0) ? 0.0f : 1.0f; // чёт: читаем A пишем B
+        {
+            struct AdaptPush { float dt, parity, p0, p1; } ap{dt, parity, 0, 0};
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE, st.adaptPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    st.postComputeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
+            vkCmdPushConstants(sy.cmdBufs[fi], st.postComputeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(ap), &ap);
+            vkCmdDispatch(sy.cmdBufs[fi], 1, 1, 1);
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = (parity < 0.5f) ? tg.expImg[1] : tg.expImg[0];
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        }
+        // (exp binding 1 обновлён до биндов выше — см. перед lum.)
+        {
+            VkRenderingAttachmentInfo tm{};
+            tm.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            tm.imageView = core.swapViews[imgIdx];
+            tm.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            tm.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            tm.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            tm.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            VkRenderingInfo tri{};
+            tri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            tri.renderArea = {{0, 0}, core.swapExtent};
+            tri.layerCount = 1;
+            tri.colorAttachmentCount = 1;
+            tri.pColorAttachments = &tm;
+            vkCmdBeginRendering(sy.cmdBufs[fi], &tri);
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.tonemapPipe);
+            VkViewport tsvwp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
+            VkRect2D tssc{{0, 0}, core.swapExtent}; // display: vwp/sc ужаты под render-rect
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &tsvwp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &tssc);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pp.tonemapPipeLayout, 0, 1, &st.postSet[fi], 0, nullptr);
+            struct TmPush { glm::vec4 res; float aoK; };
+            TmPush res{glm::vec4((float)core.swapExtent.width, (float)core.swapExtent.height,
+                                 (float)RW / (float)core.swapExtent.width,
+                                 (float)RH / (float)core.swapExtent.height),
+                       useSsao ? 0.65f : 0.0f}; // F2 гасит AO
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.tonemapPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(res), &res);
+            vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(sy.cmdBufs[fi]);
+        }
+        // 5) рентген карты в угол (F1): второй проход по свопу (LOAD).
+        if (dbgShadow) {
+            VkRenderingAttachmentInfo dg{};
+            dg.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            dg.imageView = core.swapViews[imgIdx];
+            dg.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            dg.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            dg.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo dri{};
+            dri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            dri.renderArea = {{0, 0}, core.swapExtent};
+            dri.layerCount = 1;
+            dri.colorAttachmentCount = 1;
+            dri.pColorAttachments = &dg;
+            vkCmdBeginRendering(sy.cmdBufs[fi], &dri);
+            vkCmdBindPipeline(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS, pp.dbgPipe);
+            vkCmdBindDescriptorSets(sy.cmdBufs[fi], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pp.pipeLayout, 0, 1, &st.descSets[fi], 0, nullptr);
+            glm::vec2 dres((float)core.swapExtent.width, (float)core.swapExtent.height);
+            vkCmdPushConstants(sy.cmdBufs[fi], pp.pipeLayout,
+                               (VkShaderStageFlags)(VK_SHADER_STAGE_VERTEX_BIT |
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT),
+                               64, sizeof(dres), &dres);
+            // F1: на весь экран как shadowmap-view (было 256 в углу).
+            VkViewport dvp{0, 0, (float)core.swapExtent.width, (float)core.swapExtent.height, 0.0f, 1.0f};
+            VkRect2D dsc{{0, 0}, core.swapExtent};
+            vkCmdSetViewport(sy.cmdBufs[fi], 0, 1, &dvp);
+            vkCmdSetScissor(sy.cmdBufs[fi], 0, 1, &dsc);
+            vkCmdDraw(sy.cmdBufs[fi], 3, 1, 0, 0);
+            vkCmdEndRendering(sy.cmdBufs[fi]);
+        }
+        bool wantShot = (a.shotFrame >= 0 && frame == a.shotFrame);
+        if (wantShot) {
+            // Ридбэк вместо present-перехода: ATTACHMENT -> TRANSFER_SRC, копия, -> PRESENT.
+            VkImageMemoryBarrier b[2]{};
+            b[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[0].image = core.swapImages[imgIdx];
+            b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b[0]);
+            VkBufferImageCopy cp{};
+            cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            cp.imageExtent = {core.swapExtent.width, core.swapExtent.height, 1};
+            vkCmdCopyImageToBuffer(sy.cmdBufs[fi], core.swapImages[imgIdx],
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tg.shotBuf, 1, &cp);
+            b[1] = b[0];
+            b[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[1].dstAccessMask = 0;
+            b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b[1]);
+        } else {
+            VkImageMemoryBarrier toPresent = toDraw;
+            toPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            toPresent.dstAccessMask = 0;
+            toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(sy.cmdBufs[fi], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toPresent);
+        }
+        VK_CHECK(vkEndCommandBuffer(sy.cmdBufs[fi]));
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo sub{};
+        sub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        sub.waitSemaphoreCount = 1;
+        sub.pWaitSemaphores = &sy.acquireSem[fi];
+        sub.pWaitDstStageMask = &waitStage;
+        sub.commandBufferCount = 1;
+        sub.pCommandBuffers = &sy.cmdBufs[fi];
+        sub.signalSemaphoreCount = 1;
+        sub.pSignalSemaphores = &sy.renderSem[imgIdx];
+        VK_CHECK(vkQueueSubmit(core.gfxQueue, 1, &sub, sy.frameFence[fi]));
+        sy.imgLayout[imgIdx] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        VkPresentInfoKHR pr{};
+        pr.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        pr.waitSemaphoreCount = 1;
+        pr.pWaitSemaphores = &sy.renderSem[imgIdx];
+        pr.swapchainCount = 1;
+        pr.pSwapchains = &core.swapchain;
+        pr.pImageIndices = &imgIdx;
+        VK_CHECK(vkQueuePresentKHR(core.gfxQueue, &pr));
+        // Кап 60fps: демке больше не надо, движку вредит (dt скачет).
+        // VK_FPS=0 — без капа, VK_FPS=30 — строже.
+        {
+            double capFps = 60.0;
+            if (const char* e = getenv("VK_FPS")) capFps = atof(e);
+            if (capFps > 0.5) {
+                double end = glfwGetTime();
+                double wait = 1.0 / capFps - (end - now);
+                if (wait > 0.0)
+                    std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+            }
+        }
+        if (wantShot) {
+            VK_CHECK(vkWaitForFences(core.device, 1, &sy.frameFence[fi], VK_TRUE, 1000000000ull));
+            void* px = nullptr;
+            VK_CHECK(vmaMapMemory(core.alloc, tg.shotAlloc, &px));
+            vmaInvalidateAllocation(core.alloc, tg.shotAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
+                FILE* f = fopen("shot.tga", "wb");
+            if (f) {
+                int W = (int)core.swapExtent.width, H = (int)core.swapExtent.height;
+                unsigned char hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    (unsigned char)(W & 255), (unsigned char)(W >> 8),
+                    (unsigned char)(H & 255), (unsigned char)(H >> 8), 32, 0x20};
+                fwrite(hdr, 1, 18, f);
+                fwrite(px, 1, (size_t)W * H * 4, f); // BGRA сверху вниз (0x20)
+                fclose(f);
+                printf("shot saved frame %d\n", frame);
+            }
+            vmaUnmapMemory(core.alloc, tg.shotAlloc);
+        }
+        if (tg.waterDbg && frame == 5) {
+            vkDeviceWaitIdle(core.device);
+            core.immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 16 + 64 * 16;
+                vkCmdCopyBuffer(cb, tg.waterIndBuf, tg.dbgReadBuf, 1, &cp);
+            });
+            void* dpx = nullptr;
+            VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
+            uint32_t* u = (uint32_t*)dpx;
+            printf("WATERDBG waterInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
+            {
+                uint32_t total = 0;
+                printf("WATERDBG slots:");
+                for (int s = 0; s < 64; s++) {
+                    uint32_t inst = u[4 + s * 4 + 1], fi_ = u[4 + s * 4 + 3];
+                    total += inst;
+                    if (inst) printf(" [%d]i=%u,fi=%u", s, inst, fi_);
+                }
+                printf(" totalInst=%u\n", total);
+            }
+            vmaUnmapMemory(core.alloc, tg.dbgReadAlloc);
+            core.immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, tg.visBuf, tg.dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
+            u = (uint32_t*)dpx;
+            printf("WATERDBG vis0-7: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                   u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+            vmaUnmapMemory(core.alloc, tg.dbgReadAlloc);
+            core.immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, tg.waterMetaBuf, tg.dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
+            u = (uint32_t*)dpx;
+            printf("WATERDBG wmeta0-3: off=%u cnt=%u ox=%f oz=%f | off=%u cnt=%u\n",
+                   u[0], u[1], *(float*)&u[2], *(float*)&u[3], u[4], u[5]);
+            vmaUnmapMemory(core.alloc, tg.dbgReadAlloc);
+            core.immRun([&](VkCommandBuffer cb) {
+                VkBufferCopy cp{};
+                cp.size = 64;
+                vkCmdCopyBuffer(cb, tg.indBuf, tg.dbgReadBuf, 1, &cp);
+            });
+            VK_CHECK(vmaMapMemory(core.alloc, tg.dbgReadAlloc, &dpx));
+            vmaInvalidateAllocation(core.alloc, tg.dbgReadAlloc, 0, VK_WHOLE_SIZE); // non-coherent (NVIDIA)
+            u = (uint32_t*)dpx;
+            printf("WATERDBG terrainInd count=%u cmd0=(%u,%u,%u,%u)\n", u[0], u[4], u[5], u[6], u[7]);
+            vmaUnmapMemory(core.alloc, tg.dbgReadAlloc);
+        }
+        frame++; drawn++; fpsN++;
+        if (now - fpsT >= 2.0) {
+            printf("fps %.0f (%.2f ms)\n", fpsN / (now - fpsT), (now - fpsT) * 1000.0 / fpsN);
+            fpsT = now; fpsN = 0;
+        }
+        if (a.maxFrames > 0 && drawn >= a.maxFrames) break;
+    }
+    return drawn;
+}
