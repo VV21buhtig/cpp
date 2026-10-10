@@ -119,7 +119,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Тень — тем же DDA к солнцу (жёсткая). Дальность от губернатора:
   // steps 25..100 -> 30..120 (раньше maxSteps никто не читал, губернатор был плацебо).
   var sh = 1.0;
-  float shRange = u.maxSteps * 1.2;
+  let shRange = u.maxSteps * 1.2;
   if (view.y > 0.5 && dot(n, sunDir) > 0.0 && hit.t < shRange) {
     let shHit = voxMarch(pos + n * 0.05, sunDir, shRange);
     let shRaw = select(0.0, 1.0, shHit.t < 0.0);
