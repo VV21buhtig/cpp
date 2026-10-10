@@ -1,4 +1,4 @@
-// Sky-view LUT под одно тело (их wc_skyview.glsl 1:1).
+// Sky-view LUT под одно тело
 // Печётся заново при смене высоты тела >1e-3 или высоты камеры >1.0.
 struct ViewParams {
   body_dir: vec4f,
