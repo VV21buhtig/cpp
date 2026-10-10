@@ -272,6 +272,14 @@ static int app_frame(App *app) {
     memset(&v, 0, sizeof v);
     v.camPos = v3(rcx, rcy, rcz);
     v.yaw = (float)app->yaw; v.pitch = (float)app->pitch; v.fov = app->settings.fov;
+    // Скриншот-прицел: VOX_CAM="yaw,pitch" фиксирует взгляд (иначе демо крутит).
+    {
+        const char *ce = getenv("VOX_CAM");
+        if (ce && ce[0] && sscanf(ce, "%lf,%lf", &app->yaw, &app->pitch) == 2) {
+            v.yaw = (float)app->yaw;
+            v.pitch = (float)app->pitch;
+        }
+    }
     int ww, hh;
     glfwGetFramebufferSize(win, &ww, &hh);
     v.resW = ww; v.resH = hh;

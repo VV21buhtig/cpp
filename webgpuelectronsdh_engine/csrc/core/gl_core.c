@@ -201,8 +201,10 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     // Меши их lighting-шейдером. Вершины chunk-local, model = смещение чанка.
     // Тени выкл (shadowOn=0), лампы/фонарь выкл (нули) — честный минимум дня.
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    if (!(getenv("VOX_NOCULL") && getenv("VOX_NOCULL")[0])) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+    }
     glUseProgram(c->lightProg);
     glUniformMatrix4fv(c->u_view, 1, 0, view.m);
     glUniformMatrix4fv(c->u_proj, 1, 0, proj.m);
@@ -237,6 +239,47 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     glBindVertexArray(0);
     glUseProgram(0);
     glDisable(GL_CULL_FACE);
+    // Скриншот из буфера: VOX_SHOT=путь.ppm VOX_SHOT_AT=кадр (дефолт 60).
+    {
+        const char *sp = getenv("VOX_SHOT");
+        if (sp && sp[0]) {
+            const char *sa = getenv("VOX_SHOT_AT");
+            int at = sa && sa[0] ? atoi(sa) : 60;
+            if (c->frame == at) {
+                uint8_t *px = (uint8_t *)malloc((size_t)ww * hh * 3);
+                if (px) {
+                    glReadPixels(0, 0, ww, hh, GL_RGB, GL_UNSIGNED_BYTE, px);
+                    FILE *f = fopen(sp, "wb");
+                    if (f) {
+                        fprintf(f, "P6\n%d %d\n255\n", ww, hh);
+                        for (int y = hh - 1; y >= 0; y--)
+                            fwrite(px + (size_t)y * ww * 3, 1, (size_t)ww * 3, f);
+                        fclose(f);
+                        fprintf(stderr, "shot: %s (%dx%d)\n", sp, ww, hh);
+                    }
+                    free(px);
+                    // Диагностика: есть ли геометрия? min/max глубины + число мешей.
+                    {
+                        float *dz = (float *)malloc((size_t)ww * hh * 4);
+                        if (dz) {
+                            glReadPixels(0, 0, ww, hh, GL_DEPTH_COMPONENT, GL_FLOAT, dz);
+                            float mn = 1.0f, mx = 0.0f;
+                            for (int i = 0; i < ww * hh; i++) {
+                                if (dz[i] < mn) mn = dz[i];
+                                if (dz[i] > mx) mx = dz[i];
+                            }
+                            int nu = 0;
+                            for (int i = 0; i < GL_MESH_SLOTS; i++)
+                                if (c->meshes[i].used) nu++;
+                            fprintf(stderr, "shotdbg: depth min=%.4f max=%.4f meshes=%d glerr=%d\n",
+                                    mn, mx, nu, glGetError());
+                            free(dz);
+                        }
+                    }
+                }
+            }
+        }
+    }
     glfwSwapBuffers(c->win);
     c->frame++;
 }
@@ -300,6 +343,10 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
     glUseProgram(c->lightProg);
     glUniform1i(glGetUniformLocation(c->lightProg, "material.diffuse"), 0);
     glUniform1i(glGetUniformLocation(c->lightProg, "material.specular"), 1);
+    // shadowMap (sampler2D) с дефолтного юнита 0 — иначе конфликт типов с
+    // material.diffuse (2DArray) на том же юните и программа невалидна.
+    // Тени выкл (shadowOn=0), семплиться не будет. Как у них: юнит 2.
+    glUniform1i(glGetUniformLocation(c->lightProg, "shadowMap"), 2);
     glUniform1f(glGetUniformLocation(c->lightProg, "material.shininess"), 32.0f);
     for (int i = 0; i < 4; i++) {
         char nm[64];
@@ -317,6 +364,19 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
     glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.cutOff"), 0.976f);
     glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.outerCutOff"), 0.966f);
     glUseProgram(0);
+    // Разовая валидация: конфликт сэмплеров (как shadowMap на юните 0)
+    // иначе молча роняет все draws. Ловим тут, а не по скриншотам.
+    {
+        glValidateProgram(c->lightProg);
+        int vs = 0;
+        glGetProgramiv(c->lightProg, GL_VALIDATE_STATUS, &vs);
+        if (!vs) {
+            char vlog[1024] = {0};
+            glGetProgramInfoLog(c->lightProg, sizeof vlog, 0, vlog);
+            fprintf(stderr, "gl: lightProg INVALID: %s\n", vlog);
+            return 0;
+        }
+    }
     c->ready = 1;
     c->prevT = glfwGetTime();
     printf("gl core OK: sky + meshes\n");
