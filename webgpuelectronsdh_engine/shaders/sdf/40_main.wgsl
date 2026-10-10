@@ -139,7 +139,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         inside = abs(fx) <= ex && abs(fy) <= ey;
       }
       if (!inside) {
-        outc = vec3f(0.015);
+        // Призрак, а не стена: вне конуса видно, но темно — конус не перекрыть.
+        outc = mix(outc, vec3f(0.015), 0.75);
       } else {
         outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.10);
       }
