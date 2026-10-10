@@ -1,4 +1,4 @@
-// Ядро Hillaire из K (wc_atmo.glsl). Единицы — мегаметры.
+// Ядро Hillaire из K . Единицы — мегаметры.
 // Подставляется префиксом к 10/20/30/40 (см. cmake/embed_wgsl.cmake).
 const GROUND_RADIUS_MM = 6.360;
 const ATMO_RADIUS_MM = 6.460;
