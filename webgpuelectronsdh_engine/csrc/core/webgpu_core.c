@@ -574,6 +574,8 @@ RenderCore *rc_create(const char *name) {
     if (!strcmp(name, "gl")) return rc_gl_create();
     if (!strcmp(name, "vk")) return rc_vk_create();
     if (!strcmp(name, "sdf")) return rc_sdf_create();
+    if (!strcmp(name, "pix")) return rc_pix_create();
+    if (!strcmp(name, "vec")) return rc_vec_create();
 #else
     (void)rc_gl_create;
 #endif

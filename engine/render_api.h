@@ -83,6 +83,7 @@ struct RenderCore {
     // --- Домен VECTOR (NULL если нет RC_CAP_VECTOR). Кадр примитивов. ---
     int (*upload_vector)(RenderCore *rc, const RcVecShape *shapes, int n);
     // --- Домен PIXEL (NULL если нет RC_CAP_PIXEL). CPU-кадр на весь экран. ---
+    // Строка 0 = ВЕРХ кадра (натурально для CPU-буферов; ядро флипает под GPU).
     int (*upload_pixels)(RenderCore *rc, const uint8_t *rgba, int w, int h);
     // fps кадра для губернатора снаружи (0 пока нет данных)
     float (*fps)(RenderCore *rc);
@@ -92,6 +93,8 @@ RenderCore *rc_webgpu_create(void);
 RenderCore *rc_gl_create(void); // натив only (GL 4.5, не WebGL)
 RenderCore *rc_vk_create(void); // натив only (Vulkan 1.0, без слоёв)
 RenderCore *rc_sdf_create(void); // натив only (GL 4.5 реймарш, caps=SDF)
+RenderCore *rc_pix_create(void); // натив only (GL 4.5 блит, caps=PIXEL)
+RenderCore *rc_vec_create(void); // натив only (GL 4.5 + CPU-растр, caps=VECTOR)
 // Выбор по имени ("webgpu", "gl"). NULL если нет такого. Для редактора.
 RenderCore *rc_create(const char *name);
 void rc_destroy(RenderCore *rc);

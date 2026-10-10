@@ -36,6 +36,17 @@ target_include_directories(sdf_demo PRIVATE csrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
+# 2D-демо: пиксели и вектор (натив, без webgpu).
+add_executable(pix_demo csrc/pix_demo.c csrc/core/pix_core.c csrc/core/corelib.c)
+target_include_directories(pix_demo PRIVATE csrc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
+target_link_libraries(pix_demo PRIVATE glfw glad OpenGL::GL m)
+target_compile_options(pix_demo PRIVATE -Wall -Wextra)
+add_executable(vec_demo csrc/vec_demo.c csrc/core/vec_core.c csrc/core/corelib.c)
+target_include_directories(vec_demo PRIVATE csrc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
+target_link_libraries(vec_demo PRIVATE glfw glad OpenGL::GL m)
+target_compile_options(vec_demo PRIVATE -Wall -Wextra)
 # Тест SDF-бейка (точный EDT, без GPU).
 add_executable(sdf_test csrc/vox_sdf_test.c csrc/vox/vox_gen.c csrc/vox/vox_sdf.c)
 target_include_directories(sdf_test PRIVATE csrc)
