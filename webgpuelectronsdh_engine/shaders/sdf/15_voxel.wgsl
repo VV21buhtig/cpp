@@ -10,6 +10,7 @@ struct VoxHit {
   t: f32,
   n: vec3f,
   id: u32,
+  steps: f32, // цена: итераций DDA (для heatmap, режим 3)
 };
 
 // Сегмент луча в окне: x=tEnter, y=tExit, (-1,-1) мимо.
@@ -36,6 +37,7 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {  var h: VoxHit;
   h.t = -1.0;
   h.n = vec3f(0.0);
   h.id = 0u;
+  h.steps = 0.0;
   let seg = boxSeg(ro, rd);
   if (seg.x < 0.0) { return h; }
   let tEnd = min(seg.y, maxT);
@@ -60,6 +62,7 @@ fn voxMarch(ro: vec3f, rd: vec3f, maxT: f32) -> VoxHit {  var h: VoxHit;
   var n = vec3f(0.0);
   var t = seg.x;
   for (var i = 0; i < 320; i++) {
+    h.steps += 1.0;
     if (tm.x < tm.y && tm.x < tm.z) {
       p.x += step.x; t = tm.x; tm.x += tdx; n = vec3f(-srd.x, 0.0, 0.0);
     } else if (tm.y < tm.z) {

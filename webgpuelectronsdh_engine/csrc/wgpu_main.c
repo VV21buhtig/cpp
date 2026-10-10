@@ -453,7 +453,7 @@ static int app_frame(App *app) {
     app->prevT = now;
     static int nPrev = 0;
     int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
-    if (nDown && !nPrev) { app->mode = (app->mode + 1) % 3; printf("view mode=%d\n", app->mode); }
+    if (nDown && !nPrev) { app->mode = (app->mode + 1) % 4; printf("view mode=%d\n", app->mode); }
     nPrev = nDown;
     // Меню настроек (Tab): стрелки вместо хоткеев. Открыто — курсор свободен.
     static int tabPrev = 0;

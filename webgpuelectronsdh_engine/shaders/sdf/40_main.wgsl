@@ -65,7 +65,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let pos = u.camPos + rd * hit.t;
   let n = hit.n;
   if (u.mode > 0.5 && u.mode < 1.5) { return vec4f(n * 0.5 + 0.5, 1.0); }
-  if (u.mode > 1.5) { let g = clamp(hit.t / 120.0, 0.0, 1.0); return vec4f(g, g, g, 1.0); }
+  if (u.mode > 1.5 && u.mode < 2.5) { let g = clamp(hit.t / 120.0, 0.0, 1.0); return vec4f(g, g, g, 1.0); }
+  if (u.mode > 2.5) { let c = clamp(hit.steps / 320.0, 0.0, 1.0); return vec4f(c, c * 0.3, 0.1, 1.0); }
   let sunDir = normalize(u.sunDir);
   // Тень — тем же DDA к солнцу (жёсткая). На весь чанк в поле зрения:
   // дальность 120, фейд 100-120. Луч рвётся первым вокселем.
