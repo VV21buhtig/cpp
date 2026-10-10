@@ -14,7 +14,9 @@ typedef struct {
     int used;
     int cx, cz;
     int dirty; // 1 если сгенерён, но app ещё не залил в GPU (гасится после upload_chunk)
-    int sdfDirty; // 1 если SDF-бейк протух (гасится после upload_sdf_chunk)
+    int sdfDirty; // 1 если GPU-копия SDF протухла (бейк и/или placement)
+    int sdfBaked; // 1 если кэш sdf[] свежий (мировые данные, от origin не зависят)
+    uint8_t sdf[VOX_N]; // печёный R8: байт = clamp(d/12,-1,1)*.5+.5
     VoxChunk data;
 } VoxSlot;
 

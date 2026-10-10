@@ -19,6 +19,7 @@ static void dirty_nb(VoxWorld *w, int cx, int cz) {
                 w->slots[i].cz == cz + d[k][1]) {
                 w->slots[i].dirty = 1;
                 w->slots[i].sdfDirty = 1;
+                w->slots[i].sdfBaked = 0; // бейк пёкся со старыми соседями
             }
 }
 
@@ -73,6 +74,7 @@ int vox_world_ensure(VoxWorld *w, int pcx, int pcz) {
                 s->cz = cz;
                 s->dirty = 1;
                 s->sdfDirty = 1;
+                s->sdfBaked = 0; // свежий чанк — кэша нет
                 s->data.cx = cx;
                 s->data.cz = cz;
                 vox_gen(&s->data, w->seed);

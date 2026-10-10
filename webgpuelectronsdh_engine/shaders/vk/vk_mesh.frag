@@ -16,6 +16,22 @@ layout(set = 0, binding = 0) uniform Frame {
 layout(set = 0, binding = 1) uniform sampler2DArray tiles;
 layout(set = 0, binding = 2) uniform sampler2D specMap;
 layout(set = 0, binding = 3) uniform sampler3D sdfVol;
+layout(set = 0, binding = 4) uniform isampler2D sdfTag; // 11x11: чанк слота
+
+// Мимо тега = далеко (мираж тороида): луч дальше не идёт, тень не трогаем.
+float sdfAt(vec3 wpos, out int ok) {
+    ivec2 ch = ivec2(floor(wpos.xz / 16.0));
+    ivec2 org = ivec2(floor(fr.sdfMin.xz / 16.0));
+    ivec2 slot = ivec2(mod(vec2(ch - org), vec2(11.0)));
+    ok = 0;
+    if (any(notEqual(texelFetch(sdfTag, slot, 0).xy, ch))) return 12.0;
+    vec3 uvw = (wpos - fr.sdfMin.xyz) / vec3(176.0, 64.0, 176.0);
+    if (uvw.x < 0.0 || uvw.x > 1.0 || uvw.z < 0.0 || uvw.z > 1.0 ||
+        uvw.y < 0.0 || uvw.y > 1.0)
+        return 12.0;
+    ok = 1;
+    return texture(sdfVol, uvw).r * 24.0 - 12.0;
+}
 
 layout(location = 0) in vec3 vPos;
 layout(location = 1) in vec3 vNrm;
@@ -28,19 +44,13 @@ layout(location = 0) out vec4 outColor;
 // Возврат 0..1 (1 = свет). Вне объёма считаем далеко (тени нет).
 float sdfShadow(vec3 wpos, vec3 sundir) {
     if (fr.sdfMin.w < -0.5) return 1.0; // А/Б: VOX_NO_SDFSH=1
-    vec3 uvw0 = (wpos - fr.sdfMin.xyz) / vec3(176.0, 64.0, 176.0);
-    if (uvw0.x < 0.0 || uvw0.x > 1.0 || uvw0.z < 0.0 || uvw0.z > 1.0 ||
-        uvw0.y < 0.0 || uvw0.y > 1.0)
-        return 1.0;
     float res = 1.0;
     float t = 0.05;
     for (int i = 0; i < 24; i++) {
         vec3 p = wpos + sundir * t;
-        vec3 uvw = (p - fr.sdfMin.xyz) / vec3(176.0, 64.0, 176.0);
-        if (uvw.x < 0.0 || uvw.x > 1.0 || uvw.z < 0.0 || uvw.z > 1.0 ||
-            uvw.y < 0.0 || uvw.y > 1.0)
-            break;
-        float h = texture(sdfVol, uvw).r * 24.0 - 12.0;
+        int ok = 0;
+        float h = sdfAt(p, ok);
+        if (ok == 0) break; // край данных — дальше не знаем, тень не трогаем
         if (h < 0.02) return 0.0; // внутри — глухая тень
         res = min(res, 8.0 * h / t); // penumbra ~ расстоянию
         t += h;

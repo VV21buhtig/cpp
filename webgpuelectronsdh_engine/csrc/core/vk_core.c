@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <math.h>
 #include "core/render_api.h"
 #include "core/mat4.h"
@@ -81,10 +82,15 @@ typedef struct {
 #define VK_SDF_W 176
 #define VK_SDF_H 64
 #define VK_SDF_D 176
+#define VK_SDF_CH 11 // чанков по стороне (кольцо), теги валидности 11x11
     VkImage sdfImg;
     VkDeviceMemory sdfMem;
     VkImageView sdfView;
     VkSampler sdfSmp;
+    VkImage tagImg; // 11x11 RG32SINT: какой чанк реально залит (миражи!)
+    VkDeviceMemory tagMem;
+    VkImageView tagView;
+    VkSampler tagSmp;
     VkBuffer sdfStg;
     VkDeviceMemory sdfStgMem;
     void *sdfStgPtr;
@@ -123,6 +129,51 @@ static double vk_time(void) {
 
 static int vk_once(VKCore *c, VkCommandBuffer *outCb);
 static int vk_once_end(VKCore *c, VkCommandBuffer cb);
+
+// Один тег (cx,cz) в слот (sx,sz). Картинка уже в SHADER_READ (инит залил).
+static void vk_tag_copy(VKCore *c, VkCommandBuffer cb, int sx, int sz, int32_t cx, int32_t cz) {
+    int32_t *tp = (int32_t *)((uint8_t *)c->sdfStgPtr + VOX_N);
+    tp[0] = cx;
+    tp[1] = cz;
+    VkImageMemoryBarrier b0;
+    memset(&b0, 0, sizeof b0);
+    b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b0.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b0.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b0.image = c->tagImg;
+    b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b0.subresourceRange.levelCount = 1;
+    b0.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
+    VkBufferImageCopy cp;
+    memset(&cp, 0, sizeof cp);
+    cp.bufferOffset = VOX_N;
+    cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cp.imageSubresource.layerCount = 1;
+    cp.imageOffset.x = sx;
+    cp.imageOffset.y = sz;
+    cp.imageExtent.width = 1;
+    cp.imageExtent.height = 1;
+    cp.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, c->sdfStg, c->tagImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    VkImageMemoryBarrier b1 = b0;
+    b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+}
+
+// Слот тега чанка (мод с защитой от отрицательных).
+static void vk_tag_slot(VKCore *c, int cx, int cz, int *sx, int *sz) {
+    int ocx = c->sdfOX / VOX_SX, ocz = c->sdfOZ / VOX_SZ;
+    *sx = ((cx - ocx) % VK_SDF_CH + VK_SDF_CH) % VK_SDF_CH;
+    *sz = ((cz - ocz) % VK_SDF_CH + VK_SDF_CH) % VK_SDF_CH;
+}
 
 static VkBool32 vk_dbg_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
                            VkDebugUtilsMessageTypeFlagsEXT type,
@@ -302,6 +353,12 @@ static int core_upload_sdf_chunk(RenderCore *rc, int cx, int cz, const uint8_t *
     b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+    // Тег в тот же сабмит: слот теперь наш.
+    {
+        int sx, sz;
+        vk_tag_slot(c, cx, cz, &sx, &sz);
+        vk_tag_copy(c, cb, sx, sz, cx, cz);
+    }
     if (!vk_once_end(c, cb)) return 0;
     return 1;
 }
@@ -315,7 +372,16 @@ static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
         vkFreeMemory(c->dev, c->meshes[i].mem, 0);
         c->meshes[i].used = 0;
         c->meshes[i].count = 0;
-        return;
+        break;
+    }
+    // SDF-тег в мимо (тексели пусть лежат — маска их закроет).
+    if (c->ready && c->tagImg) {
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        if (!vk_once(c, &cb)) return;
+        int sx, sz;
+        vk_tag_slot(c, cx, cz, &sx, &sz);
+        vk_tag_copy(c, cb, sx, sz, INT32_MAX, INT32_MAX);
+        vk_once_end(c, cb);
     }
 }
 
@@ -634,9 +700,9 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
         }
     }
 
-    // Сет: 0=UBO, 1=атлас, 2=спек, 3=SDF-объём.
+    // Сет: 0=UBO, 1=атлас, 2=спек, 3=SDF-объём, 4=SDF-теги.
     {
-        VkDescriptorSetLayoutBinding b[4];
+        VkDescriptorSetLayoutBinding b[5];
         memset(b, 0, sizeof b);
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -654,10 +720,14 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
         b[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[3].descriptorCount = 1;
         b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        b[4].binding = 4;
+        b[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[4].descriptorCount = 1;
+        b[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo li;
         memset(&li, 0, sizeof li);
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 4;
+        li.bindingCount = 5;
         li.pBindings = b;
         VKCHK(vkCreateDescriptorSetLayout(c->dev, &li, 0, &c->setLayout));
     }
@@ -703,7 +773,7 @@ static int core_init2(RenderCore *rc) {
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         ps[0].descriptorCount = VK_FIF;
         ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[1].descriptorCount = VK_FIF * 3; // атлас+спек+SDF на сет
+        ps[1].descriptorCount = VK_FIF * 4; // атлас+спек+SDF+теги на сет
         VkDescriptorPoolCreateInfo pi;
         memset(&pi, 0, sizeof pi);
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1171,8 +1241,97 @@ static int core_init_sdf(RenderCore *rc) {
         sm.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         VKCHK(vkCreateSampler(c->dev, &sm, 0, &c->sdfSmp));
     }
-    // Стейджинг 16x64x16 и заливка «далеко» всего объёма (разово, инит).
-    if (!vk_hbuf(c, VOX_N, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    // Теги 11x11 RG32SINT: какой чанк реально залит (против миражей тороида).
+    // Старт — сентинел (мимо). Заливка/снос — в upload/unload.
+    {
+        VkImageCreateInfo ici;
+        memset(&ici, 0, sizeof ici);
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = VK_FORMAT_R32G32_SINT;
+        ici.extent.width = VK_SDF_CH;
+        ici.extent.height = VK_SDF_CH;
+        ici.extent.depth = 1;
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VKCHK(vkCreateImage(c->dev, &ici, 0, &c->tagImg));
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(c->dev, c->tagImg, &mr);
+        uint32_t mi = find_mem(c->pdev, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (mi == 0xFFFFFFFFu) return 0;
+        VkMemoryAllocateInfo mai;
+        memset(&mai, 0, sizeof mai);
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = mr.size;
+        mai.memoryTypeIndex = mi;
+        VKCHK(vkAllocateMemory(c->dev, &mai, 0, &c->tagMem));
+        VKCHK(vkBindImageMemory(c->dev, c->tagImg, c->tagMem, 0));
+        VkImageViewCreateInfo vi;
+        memset(&vi, 0, sizeof vi);
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = c->tagImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R32G32_SINT;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        VKCHK(vkCreateImageView(c->dev, &vi, 0, &c->tagView));
+        VkSamplerCreateInfo sm;
+        memset(&sm, 0, sizeof sm);
+        sm.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sm.magFilter = VK_FILTER_NEAREST;
+        sm.minFilter = VK_FILTER_NEAREST;
+        VKCHK(vkCreateSampler(c->dev, &sm, 0, &c->tagSmp));
+        // Старт: все теги мимо (сентинел).
+        {
+            VkBuffer stg = VK_NULL_HANDLE;
+            VkDeviceMemory stm = VK_NULL_HANDLE;
+            void *sp = 0;
+            size_t tn = (size_t)VK_SDF_CH * VK_SDF_CH * 8;
+            if (!vk_hbuf(c, tn, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &stg, &stm, &sp)) return 0;
+            for (size_t i = 0; i < (size_t)VK_SDF_CH * VK_SDF_CH; i++) {
+                ((int32_t *)sp)[i * 2] = INT32_MAX;
+                ((int32_t *)sp)[i * 2 + 1] = INT32_MAX;
+            }
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            if (!vk_once(c, &cb)) return 0;
+            VkImageMemoryBarrier b0;
+            memset(&b0, 0, sizeof b0);
+            b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b0.image = c->tagImg;
+            b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b0.subresourceRange.levelCount = 1;
+            b0.subresourceRange.layerCount = 1;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
+            VkBufferImageCopy cp;
+            memset(&cp, 0, sizeof cp);
+            cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            cp.imageSubresource.layerCount = 1;
+            cp.imageExtent.width = VK_SDF_CH;
+            cp.imageExtent.height = VK_SDF_CH;
+            cp.imageExtent.depth = 1;
+            vkCmdCopyBufferToImage(cb, stg, c->tagImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+            VkImageMemoryBarrier b1 = b0;
+            b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+            if (!vk_once_end(c, cb)) return 0;
+            vkDestroyBuffer(c->dev, stg, 0);
+            vkFreeMemory(c->dev, stm, 0);
+        }
+    }
+    // Стейджинг 16x64x16 + место под тег (64КБ+1КБ) и заливка «далеко» (инит).
+    if (!vk_hbuf(c, VOX_N + 1024, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                  &c->sdfStg, &c->sdfStgMem, &c->sdfStgPtr)) return 0;
     {
         VkBuffer far = VK_NULL_HANDLE;
@@ -1214,7 +1373,7 @@ static int core_init_sdf(RenderCore *rc) {
         vkDestroyBuffer(c->dev, far, 0);
         vkFreeMemory(c->dev, farM, 0);
     }
-    // Биндинг 3 в оба сета.
+    // Биндинг 3 (объём) и 4 (теги) в оба сета.
     for (int i = 0; i < VK_FIF; i++) {
         VkDescriptorImageInfo ii;
         ii.sampler = c->sdfSmp;
@@ -1229,8 +1388,22 @@ static int core_init_sdf(RenderCore *rc) {
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &ii;
         vkUpdateDescriptorSets(c->dev, 1, &w, 0, 0);
+        VkDescriptorImageInfo ti;
+        ti.sampler = c->tagSmp;
+        ti.imageView = c->tagView;
+        ti.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet tw;
+        memset(&tw, 0, sizeof tw);
+        tw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        tw.dstSet = c->sets[i];
+        tw.dstBinding = 4;
+        tw.descriptorCount = 1;
+        tw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        tw.pImageInfo = &ti;
+        vkUpdateDescriptorSets(c->dev, 1, &tw, 0, 0);
     }
-    printf("vk sdf vol OK: %dx%dx%d R8\n", VK_SDF_W, VK_SDF_H, VK_SDF_D);
+    printf("vk sdf vol OK: %dx%dx%d R8 + tags %dx%d\n",
+           VK_SDF_W, VK_SDF_H, VK_SDF_D, VK_SDF_CH, VK_SDF_CH);
     return 1;
 }
 
@@ -1478,6 +1651,10 @@ static void core_shutdown(RenderCore *rc) {
     if (c->sdfMem) vkFreeMemory(c->dev, c->sdfMem, 0);
     if (c->sdfStg) vkDestroyBuffer(c->dev, c->sdfStg, 0);
     if (c->sdfStgMem) vkFreeMemory(c->dev, c->sdfStgMem, 0);
+    if (c->tagSmp) vkDestroySampler(c->dev, c->tagSmp, 0);
+    if (c->tagView) vkDestroyImageView(c->dev, c->tagView, 0);
+    if (c->tagImg) vkDestroyImage(c->dev, c->tagImg, 0);
+    if (c->tagMem) vkFreeMemory(c->dev, c->tagMem, 0);
     if (c->meshPipe) vkDestroyPipeline(c->dev, c->meshPipe, 0);
     if (c->skyPipe) vkDestroyPipeline(c->dev, c->skyPipe, 0);
     if (c->meshPipeLayout) vkDestroyPipelineLayout(c->dev, c->meshPipeLayout, 0);
