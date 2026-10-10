@@ -9,6 +9,9 @@ if(NOT EMSCRIPTEN)
   # glad из voxel-render без копий (ветка noflood): их gl.c + заголовки.
   add_library(glad STATIC ../voxel-render/src/engine/gl.c)
   target_include_directories(glad PUBLIC ../voxel-render/include)
+  # Vulkan: системный libvulkan + заголовки из vulcan-render без копий.
+  find_library(VULKAN_LIB vulkan REQUIRED)
+  find_program(GLSLC glslc REQUIRED)
 endif()
 
 # CPU-каркас (окно+математика+арены), без GPU — только натив.
@@ -48,9 +51,23 @@ else()
     GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
     GIT_TAG dawn-7069)
   FetchContent_MakeAvailable(webgpu-distribution)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/gl_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
-    ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
-  target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu glad OpenGL::GL m)
+  # SPIR-V для vk-ядра из наших shaders/vk (glslc, без копий чужих бинарников).
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/spv_vk)
+  foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv
+      COMMAND ${GLSLC} -O -o ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv
+              ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vk/${SH}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vk/${SH}
+      COMMENT "glslc ${SH}")
+    list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
+  endforeach()
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
+    ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
+  target_compile_definitions(sdf_native_webgpu PRIVATE
+    VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
+  target_include_directories(sdf_native_webgpu PRIVATE
+    ../vulcan-render/third-party/Vulkan-Headers)
+  target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu glad OpenGL::GL ${VULKAN_LIB} m)
 endif()
 file(GLOB SDF_WGSL_PARTS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf/*.wgsl"

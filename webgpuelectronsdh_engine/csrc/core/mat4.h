@@ -64,6 +64,19 @@ static inline Mat4 m4translate(float x, float y, float z) {
     return o;
 }
 
+// Вулкан-вариант: глубина [0,1] вместо GL [-1,1]. Остальное 1:1 с m4persp.
+static inline Mat4 m4persp_vk(float fovy, float aspect, float zn, float zf) {
+    Mat4 o;
+    memset(o.m, 0, sizeof o.m);
+    float t = tanf(fovy * 0.5f);
+    o.m[0] = 1.0f / (aspect * t);
+    o.m[5] = 1.0f / t;
+    o.m[10] = -zf / (zf - zn);
+    o.m[11] = -1.0f;
+    o.m[14] = -(zf * zn) / (zf - zn);
+    return o;
+}
+
 // Обратная через adjugate. det ~0 (вырождена) -> identity, не NaN.
 static inline Mat4 m4inv(const Mat4 *a) {
     const float *m = a->m;

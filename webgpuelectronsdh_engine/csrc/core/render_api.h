@@ -81,6 +81,7 @@ struct RenderCore {
 
 RenderCore *rc_webgpu_create(void);
 RenderCore *rc_gl_create(void); // натив only (GL 4.5, не WebGL)
+RenderCore *rc_vk_create(void); // натив only (Vulkan 1.0, без слоёв)
 // Выбор по имени ("webgpu", "gl"). NULL если нет такого. Для редактора.
 RenderCore *rc_create(const char *name);
 void rc_destroy(RenderCore *rc);

@@ -541,6 +541,7 @@ RenderCore *rc_create(const char *name) {
     if (!strcmp(name, "webgpu")) return rc_webgpu_create();
 #ifndef __EMSCRIPTEN__
     if (!strcmp(name, "gl")) return rc_gl_create();
+    if (!strcmp(name, "vk")) return rc_vk_create();
 #else
     (void)rc_gl_create;
 #endif
