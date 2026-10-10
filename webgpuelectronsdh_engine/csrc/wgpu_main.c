@@ -349,6 +349,11 @@ static int app_frame(App *app) {
     v.resW = ww; v.resH = hh;
     v.time = (float)app->cloudT;
     v.dayT = (float)app->dayT;
+    // Скриншот-тест времени суток: VOX_DAYT=секунды (полдень ~300: a=0.3+300*2π/1200).
+    {
+        const char *de = getenv("VOX_DAYT");
+        if (de && de[0]) v.dayT = (float)atof(de);
+    }
     Vec3 sunDir = sdf_sun(v.dayT);
     v.sunDir = sunDir;
     v.moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
