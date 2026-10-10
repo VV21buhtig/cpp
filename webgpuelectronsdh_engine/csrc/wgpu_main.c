@@ -387,6 +387,11 @@ int main(int argc, char **argv) {
     }
     if (!app.rc->init(app.rc, app.win)) { fprintf(stderr, "core init fail\n"); return 1; }
     printf("core: %s caps=0x%x\n", app.rc->name, app.rc->caps);
+    {
+        char title[128];
+        snprintf(title, sizeof title, "voxels [%s] — freecam WASD", app.rc->name);
+        glfwSetWindowTitle(app.win, title);
+    }
     vox_world_init(&app.world, 1337);
     sdf_settings_load(&app.settings, "settings.cfg");
     printf("settings: gamma=%.2f exposure=%.2f fog=%.2f fov=%.2f shadow=%.0f\n",

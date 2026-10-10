@@ -1088,6 +1088,26 @@ static void core_frame(RenderCore *rc, const RcView *v) {
         vkCmdBindVertexBuffers(cb, 0, 1, &c->meshes[i].buf, &off);
         vkCmdDraw(cb, (uint32_t)c->meshes[i].count, 1, 0, 0);
     }
+    // Бейдж ядра: красный угол 64x32 слева внизу экрана. Строка 0 фреймбуфера
+    // сверху (vk_conv.h п.3), поэтому rect.y = H-32. GL — зелёный, см. gl_core.
+    {
+        VkClearAttachment ca;
+        memset(&ca, 0, sizeof ca);
+        ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ca.colorAttachment = 0;
+        ca.clearValue.color.float32[0] = 1.0f;
+        ca.clearValue.color.float32[1] = 0.0f;
+        ca.clearValue.color.float32[2] = 0.0f;
+        ca.clearValue.color.float32[3] = 1.0f;
+        VkClearRect cr;
+        cr.rect.offset.x = 0;
+        cr.rect.offset.y = (int32_t)(c->swapExt.height - 32);
+        cr.rect.extent.width = 64;
+        cr.rect.extent.height = 32;
+        cr.baseArrayLayer = 0;
+        cr.layerCount = 1;
+        vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+    }
     vkCmdEndRenderPass(cb);
     // Ридбэк кадра: VK_SHOT=путь.ppm VK_SHOT_AT=кадр (дефолт 60).
     const char *sv = getenv("VK_SHOT");

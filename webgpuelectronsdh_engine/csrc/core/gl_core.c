@@ -251,6 +251,13 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     glBindVertexArray(0);
     glUseProgram(0);
     glDisable(GL_CULL_FACE);
+    // Бейдж ядра: зелёный угол 64x32 слева внизу (VK — красный, см. vk_core).
+    // Всегда включён: ядра обязаны отличаться глазами.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 64, 32);
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
     // Скриншот из буфера: VOX_SHOT=путь.ppm VOX_SHOT_AT=кадр (дефолт 60).
     {
         const char *sp = getenv("VOX_SHOT");
