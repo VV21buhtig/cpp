@@ -573,12 +573,9 @@ RenderCore *rc_create(const char *name) {
 #ifndef __EMSCRIPTEN__
     if (!strcmp(name, "gl")) return rc_gl_create();
     if (!strcmp(name, "vk")) return rc_vk_create();
+    if (!strcmp(name, "sdf")) return rc_sdf_create();
 #else
     (void)rc_gl_create;
 #endif
     return 0;
-}
-
-void rc_destroy(RenderCore *rc) {
-    free(rc->ctx);
 }

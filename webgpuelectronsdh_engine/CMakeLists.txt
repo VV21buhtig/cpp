@@ -30,6 +30,11 @@ add_executable(mat4_test csrc/core/mat4_test.c)
 target_include_directories(mat4_test PRIVATE csrc)
 target_link_libraries(mat4_test PRIVATE m)
 target_compile_options(mat4_test PRIVATE -Wall -Wextra)
+# SDF-демо: окно + sdf-ядро + сцена примитивов (натив, без webgpu).
+add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c csrc/core/corelib.c csrc/sdf_math.c)
+target_include_directories(sdf_demo PRIVATE csrc)
+target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
+target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
 # Тест стриминга: кольцо + бюджет + выселение, без рендера.
 add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_world.c)
 target_include_directories(vox_stream PRIVATE csrc)
@@ -66,7 +71,7 @@ else()
       COMMENT "glslc ${SH}")
     list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
   endforeach()
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
   target_compile_definitions(sdf_native_webgpu PRIVATE
     VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
