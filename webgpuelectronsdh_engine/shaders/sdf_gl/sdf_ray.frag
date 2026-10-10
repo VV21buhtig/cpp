@@ -85,15 +85,21 @@ void main() {
     vec3 rd = normalize(uv.x * camRight.xyz + uv.y * camUp.xyz + resF.z * camFwd.xyz);
     vec3 sunDir = sunNight.xyz;
     float nightF = sunNight.w;
-    // Марш.
+    // Марш. Около поверхностей шаги мельчают и лимит может сгореть раньше
+    // plane — тогда был бы ореол неба вокруг объектов («сингулярность»).
+    // Лечим closest-hit фолбэком с относительным порогом (~2px на любой
+    // дистанции): абсолютный мазал мимо силуэтов (шишка на капсуле).
     float t = 0.0;
     float mat = -1.0;
-    for (int i = 0; i < 128; i++) {
+    float best = 1e9, bestT = 0.0, bestMat = -1.0;
+    for (int i = 0; i < 192; i++) {
         vec2 h = map(ro + rd * t);
+        if (h.x < best) { best = h.x; bestT = t; bestMat = h.y; }
         if (h.x < 0.0015) { mat = h.y; break; }
         t += h.x;
         if (t > 200.0) break;
     }
+    if (mat < -0.5 && bestT > 1.0 && best < 0.004 * bestT) { mat = bestMat; t = bestT; }
     vec3 col;
     if (mat < -0.5) {
         col = skyColor(rd, sunDir, nightF);
