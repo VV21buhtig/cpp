@@ -7,11 +7,10 @@
 @group(1) @binding(5) var tileSmp: sampler;
 
 fn tileUV(pos: vec3f, n: vec3f) -> vec2f {
-  // V перевёрнут: строка 0 PNG (верх картинки) = верх блока.
-  // Без флипа трава росла вниз, а низ боков зеленел.
+  // Атлас уже отфлипан при загрузке (vox_tex, как у них): v=0 = низ.
   if (abs(n.y) > 0.5) { return fract(pos.xz); }
-  if (abs(n.x) > 0.5) { return vec2f(fract(pos.z), 1.0 - fract(pos.y)); }
-  return vec2f(fract(pos.x), 1.0 - fract(pos.y));
+  if (abs(n.x) > 0.5) { return vec2f(fract(pos.z), fract(pos.y)); }
+  return vec2f(fract(pos.x), fract(pos.y));
 }
 
 fn tileLayer(id: u32, n: vec3f) -> i32 {

@@ -5,6 +5,9 @@
 #include <string.h>
 
 int vox_tex_load(const char *dir, uint8_t *out) {
+    // Как у них: строки PNG снизу вверх (v=0 = низ картинки).
+    // Без этого кайма grass_side оказывается внизу грани.
+    stbi_set_flip_vertically_on_load(1);
     static const char *names[VOX_LAYERS] = {
         "grass_top", "grass_side", "dirt", "stone",
         "water", "lava", "leaves",
