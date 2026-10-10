@@ -122,8 +122,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       cn[k] = MP + (sx * ax * MR + sy * 0.5 * MU + f * MF) * (dd / f);
     }
     var md = 1e9;
-    // Объём: луч против 6 плоскостей пирамиды (в базисе главной).
-    // Видна только часть перед миром (tF режем по hit.t).
+    // Один расчёт пересечения с пирамидой: объём + маска.
+    // Вне конуса — почти чёрный: в дебаге видишь ровно то, что видит главная.
     {
       let rel = u.camPos - MP;
       let rof = vec3f(dot(rel, MR), dot(rel, MU), dot(rel, MF));
@@ -131,7 +131,6 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       var tN = 0.0;
       var tF = 1e9;
       var ok = true;
-      // near/far по z
       if (abs(rdf.z) < 1e-9) {
         if (rof.z < 1.0 || rof.z > 60.0) { ok = false; }
       } else {
@@ -140,7 +139,6 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         tN = max(tN, min(ta, tb));
         tF = min(tF, max(ta, tb));
       }
-      // 4 боковые: sx*x - k*z <= 0
       let kx = ax / f;
       let ky = 0.5 / f;
       for (var s = 0; s < 4; s++) {
@@ -154,9 +152,12 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         else if (A < -1e-9) { tN = max(tN, B / A); }
         else if (B < 0.0) { ok = false; }
       }
-      if (hit.t >= 0.0) { tF = min(tF, hit.t); }
       if (ok && tN < tF && tF > 0.0) {
-        outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.16);
+        var tFw = tF;
+        if (hit.t >= 0.0) { tFw = min(tFw, hit.t); }
+        if (tN < tFw) { outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.16); }
+      } else {
+        outc = vec3f(0.015);
       }
     }
     // ближний/дальний прямоугольники
