@@ -255,7 +255,14 @@ static int app_frame(App *app) {
         for (int i = 0; i < VOX_POOL && up < 12; i++) {
             VoxSlot *s = &app->world.slots[i];
             if (!s->used || !s->dirty) continue;
-            if (app->rc->upload_chunk(app->rc, s->cx, s->cz, s->data.id))
+            const VoxChunk *nb[6] = {
+                vox_world_find(&app->world, s->cx - 1, s->cz),
+                vox_world_find(&app->world, s->cx + 1, s->cz),
+                0, 0, // вертикальных чанков нет (y всегда 0..64)
+                vox_world_find(&app->world, s->cx, s->cz - 1),
+                vox_world_find(&app->world, s->cx, s->cz + 1),
+            };
+            if (app->rc->upload_chunk(app->rc, s->cx, s->cz, s->data.id, nb))
                 s->dirty = 0;
             up++;
         }

@@ -22,4 +22,15 @@ static inline int vox_solid(uint8_t id) {
 static inline int vox_opaque(uint8_t id) {
     return id != B_AIR && id != B_WATER && id != B_LEAVES;
 }
+static inline int vox_cutout(uint8_t id) {
+    return id == B_LEAVES;
+}
+// Слой атласа 16x16x7 под грань: top/bottom/side (сводка с vox_tex).
+static inline int vox_tile(uint8_t id, int axis, int sign) {
+    if (id == B_GRASS) return (axis == 1 && sign > 0) ? 0 : 1;
+    if (id == B_DIRT) return 2;
+    if (id == B_LOG) return (axis == 1) ? 5 : 4;
+    if (id == B_LEAVES) return 6;
+    return 3; // stone, bedrock, остальное
+}
 #endif

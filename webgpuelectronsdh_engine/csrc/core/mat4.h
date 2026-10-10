@@ -56,6 +56,14 @@ static inline Mat4 m4look(float ex, float ey, float ez, float cx, float cy, floa
     return o;
 }
 
+static inline Mat4 m4translate(float x, float y, float z) {
+    Mat4 o = m4id();
+    o.m[12] = x;
+    o.m[13] = y;
+    o.m[14] = z;
+    return o;
+}
+
 // Обратная через adjugate. det ~0 (вырождена) -> identity, не NaN.
 static inline Mat4 m4inv(const Mat4 *a) {
     const float *m = a->m;

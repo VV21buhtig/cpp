@@ -18,7 +18,7 @@ target_include_directories(sdf_native PRIVATE csrc)
 target_link_libraries(sdf_native PRIVATE glfw m)
 target_compile_options(sdf_native PRIVATE -Wall -Wextra)
 # Тест вокселей шага 1: генерация чанка, без рендера.
-add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c)
+add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c csrc/vox/vox_mesh.c)
 target_include_directories(vox_test PRIVATE csrc)
 target_link_libraries(vox_test PRIVATE m)
 target_compile_options(vox_test PRIVATE -Wall -Wextra)
@@ -48,7 +48,7 @@ else()
     GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
     GIT_TAG dawn-7069)
   FetchContent_MakeAvailable(webgpu-distribution)
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/gl_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/gl_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
   target_link_libraries(sdf_native_webgpu PRIVATE glfw webgpu glad OpenGL::GL m)
 endif()
