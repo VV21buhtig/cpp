@@ -102,6 +102,39 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   var outc = mix(col, fogCol, fog);
   outc = pow(max(outc * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
+  // Фрустум главной камеры (дебаг F1): 12 рёбер + точка камеры.
+  if (view.z > 0.5) {
+    let MP = frustum[0].xyz;
+    let MF = frustum[1].xyz;
+    let MR = frustum[2].xyz;
+    let MU = frustum[3].xyz;
+    let ax = (u.resX / max(u.resY, 1.0)) * 0.5;
+    let f = max(view.x, 0.2);
+    var cn: array<vec3f, 8>;
+    for (var k = 0; k < 8; k++) {
+      let sx = select(-1.0, 1.0, (k & 1) != 0);
+      let sy = select(-1.0, 1.0, (k & 2) != 0);
+      let dd = select(1.0, 60.0, k >= 4);
+      cn[k] = MP + (sx * ax * MR + sy * 0.5 * MU + f * MF) * (dd / f);
+    }
+    var md = 1e9;
+    // ближний/дальний прямоугольники
+    for (var k = 0; k < 4; k++) {
+      md = min(md, segDist(u.camPos + rd * 0.5, cn[k], cn[(k + 1) & 3]));
+      md = min(md, segDist(u.camPos + rd * 0.5, cn[4 + k], cn[4 + ((k + 1) & 3)]));
+      md = min(md, segDist(u.camPos + rd * 0.5, cn[k], cn[4 + k]));
+    }
+    // точка камеры
+    let oc = u.camPos + rd * 0.5 - MP;
+    let bq = dot(oc, rd);
+    let hq = bq * bq - dot(oc, oc) + 0.16;
+    if (hq > 0.0) {
+      let tq = -bq - sqrt(hq);
+      if (tq > 0.0) { md = 0.0; }
+    }
+    let wdt = 0.03 + length(u.camPos - MP) * 0.002;
+    if (md < wdt) { outc = vec3f(1.0, 0.55, 0.1); }
+  }
   // Меню настроек (Tab): подписи + значения + полосы.
   if (grade.w > -0.5) {
     let mp = vec2f(frag.x, frag.y);

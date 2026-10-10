@@ -53,7 +53,11 @@ typedef struct {
     WGPUBuffer tagsBuf; // 121 пара (cx,cz) реально залитых чанков, сентинел = воздух
     SdfSettings settings;
     WGPUBuffer gradeBuf; // 16Б: gamma, exposure, fog
-    WGPUBuffer viewBuf;  // 16Б: fov, shadow
+    WGPUBuffer viewBuf;  // 16Б: fov, shadow, frustumOn
+    WGPUBuffer frustumBuf; // 64Б: mainPos/Fwd/Right/Up для дебаг-вида
+    Vec3 mainPos;          // замороженная главная камера (дебаг летает сам)
+    double mainYaw, mainPitch;
+    int debugCam; // 1 — летим дебагом (F1), мир смотрим со стороны
     time_t cfgMtime; // дозор settings.cfg (пишет страница Electron)
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
@@ -361,6 +365,13 @@ static int app_frame(App *app) {
             gd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             app->gradeBuf = wgpuDeviceCreateBuffer(app->device, &gd);
             app->viewBuf = wgpuDeviceCreateBuffer(app->device, &gd);
+            {
+                WGPUBufferDescriptor fd;
+                memset(&fd, 0, sizeof fd);
+                fd.size = 64;
+                fd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+                app->frustumBuf = wgpuDeviceCreateBuffer(app->device, &fd);
+            }
             float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
             wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
             float vw[4] = {app->settings.fov, app->settings.shadow, 0, 0};
@@ -370,7 +381,7 @@ static int app_frame(App *app) {
                 app->settings.fov, app->settings.shadow);
         }
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            WGPUBindGroupEntry be[4];
+            WGPUBindGroupEntry be[5];
             memset(be, 0, sizeof be);
             be[0].binding = 0;
             be[0].buffer = app->ubo[i];
@@ -384,10 +395,13 @@ static int app_frame(App *app) {
             be[3].binding = 3;
             be[3].buffer = app->viewBuf;
             be[3].size = 16;
+            be[4].binding = 4;
+            be[4].buffer = app->frustumBuf;
+            be[4].size = 64;
             WGPUBindGroupDescriptor bgdef;
             memset(&bgdef, 0, sizeof bgdef);
             bgdef.layout = app->bgl;
-            bgdef.entryCount = 4;
+            bgdef.entryCount = 5;
             bgdef.entries = be;
             app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
         }
@@ -451,10 +465,27 @@ static int app_frame(App *app) {
     double t = now - app->t0;
     float dt = (float)(now - app->prevT);
     app->prevT = now;
-    static int nPrev = 0;
+    static int nPrev = 0, f1Prev = 0;
     int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
     if (nDown && !nPrev) { app->mode = (app->mode + 1) % 4; printf("view mode=%d\n", app->mode); }
     nPrev = nDown;
+    // F1: дебаг-камера. Вкл — главная замирает, летим сами; выкл — возврат.
+    int f1D = glfwGetKey(app->win, GLFW_KEY_F1) == GLFW_PRESS;
+    if (f1D && !f1Prev) {
+        app->debugCam = !app->debugCam;
+        if (app->debugCam) {
+            app->mainPos = app->camPos;
+            app->mainYaw = app->yaw;
+            app->mainPitch = app->pitch;
+            printf("debug cam: лети, главная заморожена (F1 назад)\n");
+        } else {
+            app->camPos = app->mainPos;
+            app->yaw = app->mainYaw;
+            app->pitch = app->mainPitch;
+            printf("debug cam: выкл, возврат\n");
+        }
+    }
+    f1Prev = f1D;
     // Меню настроек (Tab): стрелки вместо хоткеев. Открыто — курсор свободен.
     static int tabPrev = 0;
     int tabDown = glfwGetKey(app->win, GLFW_KEY_TAB) == GLFW_PRESS;
@@ -573,13 +604,32 @@ static int app_frame(App *app) {
     (void)fi;
 #endif
     wgpuQueueWriteBuffer(app->queue, app->ubo[fi], 0, &u, sizeof u);
-    // Грейд+вид каждый кадр (32Б): значения + состояние меню (w=-1 закрыто).
+    // Грейд+вид каждый кадр: значения + состояние меню (w=-1 закрыто).
     {
         float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog,
                       app->menuOpen ? (float)app->menuSel : -1.0f};
         wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
-        float vw[4] = {app->settings.fov, app->settings.shadow, 0, 0};
+        float vw[4] = {app->settings.fov, app->settings.shadow, app->debugCam ? 1.0f : 0.0f, 0};
         wgpuQueueWriteBuffer(app->queue, app->viewBuf, 0, vw, sizeof vw);
+        // Фрустум главной: поз/базис. Вне дебага не читается (гейт view.z).
+        // main* догоняет текущую, пока не заморожена.
+        if (!app->debugCam) {
+            app->mainPos = app->camPos;
+            app->mainYaw = app->yaw;
+            app->mainPitch = app->pitch;
+        }
+        float cp = cosf((float)app->mainYaw), sp = sinf((float)app->mainYaw);
+        float cq = cosf((float)app->mainPitch), sq = sinf((float)app->mainPitch);
+        Vec3 mf = v3(cq * cp, sq, cq * sp);
+        Vec3 mr = v3_norm(v3_cross(mf, v3(0.0f, 1.0f, 0.0f)));
+        Vec3 mu = v3_cross(mr, mf);
+        float fr[16] = {
+            app->mainPos.x, app->mainPos.y, app->mainPos.z, 0,
+            mf.x, mf.y, mf.z, 0,
+            mr.x, mr.y, mr.z, 0,
+            mu.x, mu.y, mu.z, 0,
+        };
+        wgpuQueueWriteBuffer(app->queue, app->frustumBuf, 0, fr, sizeof fr);
     }
 
     WGPUSurfaceTexture st;
@@ -706,7 +756,7 @@ int main(int argc, char **argv) {
 
     app.camPos = v3(32.0f, 42.0f, 12.0f); // над патчем, взгляд в центр
     app.yaw = 2.16; app.pitch = -0.69; app.speed = 4.0;
-    app.mode = 0; app.menuOpen = 0; app.menuSel = 0;
+    app.mode = 0; app.menuOpen = 0; app.menuSel = 0; app.debugCam = 0;
     app.dayT = 0.0; app.cloudT = 0.0; app.timeScale = 1.0;
     app.fpsEma = 0.0f; app.maxSteps = 100.0f;
     app.t0 = app.prevT = glfwGetTime();
