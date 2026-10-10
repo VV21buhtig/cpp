@@ -57,16 +57,18 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
   // Мир — окно стриминга 176x64x176: analytic вход + DDA внутри.
   let hit = voxMarch(u.camPos, rd, 300.0);
+  var outc = vec3f(0.0);
   if (hit.t < 0.0) {
     var miss = sky(rd, normalize(u.sunDir));
     miss = pow(max(miss * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
-    return vec4f(miss, 1.0);
-  }
+    outc = miss;
+  } else {
   let pos = u.camPos + rd * hit.t;
   let n = hit.n;
-  if (u.mode > 0.5 && u.mode < 1.5) { return vec4f(n * 0.5 + 0.5, 1.0); }
-  if (u.mode > 1.5 && u.mode < 2.5) { let g = clamp(hit.t / 120.0, 0.0, 1.0); return vec4f(g, g, g, 1.0); }
-  if (u.mode > 2.5) { let c = clamp(hit.steps / 320.0, 0.0, 1.0); return vec4f(c, c * 0.3, 0.1, 1.0); }
+  if (u.mode > 0.5 && u.mode < 1.5) { outc = n * 0.5 + 0.5; }
+  else if (u.mode > 1.5 && u.mode < 2.5) { let g = clamp(hit.t / 120.0, 0.0, 1.0); outc = vec3f(g); }
+  else if (u.mode > 2.5) { let c = clamp(hit.steps / 320.0, 0.0, 1.0); outc = vec3f(c, c * 0.3, 0.1); }
+  else {
   let sunDir = normalize(u.sunDir);
   // Тень — тем же DDA к солнцу (жёсткая). На весь чанк в поле зрения:
   // дальность 120, фейд 100-120. Луч рвётся первым вокселем.
@@ -100,8 +102,10 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let fog = 1.0 - exp(-fogDen * hit.t * hit.t);
   var fogCol = skyGrad(rd, sunDir) + sunTerms(rd, sunDir, lightCol, 1.0 - dayL);
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
-  var outc = mix(col, fogCol, fog);
+  outc = mix(col, fogCol, fog);
   outc = pow(max(outc * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
+  } // mode 0 (шейдинг)
+  } // есть хит
   // Фрустум главной камеры (дебаг F1): 12 рёбер + точка камеры.
   if (view.z > 0.5) {
     let MP = frustum[0].xyz;
@@ -118,6 +122,43 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       cn[k] = MP + (sx * ax * MR + sy * 0.5 * MU + f * MF) * (dd / f);
     }
     var md = 1e9;
+    // Объём: луч против 6 плоскостей пирамиды (в базисе главной).
+    // Видна только часть перед миром (tF режем по hit.t).
+    {
+      let rel = u.camPos - MP;
+      let rof = vec3f(dot(rel, MR), dot(rel, MU), dot(rel, MF));
+      let rdf = vec3f(dot(rd, MR), dot(rd, MU), dot(rd, MF));
+      var tN = 0.0;
+      var tF = 1e9;
+      var ok = true;
+      // near/far по z
+      if (abs(rdf.z) < 1e-9) {
+        if (rof.z < 1.0 || rof.z > 60.0) { ok = false; }
+      } else {
+        let ta = (1.0 - rof.z) / rdf.z;
+        let tb = (60.0 - rof.z) / rdf.z;
+        tN = max(tN, min(ta, tb));
+        tF = min(tF, max(ta, tb));
+      }
+      // 4 боковые: sx*x - k*z <= 0
+      let kx = ax / f;
+      let ky = 0.5 / f;
+      for (var s = 0; s < 4; s++) {
+        var A = 0.0;
+        var B = 0.0;
+        if (s == 0) { A = rdf.x - kx * rdf.z; B = -(rof.x - kx * rof.z); }
+        else if (s == 1) { A = -rdf.x - kx * rdf.z; B = -(-rof.x - kx * rof.z); }
+        else if (s == 2) { A = rdf.y - ky * rdf.z; B = -(rof.y - ky * rof.z); }
+        else { A = -rdf.y - ky * rdf.z; B = -(-rof.y - ky * rof.z); }
+        if (A > 1e-9) { tF = min(tF, B / A); }
+        else if (A < -1e-9) { tN = max(tN, B / A); }
+        else if (B < 0.0) { ok = false; }
+      }
+      if (hit.t >= 0.0) { tF = min(tF, hit.t); }
+      if (ok && tN < tF && tF > 0.0) {
+        outc = mix(outc, vec3f(1.0, 0.55, 0.1), 0.16);
+      }
+    }
     // ближний/дальний прямоугольники
     for (var k = 0; k < 4; k++) {
       md = min(md, segDist(u.camPos + rd * 0.5, cn[k], cn[(k + 1) & 3]));
@@ -140,6 +181,10 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let mp = vec2f(frag.x, frag.y);
     if (mp.x >= 24.0 && mp.x < 560.0 && mp.y >= 24.0 && mp.y < 308.0) {
       var mcol = vec3f(0.05, 0.06, 0.08);
+      // Рамка 2px: панель видна и на белом небе.
+      if (mp.x < 26.0 || mp.x >= 558.0 || mp.y < 26.0 || mp.y >= 306.0) {
+        mcol = vec3f(0.48, 0.63, 1.0);
+      } else {
       let row = min(i32((mp.y - 24.0) / 56.0), 4);
       let sel = i32(grade.w + 0.5);
       if (row == sel) { mcol = vec3f(0.09, 0.12, 0.17); }
@@ -174,7 +219,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         if (mp.x >= 190.0 && mp.x < 350.0) {
           if ((mp.x - 190.0) / 160.0 <= (vv - vmin) / vspan) { mcol = vec3f(0.48, 0.63, 1.0); }
         }
-      }
+      } // toggle value/ON-OFF
+    } // не рамка (border-else)
       outc = mcol;
     }
   }
