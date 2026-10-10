@@ -11,7 +11,6 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 viewPos;
     vec4 sunDiff;   // rgb
     vec4 sunSpec;   // rgb, w=shininess
-    vec4 sdfMin;    // xyz мировой угол SDF-объёма (176x64x176 тороид)
 } fr;
 
 layout(location = 0) in vec3 aPos;

@@ -11,27 +11,9 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 viewPos;
     vec4 sunDiff;
     vec4 sunSpec;
-    vec4 sdfMin;
 } fr;
 layout(set = 0, binding = 1) uniform sampler2DArray tiles;
 layout(set = 0, binding = 2) uniform sampler2D specMap;
-layout(set = 0, binding = 3) uniform sampler3D sdfVol;
-layout(set = 0, binding = 4) uniform isampler2D sdfTag; // 11x11: чанк слота
-
-// Мимо тега = далеко (мираж тороида): луч дальше не идёт, тень не трогаем.
-float sdfAt(vec3 wpos, out int ok) {
-    ivec2 ch = ivec2(floor(wpos.xz / 16.0));
-    ivec2 org = ivec2(floor(fr.sdfMin.xz / 16.0));
-    ivec2 slot = ivec2(mod(vec2(ch - org), vec2(11.0)));
-    ok = 0;
-    if (any(notEqual(texelFetch(sdfTag, slot, 0).xy, ch))) return 12.0;
-    vec3 uvw = (wpos - fr.sdfMin.xyz) / vec3(176.0, 64.0, 176.0);
-    if (uvw.x < 0.0 || uvw.x > 1.0 || uvw.z < 0.0 || uvw.z > 1.0 ||
-        uvw.y < 0.0 || uvw.y > 1.0)
-        return 12.0;
-    ok = 1;
-    return texture(sdfVol, uvw).r * 24.0 - 12.0;
-}
 
 layout(location = 0) in vec3 vPos;
 layout(location = 1) in vec3 vNrm;
@@ -40,32 +22,10 @@ layout(location = 3) in float vTile;
 layout(location = 4) in float vAO;
 layout(location = 0) out vec4 outColor;
 
-// Мягкая тень маршем по SDF-объёму (как Lumen soft shadow, без карт).
-// Возврат 0..1 (1 = свет). Вне объёма считаем далеко (тени нет).
-float sdfShadow(vec3 wpos, vec3 sundir) {
-    if (fr.sdfMin.w < -0.5) return 1.0; // А/Б: VOX_NO_SDFSH=1
-    float res = 1.0;
-    // Старт 0.35, не 0: первые сэмплы сидят в интерполяционном скате самой
-    // поверхности (R8 + linear дают ~0 на границе) — было зеброй акне.
-    // В воксельной сетке ближе 0.35 только сама поверхность: угловые тени
-    // стыков уже даёт вершинное AO, ничего не теряем.
-    // Плюс тройка против круглых пятен на скользящих лучах:
-    // минимальный шаг (не ползём по вмятинам фильтра), жёсткий ноль только
-    // явно внутри, penumbra уже (k=16: далёкие скосы не темнят).
-    float t = 0.35;
-    for (int i = 0; i < 24; i++) {
-        vec3 p = wpos + sundir * t;
-        int ok = 0;
-        float h = sdfAt(p, ok);
-        if (ok == 0) break; // край данных — дальше не знаем, тень не трогаем
-        if (h < -0.05) return 0.0; // внутри — глухая тень
-        res = min(res, 16.0 * h / t);
-        t += max(h, 0.2);
-        if (t > 40.0) break;
-    }
-    return clamp(res, 0.0, 1.0);
-}
-
+// SDF-тени СНЯТЫ (не чинить маршем!): точный EDT + linear скругляют углы
+// вокселей в сферы, и любой марш рисует круглые пятна вместо направленных
+// теней. Честный путь — shadowmap (как их shadow.vert/frag) или RT.
+// SDF-бейк (vox_sdf) живёт дальше как данные для будущего DFAO/коллизий.
 void main() {
     vec3 n = normalize(vNrm);
     vec4 tx = texture(tiles, vec3(vUV, vTile));
@@ -88,8 +48,7 @@ void main() {
     vec3 hv = normalize(sunDirW + viewDir);
     float spec = pow(max(dot(n, hv), 0.0), fr.sunSpec.w) *
                  texture(specMap, fract(vUV)).r;
-    float sh = sdfShadow(vPos, sunDirW);
-    vec3 result = amb + direct * sh + fr.sunSpec.rgb * spec;
+    vec3 result = amb + direct + fr.sunSpec.rgb * spec;
     float fshade = abs(n.y) > 0.9 ? (n.y > 0.0 ? 1.0 : 0.5)
                                   : (abs(n.x) > abs(n.z) ? 0.6 : 0.8);
     float aoV = clamp(vAO / 3.0, 0.0, 1.0);
