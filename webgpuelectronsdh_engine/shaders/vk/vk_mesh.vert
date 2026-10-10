@@ -18,8 +18,7 @@ layout(location = 1) in vec3 aNrm;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in float aTile;
 layout(location = 4) in float aAO;
-layout(location = 5) in float aDay;
-layout(location = 6) in float aNight;
+// day/night (5,6) мертвы как у их lighting.fs — не объявляем, страйд общий.
 
 layout(push_constant) uniform Push { mat4 model; } pc;
 

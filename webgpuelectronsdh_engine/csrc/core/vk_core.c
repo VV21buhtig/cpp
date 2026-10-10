@@ -51,6 +51,7 @@ typedef struct {
 typedef struct {
     GLFWwindow *win;
     VkInstance inst;
+    VkDebugUtilsMessengerEXT dbgMsgr;
     VkSurfaceKHR surf;
     VkPhysicalDevice pdev;
     VkDevice dev;
@@ -105,6 +106,14 @@ typedef struct {
 
 static double vk_time(void) {
     return glfwGetTime();
+}
+
+static VkBool32 vk_dbg_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
+                           VkDebugUtilsMessageTypeFlagsEXT type,
+                           const VkDebugUtilsMessengerCallbackDataEXT *d, void *user) {
+    (void)sev; (void)type; (void)user;
+    fprintf(stderr, "VK-VALID: %s\n", d->pMessage ? d->pMessage : "?");
+    return VK_FALSE;
 }
 
 static uint32_t find_mem(VkPhysicalDevice pd, uint32_t mask, VkMemoryPropertyFlags fl) {
@@ -199,6 +208,9 @@ static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox1
     }
     VKMesh *g = &c->meshes[slot];
     if (g->used) {
+        // Слот в полёте (2 кадра): сносим только после простоя очереди,
+        // иначе VUID-vkDestroyBuffer-00922. Замены редки, простой дешёвый.
+        vkQueueWaitIdle(c->q);
         vkDestroyBuffer(c->dev, g->buf, 0);
         vkFreeMemory(c->dev, g->mem, 0);
         g->used = 0;
@@ -228,6 +240,7 @@ static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
     for (int i = 0; i < VK_MESH_SLOTS; i++) {
         if (!c->meshes[i].used || c->meshes[i].cx != cx || c->meshes[i].cz != cz) continue;
+        vkQueueWaitIdle(c->q); // как в upload: слот может быть в полёте
         vkDestroyBuffer(c->dev, c->meshes[i].buf, 0);
         vkFreeMemory(c->dev, c->meshes[i].mem, 0);
         c->meshes[i].used = 0;
@@ -280,20 +293,68 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
     memset(c, 0, sizeof *c);
     c->win = (GLFWwindow *)glfwWindow;
 
+    // Доказательство что это правда Vulkan: VOX_VK_VALIDATE=1 цепляет
+    // VK_LAYER_KHRONOS_validation + мессенджер в stderr. GL-ядро на эту
+    // переменную никак не реагирует (у него нет vkCreateInstance).
+    int wantValid = getenv("VOX_VK_VALIDATE") && getenv("VOX_VK_VALIDATE")[0] == '1';
+    const char *wantLayer = "VK_LAYER_KHRONOS_validation";
+    int haveLayer = 0;
+    if (wantValid) {
+        uint32_t ln = 0;
+        vkEnumerateInstanceLayerProperties(&ln, 0);
+        VkLayerProperties *lp = (VkLayerProperties *)calloc(ln ? ln : 1, sizeof *lp);
+        if (lp) {
+            vkEnumerateInstanceLayerProperties(&ln, lp);
+            for (uint32_t i = 0; i < ln; i++)
+                if (!strcmp(lp[i].layerName, wantLayer)) haveLayer = 1;
+            free(lp);
+        }
+        printf("vk: validate %s (layer %s)\n",
+               haveLayer ? "ON" : "wanted but MISSING", wantLayer);
+    }
+
     VkApplicationInfo ai;
     memset(&ai, 0, sizeof ai);
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     ai.pApplicationName = "voxels";
-    ai.apiVersion = VK_API_VERSION_1_0;
+    // 1.1: отрицательная высота viewport (наш Y-флип) легализована в
+    // maintenance1; в чистом 1.0 валидация ругается VUID-VkViewport-07917.
+    ai.apiVersion = VK_API_VERSION_1_1;
     uint32_t extN = 0;
     const char **exts = glfwGetRequiredInstanceExtensions(&extN);
+    const char *allExt[16];
+    uint32_t allN = 0;
+    for (uint32_t i = 0; i < extN && allN < 16; i++) allExt[allN++] = exts[i];
+    if (haveLayer && allN < 16) allExt[allN++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     VkInstanceCreateInfo ii;
     memset(&ii, 0, sizeof ii);
     ii.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ii.pApplicationInfo = &ai;
-    ii.enabledExtensionCount = extN;
-    ii.ppEnabledExtensionNames = exts;
+    ii.enabledExtensionCount = allN;
+    ii.ppEnabledExtensionNames = allExt;
+    if (haveLayer) {
+        ii.enabledLayerCount = 1;
+        ii.ppEnabledLayerNames = &wantLayer;
+    }
     VKCHK(vkCreateInstance(&ii, 0, &c->inst));
+    if (haveLayer) {
+        PFN_vkCreateDebugUtilsMessengerEXT mk =
+            (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(c->inst, "vkCreateDebugUtilsMessengerEXT");
+        if (mk) {
+            VkDebugUtilsMessengerCreateInfoEXT mi;
+            memset(&mi, 0, sizeof mi);
+            mi.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            mi.pfnUserCallback = vk_dbg_cb;
+            mi.pUserData = 0;
+            if (mk(c->inst, &mi, 0, &c->dbgMsgr) != VK_SUCCESS)
+                fprintf(stderr, "vk: messenger fail\n");
+        }
+    }
     VKCHK(glfwCreateWindowSurface(c->inst, c->win, 0, &c->surf));
 
     // Физическое: дискрет first, очередь graphics+present в одном family.
@@ -324,7 +385,9 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
     c->qfam = qfam;
     VkPhysicalDeviceProperties pp;
     vkGetPhysicalDeviceProperties(c->pdev, &pp);
-    printf("vk: %s\n", pp.deviceName);
+    printf("vk: %s api=%u.%u driver=0x%x\n", pp.deviceName,
+           VK_VERSION_MAJOR(pp.apiVersion), VK_VERSION_MINOR(pp.apiVersion),
+           pp.driverVersion);
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qi;
     memset(&qi, 0, sizeof qi);
@@ -835,19 +898,18 @@ static int core_init3(RenderCore *rc) {
     VkShaderModule sVert = vk_shader(c, "vk_sky.vert.spv");
     VkShaderModule sFrag = vk_shader(c, "vk_sky.frag.spv");
     if (!mVert || !mFrag || !sVert || !sFrag) return 0;
-    // Вершина 12 float: pos3 nrm3 uv2 tile ao day night.
+    // Вершина 12 float, едим 0..4 (day/night 5,6 мертвы как у них — флуд удалён).
     VkVertexInputBindingDescription bind;
     memset(&bind, 0, sizeof bind);
     bind.binding = 0;
     bind.stride = 12 * sizeof(float);
     bind.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription at[7];
+    VkVertexInputAttributeDescription at[5];
     memset(at, 0, sizeof at);
-    uint32_t off[7] = {0, 3, 6, 8, 9, 10, 11};
-    VkFormat fm[7] = {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT,
-                      VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT,
-                      VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT};
-    for (int i = 0; i < 7; i++) {
+    uint32_t off[5] = {0, 3, 6, 8, 9};
+    VkFormat fm[5] = {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT,
+                      VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT};
+    for (int i = 0; i < 5; i++) {
         at[i].location = (uint32_t)i;
         at[i].binding = 0;
         at[i].format = fm[i];
@@ -858,7 +920,7 @@ static int core_init3(RenderCore *rc) {
     vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vin.vertexBindingDescriptionCount = 1;
     vin.pVertexBindingDescriptions = &bind;
-    vin.vertexAttributeDescriptionCount = 7;
+    vin.vertexAttributeDescriptionCount = 5;
     vin.pVertexAttributeDescriptions = at;
     VkPipelineVertexInputStateCreateInfo vinEmpty;
     memset(&vinEmpty, 0, sizeof vinEmpty);
@@ -1239,6 +1301,12 @@ static void core_shutdown(RenderCore *rc) {
     if (c->cmdPool) vkDestroyCommandPool(c->dev, c->cmdPool, 0);
     if (c->swap) vkDestroySwapchainKHR(c->dev, c->swap, 0);
     vkDestroyDevice(c->dev, 0);
+    if (c->dbgMsgr) {
+        PFN_vkDestroyDebugUtilsMessengerEXT rm =
+            (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
+                c->inst, "vkDestroyDebugUtilsMessengerEXT");
+        if (rm) rm(c->inst, c->dbgMsgr, 0);
+    }
     if (c->surf) vkDestroySurfaceKHR(c->inst, c->surf, 0);
     vkDestroyInstance(c->inst, 0);
     memset(c, 0, sizeof *c);
