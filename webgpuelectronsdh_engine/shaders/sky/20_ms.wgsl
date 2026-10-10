@@ -1,4 +1,4 @@
-// Многократка 32x32, печётся 1 раз (их wc_multiscatter.glsl 1:1).
+// Многократка 32x32, печётся 1 раз
 @group(0) @binding(0) var transTex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
 
