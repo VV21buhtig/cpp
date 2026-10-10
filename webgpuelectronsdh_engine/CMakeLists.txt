@@ -26,23 +26,20 @@ target_include_directories(vox_test PRIVATE csrc)
 target_link_libraries(vox_test PRIVATE m)
 target_compile_options(vox_test PRIVATE -Wall -Wextra)
 # Тест матриц растровых ядер (GL/VK конвенции: глубина, lookAt).
-add_executable(mat4_test csrc/core/mat4_test.c)
-target_include_directories(mat4_test PRIVATE csrc)
-target_link_libraries(mat4_test PRIVATE m)
-target_compile_options(mat4_test PRIVATE -Wall -Wextra)
+# mat4_test переехал в engine/ (математика движка).
 # SDF-демо: окно + sdf-ядро + сцена примитивов (натив, без webgpu).
-add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c csrc/core/corelib.c csrc/sdf_math.c)
+add_executable(sdf_demo csrc/sdf_demo.c csrc/core/sdf_core.c ../engine/corelib.c csrc/sdf_math.c)
 target_include_directories(sdf_demo PRIVATE csrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(sdf_demo PRIVATE glfw glad OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
 # 2D-демо: пиксели и вектор (натив, без webgpu).
-add_executable(pix_demo csrc/pix_demo.c csrc/core/pix_core.c csrc/core/corelib.c)
+add_executable(pix_demo csrc/pix_demo.c csrc/core/pix_core.c ../engine/corelib.c)
 target_include_directories(pix_demo PRIVATE csrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(pix_demo PRIVATE glfw glad OpenGL::GL m)
 target_compile_options(pix_demo PRIVATE -Wall -Wextra)
-add_executable(vec_demo csrc/vec_demo.c csrc/core/vec_core.c csrc/core/corelib.c)
+add_executable(vec_demo csrc/vec_demo.c csrc/core/vec_core.c ../engine/corelib.c)
 target_include_directories(vec_demo PRIVATE csrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine)
 target_link_libraries(vec_demo PRIVATE glfw glad OpenGL::GL m)
@@ -88,7 +85,7 @@ else()
       COMMENT "glslc ${SH}")
     list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
   endforeach()
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/core/pix_core.c csrc/core/vec_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c csrc/vox/vox_sdf.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c ../engine/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/core/pix_core.c csrc/core/vec_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c csrc/vox/vox_sdf.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
   target_compile_definitions(sdf_native_webgpu PRIVATE
     VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")

@@ -1,7 +1,7 @@
 // Сторож общей математики растровых ядер (+ конвенция vk_conv.h п.4:
 // глубина Vulkan [0,1]). Падает текстом, а не перевёрнутой картинкой.
 #include <stdio.h>
-#include "core/mat4.h"
+#include "mat4.h"
 
 static float ndc_z(const Mat4 *p, float ez) {
     float cz = p->m[10] * ez + p->m[14];

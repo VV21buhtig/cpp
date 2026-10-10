@@ -8,7 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include "render_api.h"
-#include "core/mat4.h"
+#include "mat4.h"
 #include "sdf_math.h"
 #include "vox/vox_mesh.h"
 #include "vox/vox_tex.h"
