@@ -16,6 +16,7 @@ float hash(vec3 p) {
 
 void main() {
     // gl_FragCoord во фреймбуфере сверху вниз — отражаем Y под GL-формулы.
+    // п.2 из csrc/core/vk_conv.h (все GL/VK-противоречия — там).
     vec2 ndc = vec2((gl_FragCoord.x / pc.horColor.w) * 2.0 - 1.0,
                     1.0 - (gl_FragCoord.y / pc.topColor.w) * 2.0);
     vec4 w = pc.invVP * vec4(ndc, 1.0, 1.0);

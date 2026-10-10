@@ -13,6 +13,7 @@
 #include <math.h>
 #include "core/render_api.h"
 #include "core/mat4.h"
+#include "core/vk_conv.h" // все GL/VK-противоречия — там, см. шапку
 #include "sdf_math.h"
 #include "vox/vox_mesh.h"
 #include "vox/vox_tex.h"
@@ -853,17 +854,8 @@ static int core_init3(RenderCore *rc) {
     memset(&asmbl, 0, sizeof asmbl);
     asmbl.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     asmbl.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkViewport vp;
-    vp.x = 0;
-    vp.y = (float)c->swapExt.height; // Y-зеркало под GL-winding
-    vp.width = (float)c->swapExt.width;
-    vp.height = -(float)c->swapExt.height;
-    vp.minDepth = 0;
-    vp.maxDepth = 1;
-    VkRect2D sc;
-    sc.offset.x = 0;
-    sc.offset.y = 0;
-    sc.extent = c->swapExt;
+    VkViewport vp = vk_viewport_fill(c->swapExt.width, c->swapExt.height);
+    VkRect2D sc = vk_scissor_fill(c->swapExt.width, c->swapExt.height);
     VkPipelineViewportStateCreateInfo vps;
     memset(&vps, 0, sizeof vps);
     vps.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -1049,18 +1041,9 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     rp.clearValueCount = 2;
     rp.pClearValues = clr;
     vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vp;
-    vp.x = 0;
-    vp.y = (float)c->swapExt.height;
-    vp.width = (float)c->swapExt.width;
-    vp.height = -(float)c->swapExt.height;
-    vp.minDepth = 0;
-    vp.maxDepth = 1;
+    VkViewport vp = vk_viewport_fill(c->swapExt.width, c->swapExt.height);
     vkCmdSetViewport(cb, 0, 1, &vp);
-    VkRect2D sc;
-    sc.offset.x = 0;
-    sc.offset.y = 0;
-    sc.extent = c->swapExt;
+    VkRect2D sc = vk_scissor_fill(c->swapExt.width, c->swapExt.height);
     vkCmdSetScissor(cb, 0, 1, &sc);
     // Небо (push 112: invVP + sun/night + top/resH + hor/resW).
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, c->skyPipe);
@@ -1158,7 +1141,7 @@ static void core_frame(RenderCore *rc, const RcView *v) {
             uint32_t W = c->swapExt.width, H = c->swapExt.height;
             fprintf(f, "P6\n%u %u\n255\n", W, H);
             uint8_t *px = (uint8_t *)c->shotPtr;
-            // В Vulkan строка 0 буфера = верх кадра: пишем сверху вниз (в GL наоборот).
+            // п.3 из core/vk_conv.h: строка 0 = верх кадра, пишем сверху вниз.
             for (uint32_t y = 0; y < H; y++) {
                 uint8_t *row = px + (size_t)y * W * 4;
                 for (uint32_t x = 0; x < W; x++) {

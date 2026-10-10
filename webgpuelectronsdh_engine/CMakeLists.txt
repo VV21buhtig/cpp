@@ -25,6 +25,11 @@ add_executable(vox_test csrc/vox_test.c csrc/vox/vox_gen.c csrc/vox/vox_mesh.c)
 target_include_directories(vox_test PRIVATE csrc)
 target_link_libraries(vox_test PRIVATE m)
 target_compile_options(vox_test PRIVATE -Wall -Wextra)
+# Тест матриц растровых ядер (GL/VK конвенции: глубина, lookAt).
+add_executable(mat4_test csrc/core/mat4_test.c)
+target_include_directories(mat4_test PRIVATE csrc)
+target_link_libraries(mat4_test PRIVATE m)
+target_compile_options(mat4_test PRIVATE -Wall -Wextra)
 # Тест стриминга: кольцо + бюджет + выселение, без рендера.
 add_executable(vox_stream csrc/vox_stream_test.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_world.c)
 target_include_directories(vox_stream PRIVATE csrc)
