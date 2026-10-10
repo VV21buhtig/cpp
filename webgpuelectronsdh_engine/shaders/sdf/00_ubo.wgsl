@@ -15,3 +15,5 @@ struct UBO {
 @group(0) @binding(0) var<uniform> u: UBO;
 // Грейд из settings.cfg (как их gammaU): x=gamma, y=exposure.
 @group(0) @binding(2) var<uniform> grade: vec4f;
+// Вид: x=fov_scale (1.6), y=тени вкл/выкл.
+@group(0) @binding(3) var<uniform> view: vec4f;

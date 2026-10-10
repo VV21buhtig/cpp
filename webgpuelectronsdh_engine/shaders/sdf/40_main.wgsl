@@ -1,6 +1,6 @@
 // Главный проход: фулскрин-треугольник, воксельный мир DDA, туман.
 // Шрифт 5x7 для меню (G,A,M,E,X,P,O,F,R,0-9,.,-,space), по 7 строк на глиф.
-const FONT: array<u32, 154> = array<u32, 154>(
+const FONT: array<u32, 196> = array<u32, 196>(
   14u, 17u, 16u, 23u, 17u, 17u, 14u, // G
   14u, 17u, 17u, 31u, 17u, 17u, 17u, // A
   17u, 27u, 21u, 21u, 17u, 17u, 17u, // M
@@ -23,6 +23,12 @@ const FONT: array<u32, 154> = array<u32, 154>(
   0u, 0u, 0u, 0u, 0u, 6u, 6u, // .
   0u, 0u, 0u, 31u, 0u, 0u, 0u, // -
   0u, 0u, 0u, 0u, 0u, 0u, 0u, // space
+  14u, 16u, 16u, 14u, 1u, 1u, 14u, // S
+  17u, 17u, 17u, 31u, 17u, 17u, 17u, // H
+  30u, 17u, 17u, 17u, 17u, 17u, 30u, // D
+  17u, 17u, 17u, 21u, 21u, 27u, 17u, // W
+  17u, 17u, 17u, 17u, 10u, 4u, 4u, // V
+  17u, 25u, 21u, 19u, 17u, 17u, 17u, // N
 );
 
 fn textOn(px: vec2f, x0: f32, y0: f32, sc: f32, gi: u32) -> bool {
@@ -47,7 +53,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let up0 = select(vec3f(0.0, 1.0, 0.0), vec3f(0.0, 0.0, -1.0), abs(fw.y) > 0.999);
   let rt = normalize(cross(fw, up0));
   let up = cross(rt, fw);
-  let rd = normalize(uv.x * rt + uv.y * up + 1.6 * fw);
+  let rd = normalize(uv.x * rt + uv.y * up + view.x * fw);
 
   // Мир — окно стриминга 176x64x176: analytic вход + DDA внутри.
   let hit = voxMarch(u.camPos, rd, 300.0);
@@ -64,7 +70,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Тень — тем же DDA к солнцу (жёсткая). На весь чанк в поле зрения:
   // дальность 120, фейд 100-120. Луч рвётся первым вокселем.
   var sh = 1.0;
-  if (dot(n, sunDir) > 0.0 && hit.t < 120.0) {
+  if (view.y > 0.5 && dot(n, sunDir) > 0.0 && hit.t < 120.0) {
     let shHit = voxMarch(pos + n * 0.05, sunDir, 120.0);
     let shRaw = select(0.0, 1.0, shHit.t < 0.0);
     let shFade = 1.0 - smoothstep(100.0, 120.0, hit.t);
@@ -98,29 +104,42 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Меню настроек (Tab): подписи + значения + полосы.
   if (grade.w > -0.5) {
     let mp = vec2f(frag.x, frag.y);
-    if (mp.x >= 24.0 && mp.x < 560.0 && mp.y >= 24.0 && mp.y < 196.0) {
+    if (mp.x >= 24.0 && mp.x < 560.0 && mp.y >= 24.0 && mp.y < 308.0) {
       var mcol = vec3f(0.05, 0.06, 0.08);
-      let row = min(i32((mp.y - 24.0) / 56.0), 2);
+      let row = min(i32((mp.y - 24.0) / 56.0), 4);
       let sel = i32(grade.w + 0.5);
       if (row == sel) { mcol = vec3f(0.09, 0.12, 0.17); }
-      var gl = array<u32, 5>(21u, 21u, 21u, 21u, 21u);
+      var gl = array<u32, 6>(21u, 21u, 21u, 21u, 21u, 21u);
       var vv = grade.x;
       var vmin = 0.5;
       var vspan = 3.5;
-      if (row == 0) { gl = array<u32, 5>(0u, 1u, 2u, 2u, 1u); }
-      else if (row == 1) { gl = array<u32, 5>(3u, 4u, 5u, 6u, 21u); vv = grade.y; vmin = 0.1; vspan = 3.9; }
-      else { gl = array<u32, 5>(7u, 6u, 0u, 21u, 21u); vv = grade.z; vmin = 0.0; vspan = 3.0; }
+      if (row == 0) { gl = array<u32, 6>(0u, 1u, 2u, 2u, 1u, 21u); }
+      else if (row == 1) { gl = array<u32, 6>(3u, 4u, 5u, 6u, 21u, 21u); vv = grade.y; vmin = 0.1; vspan = 3.9; }
+      else if (row == 2) { gl = array<u32, 6>(7u, 6u, 0u, 21u, 21u, 21u); vv = grade.z; vmin = 0.0; vspan = 3.0; }
+      else if (row == 3) { gl = array<u32, 6>(7u, 6u, 25u, 21u, 21u, 21u); vv = view.x; vmin = 0.5; vspan = 3.5; }
+      else { gl = array<u32, 6>(22u, 23u, 1u, 24u, 6u, 25u); vv = view.y; vmin = 0.0; vspan = 1.0; }
       let rowY = 34.0 + f32(row) * 56.0;
-      for (var k = 0; k < 5; k++) {
+      for (var k = 0; k < 6; k++) {
         if (textOn(mp, 36.0 + f32(k) * 21.0, rowY, 3.0, gl[k])) { mcol = vec3f(0.85); }
       }
-      let cc = vv * 100.0 + 0.5;
-      let va = array<u32, 4>(u32(9u + u32(min(i32(vv), 9))), 19u, u32(9u + u32((i32(cc) / 10) % 10)), u32(9u + u32(i32(cc) % 10)));
-      for (var k = 0; k < 4; k++) {
-        if (textOn(mp, 420.0 + f32(k) * 21.0, rowY, 3.0, va[k])) { mcol = vec3f(0.85); }
-      }
-      if (mp.x >= 190.0 && mp.x < 350.0) {
-        if ((mp.x - 190.0) / 160.0 <= (vv - vmin) / vspan) { mcol = vec3f(0.48, 0.63, 1.0); }
+      if (row == 4) {
+        // Тумблер текстом: ON / OFF.
+        var on = view.y > 0.5;
+        var wa = array<u32, 4>(6u, 27u, 21u, 21u);
+        if (!on) { wa = array<u32, 4>(6u, 7u, 7u, 21u); }
+        for (var k = 0; k < 4; k++) {
+          if (textOn(mp, 420.0 + f32(k) * 21.0, rowY, 3.0, wa[k])) { mcol = vec3f(0.85); }
+        }
+        if (mp.x >= 190.0 && mp.x < 350.0 && on) { mcol = vec3f(0.48, 0.63, 1.0); }
+      } else {
+        let cc = vv * 100.0 + 0.5;
+        let va = array<u32, 4>(u32(9u + u32(min(i32(vv), 9))), 19u, u32(9u + u32((i32(cc) / 10) % 10)), u32(9u + u32(i32(cc) % 10)));
+        for (var k = 0; k < 4; k++) {
+          if (textOn(mp, 420.0 + f32(k) * 21.0, rowY, 3.0, va[k])) { mcol = vec3f(0.85); }
+        }
+        if (mp.x >= 190.0 && mp.x < 350.0) {
+          if ((mp.x - 190.0) / 160.0 <= (vv - vmin) / vspan) { mcol = vec3f(0.48, 0.63, 1.0); }
+        }
       }
       outc = mcol;
     }

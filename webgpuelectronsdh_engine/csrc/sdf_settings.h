@@ -6,6 +6,8 @@ typedef struct {
     float gamma;    // 2.2: финал pow(col*exposure, 1/gamma)
     float exposure; // 1.0
     float fog;      // 1.0: множитель плотности тумана
+    float fov;      // 1.6: фокус (их s_fov)
+    float shadow;   // 1.0: тени вкл/выкл (их b_shadow)
 } SdfSettings;
 
 void sdf_settings_load(SdfSettings *s, const char *path);

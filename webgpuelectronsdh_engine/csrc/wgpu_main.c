@@ -53,6 +53,7 @@ typedef struct {
     WGPUBuffer tagsBuf; // 121 пара (cx,cz) реально залитых чанков, сентинел = воздух
     SdfSettings settings;
     WGPUBuffer gradeBuf; // 16Б: gamma, exposure, fog
+    WGPUBuffer viewBuf;  // 16Б: fov, shadow
     time_t cfgMtime; // дозор settings.cfg (пишет страница Electron)
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
@@ -222,18 +223,21 @@ static void on_btn(GLFWwindow *w, int b, int act, int m) {
         glfwGetFramebufferSize(w, &fw, &fh);
         double px = ww > 0 ? cx * fw / ww : cx;
         double py = hh > 0 ? cy * fh / hh : cy;
-        if (px >= 24 && px < 560 && py >= 24 && py < 196) {
+        if (px >= 24 && px < 560 && py >= 24 && py < 308) {
             int row = (int)((py - 24) / 56);
             if (row < 0) row = 0;
-            if (row > 2) row = 2;
+            if (row > 4) row = 4;
             g_app->menuSel = row;
-            if (px >= 190 && px < 350) {
+            if (row == 4) {
+                g_app->settings.shadow = g_app->settings.shadow >= 0.5f ? 0.0f : 1.0f;
+            } else if (px >= 190 && px < 350) {
                 double f = (px - 190) / 160;
                 if (f < 0) f = 0;
                 if (f > 1) f = 1;
                 if (row == 0) g_app->settings.gamma = (float)(0.5 + f * 3.5);
                 else if (row == 1) g_app->settings.exposure = (float)(0.1 + f * 3.9);
-                else g_app->settings.fog = (float)(f * 3.0);
+                else if (row == 2) g_app->settings.fog = (float)(f * 3.0);
+                else g_app->settings.fov = (float)(0.5 + f * 3.5);
             }
         }
     }
@@ -356,13 +360,17 @@ static int app_frame(App *app) {
             gd.size = 16;
             gd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             app->gradeBuf = wgpuDeviceCreateBuffer(app->device, &gd);
+            app->viewBuf = wgpuDeviceCreateBuffer(app->device, &gd);
             float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog, 0};
             wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
-            printf("grade: gamma=%.2f exposure=%.2f (Tab-меню)\n",
-                app->settings.gamma, app->settings.exposure);
+            float vw[4] = {app->settings.fov, app->settings.shadow, 0, 0};
+            wgpuQueueWriteBuffer(app->queue, app->viewBuf, 0, vw, sizeof vw);
+            printf("grade: gamma=%.2f exposure=%.2f fog=%.2f fov=%.2f shadow=%.0f (Tab-меню)\n",
+                app->settings.gamma, app->settings.exposure, app->settings.fog,
+                app->settings.fov, app->settings.shadow);
         }
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            WGPUBindGroupEntry be[3];
+            WGPUBindGroupEntry be[4];
             memset(be, 0, sizeof be);
             be[0].binding = 0;
             be[0].buffer = app->ubo[i];
@@ -373,10 +381,13 @@ static int app_frame(App *app) {
             be[2].binding = 2;
             be[2].buffer = app->gradeBuf;
             be[2].size = 16;
+            be[3].binding = 3;
+            be[3].buffer = app->viewBuf;
+            be[3].size = 16;
             WGPUBindGroupDescriptor bgdef;
             memset(&bgdef, 0, sizeof bgdef);
             bgdef.layout = app->bgl;
-            bgdef.entryCount = 3;
+            bgdef.entryCount = 4;
             bgdef.entries = be;
             app->bind[i] = wgpuDeviceCreateBindGroup(app->device, &bgdef);
         }
@@ -453,8 +464,9 @@ static int app_frame(App *app) {
         else {
             set_locked(app->win, 1);
             sdf_settings_save(&app->settings, "settings.cfg");
-            printf("grade: saved gamma=%.2f exposure=%.2f fog=%.2f\n",
-                app->settings.gamma, app->settings.exposure, app->settings.fog);
+            printf("grade: saved gamma=%.2f exposure=%.2f fog=%.2f fov=%.2f shadow=%.0f\n",
+                app->settings.gamma, app->settings.exposure, app->settings.fog,
+                app->settings.fov, app->settings.shadow);
         }
     }
     tabPrev = tabDown;
@@ -462,20 +474,24 @@ static int app_frame(App *app) {
         static int upPrev = 0, dnPrev = 0;
         int upD = glfwGetKey(app->win, GLFW_KEY_UP) == GLFW_PRESS;
         int dnD = glfwGetKey(app->win, GLFW_KEY_DOWN) == GLFW_PRESS;
-        if (upD && !upPrev) { app->menuSel = (app->menuSel + 2) % 3; }
-        if (dnD && !dnPrev) { app->menuSel = (app->menuSel + 1) % 3; }
+        if (upD && !upPrev) { app->menuSel = (app->menuSel + 4) % 5; }
+        if (dnD && !dnPrev) { app->menuSel = (app->menuSel + 1) % 5; }
         upPrev = upD; dnPrev = dnD;
-        // Удержание = плавно (1 ед/с). Без автоповтора клавы — по кадрам.
+        // Удержание = плавно (1 ед/с). Строка 4 — тумблер по любому нажатию.
         float rate = dt * 1.0f;
-        if (glfwGetKey(app->win, GLFW_KEY_LEFT) == GLFW_PRESS) {
-            if (app->menuSel == 0) app->settings.gamma -= rate;
-            else if (app->menuSel == 1) app->settings.exposure -= rate;
-            else app->settings.fog -= rate;
-        }
-        if (glfwGetKey(app->win, GLFW_KEY_RIGHT) == GLFW_PRESS) {
-            if (app->menuSel == 0) app->settings.gamma += rate;
-            else if (app->menuSel == 1) app->settings.exposure += rate;
-            else app->settings.fog += rate;
+        static int lfPrev = 0, rtPrev = 0;
+        int lfD = glfwGetKey(app->win, GLFW_KEY_LEFT) == GLFW_PRESS;
+        int rtD = glfwGetKey(app->win, GLFW_KEY_RIGHT) == GLFW_PRESS;
+        int lfE = lfD && !lfPrev, rtE = rtD && !rtPrev;
+        lfPrev = lfD; rtPrev = rtD;
+        if (app->menuSel == 4) {
+            if (lfE || rtE) app->settings.shadow = app->settings.shadow >= 0.5f ? 0.0f : 1.0f;
+        } else if (lfD || rtD) {
+            float d = ((lfD ? -1.0f : 0.0f) + (rtD ? 1.0f : 0.0f)) * rate;
+            if (app->menuSel == 0) app->settings.gamma += d;
+            else if (app->menuSel == 1) app->settings.exposure += d;
+            else if (app->menuSel == 2) app->settings.fog += d;
+            else app->settings.fov += d;
         }
         if (app->settings.gamma < 0.5f) app->settings.gamma = 0.5f;
         if (app->settings.gamma > 4.0f) app->settings.gamma = 4.0f;
@@ -483,6 +499,8 @@ static int app_frame(App *app) {
         if (app->settings.exposure > 4.0f) app->settings.exposure = 4.0f;
         if (app->settings.fog < 0.0f) app->settings.fog = 0.0f;
         if (app->settings.fog > 3.0f) app->settings.fog = 3.0f;
+        if (app->settings.fov < 0.5f) app->settings.fov = 0.5f;
+        if (app->settings.fov > 4.0f) app->settings.fov = 4.0f;
     }
     if (dt > 0.5f) dt = 0.5f; // кламп широкий: истинный шип должен быть виден в dtmax
     if (dt > app->dtMax) app->dtMax = dt;
@@ -555,11 +573,13 @@ static int app_frame(App *app) {
     (void)fi;
 #endif
     wgpuQueueWriteBuffer(app->queue, app->ubo[fi], 0, &u, sizeof u);
-    // Грейд каждый кадр (16Б): значения + состояние меню (w=-1 закрыто).
+    // Грейд+вид каждый кадр (32Б): значения + состояние меню (w=-1 закрыто).
     {
         float g[4] = {app->settings.gamma, app->settings.exposure, app->settings.fog,
                       app->menuOpen ? (float)app->menuSel : -1.0f};
         wgpuQueueWriteBuffer(app->queue, app->gradeBuf, 0, g, sizeof g);
+        float vw[4] = {app->settings.fov, app->settings.shadow, 0, 0};
+        wgpuQueueWriteBuffer(app->queue, app->viewBuf, 0, vw, sizeof vw);
     }
 
     WGPUSurfaceTexture st;

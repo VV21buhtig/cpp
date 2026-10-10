@@ -4,8 +4,8 @@ import * as path from "path";
 
 const settingsPath = path.join(app.getAppPath(), "settings.cfg");
 
-function parseSettings(): { gamma: number; exposure: number; fog: number } {
-  const s = { gamma: 2.2, exposure: 1.0, fog: 1.0 };
+function parseSettings(): { gamma: number; exposure: number; fog: number; fov: number; shadow: number } {
+  const s = { gamma: 2.2, exposure: 1.0, fog: 1.0, fov: 1.6, shadow: 1 };
   try {
     for (const line of fs.readFileSync(settingsPath, "utf8").split("\n")) {
       const [k, v] = line.trim().split(/\s+/);
@@ -14,6 +14,8 @@ function parseSettings(): { gamma: number; exposure: number; fog: number } {
       if (k === "gamma") s.gamma = Math.min(4, Math.max(0.5, f));
       else if (k === "exposure") s.exposure = Math.min(4, Math.max(0.1, f));
       else if (k === "fog") s.fog = Math.min(3, Math.max(0, f));
+      else if (k === "fov") s.fov = Math.min(4, Math.max(0.5, f));
+      else if (k === "shadow") s.shadow = f >= 0.5 ? 1 : 0;
     }
   } catch {
     /* нет файла — дефолты */
@@ -25,16 +27,18 @@ function createWindow(): void {
   ipcMain.handle("settings:load", () => parseSettings());
   ipcMain.handle(
     "settings:save",
-    (_e, s: { gamma: number; exposure: number; fog: number }) => {
+    (_e, s: { gamma: number; exposure: number; fog: number; fov: number; shadow: number }) => {
       const cur = parseSettings();
       const out = {
         gamma: isFinite(s.gamma) ? Math.min(4, Math.max(0.5, s.gamma)) : cur.gamma,
         exposure: isFinite(s.exposure) ? Math.min(4, Math.max(0.1, s.exposure)) : cur.exposure,
         fog: isFinite(s.fog) ? Math.min(3, Math.max(0, s.fog)) : cur.fog,
+        fov: isFinite(s.fov) ? Math.min(4, Math.max(0.5, s.fov)) : cur.fov,
+        shadow: s.shadow >= 0.5 ? 1 : 0,
       };
       fs.writeFileSync(
         settingsPath,
-        `gamma ${out.gamma.toFixed(3)}\nexposure ${out.exposure.toFixed(3)}\nfog ${out.fog.toFixed(3)}\n`
+        `gamma ${out.gamma.toFixed(3)}\nexposure ${out.exposure.toFixed(3)}\nfog ${out.fog.toFixed(3)}\nfov ${out.fov.toFixed(3)}\nshadow ${out.shadow}\n`
       );
     }
   );
