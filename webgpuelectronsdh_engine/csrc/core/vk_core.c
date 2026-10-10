@@ -224,6 +224,18 @@ static void core_set_origin(RenderCore *rc, int ox, int oz) {
     (void)rc; (void)ox; (void)oz;
 }
 
+static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    for (int i = 0; i < VK_MESH_SLOTS; i++) {
+        if (!c->meshes[i].used || c->meshes[i].cx != cx || c->meshes[i].cz != cz) continue;
+        vkDestroyBuffer(c->dev, c->meshes[i].buf, 0);
+        vkFreeMemory(c->dev, c->meshes[i].mem, 0);
+        c->meshes[i].used = 0;
+        c->meshes[i].count = 0;
+        return;
+    }
+}
+
 // Разовая команда (аплоад текстур на ините, не во фрейме).
 static int vk_once(VKCore *c, VkCommandBuffer *outCb) {
     VkCommandBufferAllocateInfo ai;
@@ -533,6 +545,7 @@ RenderCore *rc_vk_create(void) {
     w->api.frame = core_frame;
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
+    w->api.unload_chunk = core_unload_chunk;
     w->api.fps = core_fps;
     return &w->api;
 }

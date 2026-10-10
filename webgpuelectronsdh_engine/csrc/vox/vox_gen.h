@@ -22,10 +22,10 @@ float vox_probe(const uint8_t *vox, float ox, float oy, float oz,
                 float *nx, float *ny, float *nz, uint8_t *id);
 // Пол для камеры: высота поверхности + 0.6 (вне патча 0.6).
 static inline float vox_floor_y(float x, float z) {
+    // Мир бесконечный (vox_height для любых координат): границ нет.
+    // Сид обязан совпадать с vox_world_init, иначе физика и картинка разъедутся.
     int gx = (int)floorf(x), gz = (int)floorf(z);
-    if (gx >= 0 && gz >= 0 && gx < VOX_PW && gz < VOX_PZ)
-        return (float)vox_height(gx, gz, 1337) + 0.6f;
-    return 0.6f;
+    return (float)vox_height(gx, gz, 1337) + 0.6f;
 }
 // 1 если в (x,z) на высоте y свободно (холм не мешает), иначе 0.
 static inline int vox_floor(float x, float z, float y) {

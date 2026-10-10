@@ -267,6 +267,15 @@ static int app_frame(App *app) {
             up++;
         }
     }
+    // Выселенные из кольца — ядру (выкинуть меш/тексели, иначе призраки).
+    if (app->rc->unload_chunk) {
+        int ex[32], ez[32];
+        int n = vox_world_drain_evicted(&app->world, ex, ez, 32);
+        for (int i = 0; i < n; i++) app->rc->unload_chunk(app->rc, ex[i], ez[i]);
+    } else {
+        int ex[32], ez[32];
+        vox_world_drain_evicted(&app->world, ex, ez, 32);
+    }
 
     RcView v;
     memset(&v, 0, sizeof v);

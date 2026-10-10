@@ -69,6 +69,8 @@ struct RenderCore {
     int (*upload_chunk)(RenderCore *rc, int cx, int cz, const uint8_t *vox16,
                         const VoxChunk *nb[6]); // 16x64x16
     void (*set_origin)(RenderCore *rc, int ox, int oz); // чанк texel (0,*,0)
+    // Выселение: чанк ушёл из кольца — выкинуть меш/тексели (NULL если не надо).
+    void (*unload_chunk)(RenderCore *rc, int cx, int cz);
     // --- Домен SDF (NULL если нет RC_CAP_SDF). Полная сцена каждый раз. ---
     int (*upload_sdf)(RenderCore *rc, const RcSdfObj *objs, int n);
     // --- Домен VECTOR (NULL если нет RC_CAP_VECTOR). Кадр примитивов. ---

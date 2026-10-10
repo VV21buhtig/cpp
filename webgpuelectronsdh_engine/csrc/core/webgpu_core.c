@@ -343,6 +343,36 @@ static void core_set_origin(RenderCore *rc, int ox, int oz) {
     c->streamOZ = (float)(oz * VOX_SZ);
 }
 
+static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    if (!c->ready) return;
+    int sx = wrap11(cx), sz = wrap11(cz);
+    // Тороидальный слот могли уже перезалить чужим — трогаем только своё.
+    if (!c->slotOk[sx][sz] || c->slotCX[sx][sz] != cx || c->slotCZ[sx][sz] != cz) return;
+    static uint8_t air[256 * VOX_SY * VOX_SZ];
+    memset(air, 0, sizeof air);
+    WGPUTexelCopyTextureInfo dst;
+    memset(&dst, 0, sizeof dst);
+    dst.texture = c->voxTex;
+    dst.aspect = WGPUTextureAspect_All;
+    dst.origin.x = (uint32_t)(sx * VOX_SX);
+    dst.origin.z = (uint32_t)(sz * VOX_SZ);
+    WGPUTexelCopyBufferLayout layout;
+    memset(&layout, 0, sizeof layout);
+    layout.bytesPerRow = 256;
+    layout.rowsPerImage = VOX_SY;
+    WGPUExtent3D extent;
+    memset(&extent, 0, sizeof extent);
+    extent.width = VOX_SX;
+    extent.height = VOX_SY;
+    extent.depthOrArrayLayers = VOX_SZ;
+    wgpuQueueWriteTexture(c->queue, &dst, air, sizeof air, &layout, &extent);
+    c->slotOk[sx][sz] = 0;
+    c->tags[(sz * VOX_STREAM_CH + sx) * 4] = INT32_MAX; // сентинел: мимо
+    c->tags[(sz * VOX_STREAM_CH + sx) * 4 + 1] = INT32_MAX;
+    wgpuQueueWriteBuffer(c->queue, c->tagsBuf, 0, c->tags, sizeof c->tags);
+}
+
 static float core_fps(RenderCore *rc) {
     VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
     return c->fpsEma;
@@ -532,6 +562,7 @@ RenderCore *rc_webgpu_create(void) {
     w->api.frame = core_frame;
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
+    w->api.unload_chunk = core_unload_chunk;
     w->api.fps = core_fps;
     return &w->api;
 }

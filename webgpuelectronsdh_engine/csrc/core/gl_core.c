@@ -158,6 +158,18 @@ static void core_set_origin(RenderCore *rc, int ox, int oz) {
     (void)rc; (void)ox; (void)oz; // растр ходит в мировых координатах
 }
 
+static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
+    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
+    for (int i = 0; i < GL_MESH_SLOTS; i++) {
+        if (!c->meshes[i].used || c->meshes[i].cx != cx || c->meshes[i].cz != cz) continue;
+        glDeleteVertexArrays(1, &c->meshes[i].vao);
+        glDeleteBuffers(1, &c->meshes[i].vbo);
+        c->meshes[i].used = 0;
+        c->meshes[i].count = 0;
+        return;
+    }
+}
+
 static void core_frame(RenderCore *rc, const RcView *v) {
     GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
     double now = glfwGetTime();
@@ -409,6 +421,7 @@ RenderCore *rc_gl_create(void) {
     w->api.frame = core_frame;
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
+    w->api.unload_chunk = core_unload_chunk;
     w->api.fps = core_fps;
     return &w->api;
 }

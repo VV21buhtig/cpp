@@ -22,6 +22,9 @@ typedef struct {
     int count; // занято слотов
     uint32_t seed;
     int genLast; // сгенерировано за последний ensure (для тестов/лога)
+    // Выселенные за кадр (ядро должно выкинуть меши/тексели): пары cx,cz.
+    int evN;
+    int evCX[32], evCZ[32];
 } VoxWorld;
 
 void vox_world_init(VoxWorld *w, uint32_t seed);
@@ -29,4 +32,6 @@ void vox_world_init(VoxWorld *w, uint32_t seed);
 int vox_world_ensure(VoxWorld *w, int pcx, int pcz);
 // Найти резидентный чанк, 0 если выгружен.
 VoxChunk *vox_world_find(VoxWorld *w, int cx, int cz);
+// Забрать выселенных (ядру: unload_chunk). Возвращает число пар (<=cap).
+int vox_world_drain_evicted(VoxWorld *w, int *outCX, int *outCZ, int cap);
 #endif
