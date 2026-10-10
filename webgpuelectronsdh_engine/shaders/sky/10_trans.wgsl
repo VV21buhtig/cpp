@@ -1,4 +1,4 @@
-// Пропускание 256x64, печётся 1 раз (их wc_transmittance.glsl 1:1).
+// Пропускание 256x64, печётся 1 раз.
 @fragment
 fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   let sunCos = 2.0 * uv.x - 1.0;
