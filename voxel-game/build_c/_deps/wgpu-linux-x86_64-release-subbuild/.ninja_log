@@ -1,0 +1,21 @@
+# ninja log v7
+0	30	1791672239110134562	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-mkdir	c995e751f6799b19
+0	30	1791672239110134562	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-mkdir	c995e751f6799b19
+30	2865	1791672241946106292	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-download	5ab02c4ef7b9a061
+30	2865	1791672241946106292	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-download	5ab02c4ef7b9a061
+2865	2891	1791672241972106019	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-update	c7f4eb8ad6517a0a
+2865	2891	1791672241972106019	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-update	c7f4eb8ad6517a0a
+2891	2917	1791672241997105756	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-patch	6ac645c4084c679d
+2891	2917	1791672241997105756	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-patch	6ac645c4084c679d
+2917	2943	1791672242023105470	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-configure	241cc37749a84798
+2917	2943	1791672242023105470	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-configure	241cc37749a84798
+2943	2969	1791672242049105182	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-build	bedbe5e9615d23af
+2943	2969	1791672242049105182	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-build	bedbe5e9615d23af
+2969	2995	1791672242076104883	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-install	3b379ccce05a07e8
+2969	2995	1791672242076104883	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-install	3b379ccce05a07e8
+2995	3022	1791672242102104596	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-test	de5bd69dfedbaaf1
+2995	3022	1791672242102104596	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-test	de5bd69dfedbaaf1
+3022	3060	1791672242141104164	CMakeFiles/wgpu-linux-x86_64-release-populate-complete	302b94ead26467bf
+3022	3060	1791672242141104164	wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-done	302b94ead26467bf
+3022	3060	1791672242141104164	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/CMakeFiles/wgpu-linux-x86_64-release-populate-complete	302b94ead26467bf
+3022	3060	1791672242141104164	/home/ponchik/Documents/projects/CPP/voxel-game/build_c/_deps/wgpu-linux-x86_64-release-subbuild/wgpu-linux-x86_64-release-populate-prefix/src/wgpu-linux-x86_64-release-populate-stamp/wgpu-linux-x86_64-release-populate-done	302b94ead26467bf
