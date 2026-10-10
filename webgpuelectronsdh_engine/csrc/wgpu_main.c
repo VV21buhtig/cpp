@@ -21,6 +21,7 @@
 #include "sky_lut.h"
 #include "vox/vox_gen.h"
 #include "vox/vox_world.h"
+#include "vox/vox_tex.h"
 #include "sdf_wgsl.h"
 
 #define VOX_STREAM_CH 11 // окно 11x11 чанков = 176 клеток (кольцо R=4 + борт)
@@ -64,6 +65,9 @@ typedef struct {
     WGPUBindGroup skyBind;
     WGPUTexture voxTex;
     WGPUTextureView voxView;
+    WGPUTexture tileTex;
+    WGPUTextureView tileView;
+    WGPUSampler tileSmp;
     VoxWorld world;
     float streamOX, streamOZ; // мировая клетка texel (0,*,0) — в UBO pad0/pad1
     int mode; // дебаг-вид: 0 цвет, 1 нормали, 2 глубина (клавиша N)
@@ -430,20 +434,80 @@ static int app_frame(App *app) {
             vox_world_init(&app->world, 1337);
             printf("voxels OK: stream 176x64x176 (11x11 chunks)\n");
         }
+        // Атлас блоков 16x16x7 (их тайлы). Нет файлов — серая заглушка, не падаем.
+        {
+            static uint8_t tiles[VOX_TEXELS * 4];
+            if (!vox_tex_load("../voxel-render/texture/tiles", tiles)) {
+                memset(tiles, 0x80, sizeof tiles);
+                printf("tiles: fallback gray\n");
+            } else {
+                printf("tiles OK: 7 layers\n");
+            }
+            WGPUTextureDescriptor td;
+            memset(&td, 0, sizeof td);
+            td.size.width = VOX_TILE;
+            td.size.height = VOX_TILE;
+            td.size.depthOrArrayLayers = VOX_LAYERS;
+            td.mipLevelCount = 1;
+            td.sampleCount = 1;
+            td.dimension = WGPUTextureDimension_2D;
+            td.format = WGPUTextureFormat_RGBA8Unorm;
+            td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+            app->tileTex = wgpuDeviceCreateTexture(app->device, &td);
+            WGPUTextureViewDescriptor vd;
+            memset(&vd, 0, sizeof vd);
+            vd.format = WGPUTextureFormat_RGBA8Unorm;
+            vd.dimension = WGPUTextureViewDimension_2DArray;
+            vd.mipLevelCount = 1;
+            vd.arrayLayerCount = VOX_LAYERS;
+            vd.aspect = WGPUTextureAspect_All;
+            app->tileView = wgpuTextureCreateView(app->tileTex, &vd);
+            WGPUSamplerDescriptor sd;
+            memset(&sd, 0, sizeof sd);
+            sd.addressModeU = WGPUAddressMode_ClampToEdge;
+            sd.addressModeV = WGPUAddressMode_ClampToEdge;
+            sd.addressModeW = WGPUAddressMode_ClampToEdge;
+            sd.magFilter = WGPUFilterMode_Nearest;
+            sd.minFilter = WGPUFilterMode_Nearest;
+            sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+            sd.maxAnisotropy = 1;
+            app->tileSmp = wgpuDeviceCreateSampler(app->device, &sd);
+            static uint8_t staging[256 * VOX_TILE * VOX_LAYERS];
+            for (int l = 0; l < VOX_LAYERS; l++)
+                for (int y = 0; y < VOX_TILE; y++)
+                    memcpy(&staging[((size_t)l * VOX_TILE + (size_t)y) * 256],
+                           &tiles[((size_t)l * VOX_TILE + (size_t)y) * VOX_TILE * 4], VOX_TILE * 4);
+            WGPUTexelCopyTextureInfo dst;
+            memset(&dst, 0, sizeof dst);
+            dst.texture = app->tileTex;
+            dst.aspect = WGPUTextureAspect_All;
+            WGPUTexelCopyBufferLayout layout;
+            memset(&layout, 0, sizeof layout);
+            layout.bytesPerRow = 256;
+            layout.rowsPerImage = VOX_TILE;
+            WGPUExtent3D extent;
+            memset(&extent, 0, sizeof extent);
+            extent.width = VOX_TILE;
+            extent.height = VOX_TILE;
+            extent.depthOrArrayLayers = VOX_LAYERS;
+            wgpuQueueWriteTexture(app->queue, &dst, staging, sizeof staging, &layout, &extent);
+        }
         // Печка неба + вторая бинд-группа (LUT): текстуры фиксированы.
         sky_luts_init(&app->sky, app->device, app->queue);
         {
             WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(app->pipeline, 1);
-            WGPUBindGroupEntry e[4];
+            WGPUBindGroupEntry e[6];
             memset(e, 0, sizeof e);
             e[0].binding = 0; e[0].textureView = app->sky.sunView;
             e[1].binding = 1; e[1].textureView = app->sky.moonView;
             e[2].binding = 2; e[2].sampler = app->sky.smp;
             e[3].binding = 3; e[3].textureView = app->voxView;
+            e[4].binding = 4; e[4].textureView = app->tileView;
+            e[5].binding = 5; e[5].sampler = app->tileSmp;
             WGPUBindGroupDescriptor d;
             memset(&d, 0, sizeof d);
             d.layout = l;
-            d.entryCount = 4;
+            d.entryCount = 6;
             d.entries = e;
             app->skyBind = wgpuDeviceCreateBindGroup(app->device, &d);
             wgpuBindGroupLayoutRelease(l);

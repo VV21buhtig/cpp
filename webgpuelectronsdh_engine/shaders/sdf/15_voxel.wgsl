@@ -2,6 +2,23 @@
 // Окно: origin из UBO (pad0/pad1 = мировая клетка texel 0,0), размер 176x64x176.
 // Вне окна — воздух. Тороид на заливке (C), в шейдере прямое смещение.
 @group(1) @binding(3) var voxTex: texture_3d<u32>;
+// Атлас 16x16x7 (их тайлы): nearest, без фильтра-мыла.
+@group(1) @binding(4) var tileTex: texture_2d_array<f32>;
+@group(1) @binding(5) var tileSmp: sampler;
+
+fn tileUV(pos: vec3f, n: vec3f) -> vec2f {
+  if (abs(n.y) > 0.5) { return fract(pos.xz); }
+  if (abs(n.x) > 0.5) { return fract(pos.zy); }
+  return fract(pos.xy);
+}
+
+fn tileLayer(id: u32, n: vec3f) -> i32 {
+  if (id == 1u) { return select(1, 0, n.y > 0.5); } // трава: верх/бок
+  if (id == 2u) { return 2; } // земля
+  if (id == 4u) { return select(4, 5, abs(n.y) > 0.5); } // бревно: бок/торец
+  if (id == 5u) { return 6; } // листва
+  return 3; // камень, бедрок, остальное
+}
 // Теги слотов: какой мировой чанк РЕАЛЬНО залит (121 пара). Сентинел = воздух,
 // иначе видны миражи со старого конца карты при отставании заливки.
 @group(0) @binding(1) var<uniform> voxTags: array<vec4i, 121>;
