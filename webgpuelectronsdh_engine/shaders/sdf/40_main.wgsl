@@ -1,4 +1,37 @@
 // Главный проход: фулскрин-треугольник, воксельный мир DDA, туман.
+// Шрифт 5x7 для меню (G,A,M,E,X,P,O,F,R,0-9,.,-,space), по 7 строк на глиф.
+const FONT: array<u32, 154> = array<u32, 154>(
+  14u, 17u, 16u, 23u, 17u, 17u, 14u, // G
+  14u, 17u, 17u, 31u, 17u, 17u, 17u, // A
+  17u, 27u, 21u, 21u, 17u, 17u, 17u, // M
+  31u, 16u, 16u, 30u, 16u, 16u, 31u, // E
+  17u, 17u, 10u, 4u, 10u, 17u, 17u, // X
+  30u, 17u, 17u, 30u, 16u, 16u, 16u, // P
+  14u, 17u, 17u, 17u, 17u, 17u, 14u, // O
+  31u, 16u, 16u, 30u, 16u, 16u, 16u, // F
+  30u, 17u, 17u, 30u, 20u, 18u, 17u, // R
+  14u, 17u, 17u, 17u, 17u, 17u, 14u, // 0
+  4u, 12u, 4u, 4u, 4u, 4u, 14u, // 1
+  14u, 17u, 1u, 2u, 4u, 8u, 31u, // 2
+  30u, 1u, 1u, 6u, 1u, 1u, 30u, // 3
+  2u, 6u, 10u, 17u, 31u, 2u, 2u, // 4
+  31u, 16u, 30u, 1u, 1u, 17u, 14u, // 5
+  14u, 16u, 16u, 30u, 17u, 17u, 14u, // 6
+  31u, 1u, 2u, 4u, 8u, 8u, 8u, // 7
+  14u, 17u, 17u, 14u, 17u, 17u, 14u, // 8
+  14u, 17u, 17u, 15u, 1u, 1u, 14u, // 9
+  0u, 0u, 0u, 0u, 0u, 6u, 6u, // .
+  0u, 0u, 0u, 31u, 0u, 0u, 0u, // -
+  0u, 0u, 0u, 0u, 0u, 0u, 0u, // space
+);
+
+fn textOn(px: vec2f, x0: f32, y0: f32, sc: f32, gi: u32) -> bool {
+  let c = i32(floor((px.x - x0) / sc));
+  let r = i32(floor((px.y - y0) / sc));
+  if (c < 0 || c > 4 || r < 0 || r > 6) { return false; }
+  return (FONT[gi * 7u + u32(r)] & (1u << u32(4 - c))) != 0u;
+}
+
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let v = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
@@ -62,29 +95,32 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   fogCol = mix(fogCol, vec3f(1.0, 0.45, 0.20) * (0.4 + 0.6 * dayL), pow(sunAmt, 3.0) * 0.55 * sunset);
   var outc = mix(col, fogCol, fog);
   outc = pow(max(outc * grade.y, vec3f(0.0)), vec3f(1.0 / max(grade.x, 0.5)));
-  // Меню настроек (Tab): шрифтов нет — строки-полосы (гамма/экспозиция/туман).
+  // Меню настроек (Tab): подписи + значения + полосы.
   if (grade.w > -0.5) {
     let mp = vec2f(frag.x, frag.y);
-    if (mp.x >= 16.0 && mp.x < 300.0 && mp.y >= 16.0 && mp.y < 140.0) {
-      var mcol = vec3f(0.06, 0.07, 0.09);
-      let row = min(i32((mp.y - 16.0) / 40.0), 2);
+    if (mp.x >= 24.0 && mp.x < 560.0 && mp.y >= 24.0 && mp.y < 196.0) {
+      var mcol = vec3f(0.05, 0.06, 0.08);
+      let row = min(i32((mp.y - 24.0) / 56.0), 2);
       let sel = i32(grade.w + 0.5);
-      if (row == sel) { mcol = vec3f(0.10, 0.13, 0.18); }
-      // кубики слева: номер строки (0..2 -> 1..3 шт)
-      let bx = mp.x - 24.0;
-      let by = mp.y - (16.0 + f32(row) * 40.0) - 6.0;
-      if (bx >= 0.0 && bx < f32(row + 1) * 12.0 - 4.0 && by >= 0.0 && by < 8.0
-          && (bx % 12.0) < 8.0) {
-        mcol = vec3f(0.48, 0.63, 1.0);
+      if (row == sel) { mcol = vec3f(0.09, 0.12, 0.17); }
+      var gl = array<u32, 5>(21u, 21u, 21u, 21u, 21u);
+      var vv = grade.x;
+      var vmin = 0.5;
+      var vspan = 3.5;
+      if (row == 0) { gl = array<u32, 5>(0u, 1u, 2u, 2u, 1u); }
+      else if (row == 1) { gl = array<u32, 5>(3u, 4u, 5u, 6u, 21u); vv = grade.y; vmin = 0.1; vspan = 3.9; }
+      else { gl = array<u32, 5>(7u, 6u, 0u, 21u, 21u); vv = grade.z; vmin = 0.0; vspan = 3.0; }
+      let rowY = 34.0 + f32(row) * 56.0;
+      for (var k = 0; k < 5; k++) {
+        if (textOn(mp, 36.0 + f32(k) * 21.0, rowY, 3.0, gl[k])) { mcol = vec3f(0.85); }
       }
-      // полоса значения x 120..280
-      if (mp.x >= 120.0) {
-        let f = (mp.x - 120.0) / 160.0;
-        var vv = 0.0;
-        if (row == 0) { vv = (grade.x - 0.5) / 3.5; }
-        else if (row == 1) { vv = (grade.y - 0.1) / 3.9; }
-        else { vv = grade.z / 3.0; }
-        if (f <= vv) { mcol = vec3f(0.48, 0.63, 1.0); }
+      let cc = vv * 100.0 + 0.5;
+      let va = array<u32, 4>(u32(9u + u32(min(i32(vv), 9))), 19u, u32(9u + u32((i32(cc) / 10) % 10)), u32(9u + u32(i32(cc) % 10)));
+      for (var k = 0; k < 4; k++) {
+        if (textOn(mp, 420.0 + f32(k) * 21.0, rowY, 3.0, va[k])) { mcol = vec3f(0.85); }
+      }
+      if (mp.x >= 190.0 && mp.x < 350.0) {
+        if ((mp.x - 190.0) / 160.0 <= (vv - vmin) / vspan) { mcol = vec3f(0.48, 0.63, 1.0); }
       }
       outc = mcol;
     }

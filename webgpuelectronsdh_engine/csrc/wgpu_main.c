@@ -222,13 +222,13 @@ static void on_btn(GLFWwindow *w, int b, int act, int m) {
         glfwGetFramebufferSize(w, &fw, &fh);
         double px = ww > 0 ? cx * fw / ww : cx;
         double py = hh > 0 ? cy * fh / hh : cy;
-        if (px >= 16 && px < 300 && py >= 16 && py < 140) {
-            int row = (int)((py - 16) / 40);
+        if (px >= 24 && px < 560 && py >= 24 && py < 196) {
+            int row = (int)((py - 24) / 56);
             if (row < 0) row = 0;
             if (row > 2) row = 2;
             g_app->menuSel = row;
-            if (px >= 120) {
-                double f = (px - 120) / 160;
+            if (px >= 190 && px < 350) {
+                double f = (px - 190) / 160;
                 if (f < 0) f = 0;
                 if (f > 1) f = 1;
                 if (row == 0) g_app->settings.gamma = (float)(0.5 + f * 3.5);
