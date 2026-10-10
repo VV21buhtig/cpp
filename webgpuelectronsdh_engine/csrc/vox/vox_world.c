@@ -10,13 +10,16 @@ void vox_world_init(VoxWorld *w, uint32_t seed) {
 }
 
 // Соседей — грязными: их пограничные грани пересчитать (появился/ушёл чанк).
+// SDF-бейки тоже протухают (пекутся с соседями).
 static void dirty_nb(VoxWorld *w, int cx, int cz) {
     const int d[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
     for (int k = 0; k < 4; k++)
         for (int i = 0; i < VOX_POOL; i++)
             if (w->slots[i].used && w->slots[i].cx == cx + d[k][0] &&
-                w->slots[i].cz == cz + d[k][1])
+                w->slots[i].cz == cz + d[k][1]) {
                 w->slots[i].dirty = 1;
+                w->slots[i].sdfDirty = 1;
+            }
 }
 
 VoxChunk *vox_world_find(VoxWorld *w, int cx, int cz) {
@@ -69,6 +72,7 @@ int vox_world_ensure(VoxWorld *w, int pcx, int pcz) {
                 s->cx = cx;
                 s->cz = cz;
                 s->dirty = 1;
+                s->sdfDirty = 1;
                 s->data.cx = cx;
                 s->data.cz = cz;
                 vox_gen(&s->data, w->seed);

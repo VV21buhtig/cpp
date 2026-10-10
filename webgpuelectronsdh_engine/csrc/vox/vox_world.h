@@ -14,6 +14,7 @@ typedef struct {
     int used;
     int cx, cz;
     int dirty; // 1 если сгенерён, но app ещё не залил в GPU (гасится после upload_chunk)
+    int sdfDirty; // 1 если SDF-бейк протух (гасится после upload_sdf_chunk)
     VoxChunk data;
 } VoxSlot;
 

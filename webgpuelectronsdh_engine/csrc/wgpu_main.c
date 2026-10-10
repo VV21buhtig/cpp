@@ -16,6 +16,7 @@
 #include "sdf_scene.h"
 #include "sdf_settings.h"
 #include "vox/vox_world.h"
+#include "vox/vox_sdf.h"
 #include "vox/vox_gen.h"
 
 typedef struct {
@@ -265,6 +266,33 @@ static int app_frame(App *app) {
             if (app->rc->upload_chunk(app->rc, s->cx, s->cz, s->data.id, nb))
                 s->dirty = 0;
             up++;
+        }
+    }
+    // SDF-бейки: бюджет 1 чанк/кадр (~7мс), тороид на ядре. Только если ядро ест.
+    if (app->rc->upload_sdf_chunk && app->rc->set_sdf_origin) {
+        app->rc->set_sdf_origin(app->rc, (pcx - 5) * 16, 0, (pcz - 5) * 16);
+        for (int i = 0; i < VOX_POOL; i++) {
+            VoxSlot *s = &app->world.slots[i];
+            if (!s->used || !s->sdfDirty) continue;
+            static float sb[VOX_N];
+            static uint8_t pk[VOX_N];
+            const VoxChunk *nb[6] = {
+                vox_world_find(&app->world, s->cx - 1, s->cz),
+                vox_world_find(&app->world, s->cx + 1, s->cz),
+                0, 0,
+                vox_world_find(&app->world, s->cx, s->cz - 1),
+                vox_world_find(&app->world, s->cx, s->cz + 1),
+            };
+            vox_sdf_bake(&s->data, nb, sb);
+            for (int k = 0; k < VOX_N; k++) {
+                float t = sb[k] * (1.0f / 12.0f) * 0.5f + 0.5f;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                pk[k] = (uint8_t)(t * 255.0f + 0.5f);
+            }
+            if (app->rc->upload_sdf_chunk(app->rc, s->cx, s->cz, pk))
+                s->sdfDirty = 0;
+            break; // один бейк за кадр
         }
     }
     // Выселенные из кольца — ядру (выкинуть меш/тексели, иначе призраки).

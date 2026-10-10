@@ -71,6 +71,11 @@ struct RenderCore {
     void (*set_origin)(RenderCore *rc, int ox, int oz); // чанк texel (0,*,0)
     // Выселение: чанк ушёл из кольца — выкинуть меш/тексели (NULL если не надо).
     void (*unload_chunk)(RenderCore *rc, int cx, int cz);
+    // SDF-объём (VOXEL-домен, NULL если ядро не ест): печёный R8 16x64x16,
+    // байт = clamp(d/12,-1,1)*0.5+0.5. Тороид на ядре, швы решает app.
+    int (*upload_sdf_chunk)(RenderCore *rc, int cx, int cz, const uint8_t *sdf16);
+    // Мировой воксель угла (0,*,0) SDF-объёма (следует за кольцом).
+    void (*set_sdf_origin)(RenderCore *rc, int ox, int oy, int oz);
     // --- Домен SDF (NULL если нет RC_CAP_SDF). Полная сцена каждый раз. ---
     int (*upload_sdf)(RenderCore *rc, const RcSdfObj *objs, int n);
     // --- Домен VECTOR (NULL если нет RC_CAP_VECTOR). Кадр примитивов. ---

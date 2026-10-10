@@ -76,7 +76,7 @@ else()
       COMMENT "glslc ${SH}")
     list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
   endforeach()
-  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c
+  add_executable(sdf_native_webgpu csrc/wgpu_main.c csrc/core/webgpu_core.c csrc/core/corelib.c csrc/core/gl_core.c csrc/core/vk_core.c csrc/core/sdf_core.c csrc/sdf_math.c csrc/sky_lut.c csrc/sdf_settings.c csrc/vox/vox_gen.c csrc/vox/vox_tex.c csrc/vox/vox_world.c csrc/vox/vox_mesh.c csrc/vox/vox_sdf.c
     ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
   target_compile_definitions(sdf_native_webgpu PRIVATE
     VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")

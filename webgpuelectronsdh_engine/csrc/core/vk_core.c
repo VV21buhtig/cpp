@@ -46,6 +46,7 @@ typedef struct {
     float viewPos[4];
     float sunDiff[4];
     float sunSpec[4]; // rgb + shininess
+    float sdfMin[4];  // xyz мировой угол объёма, w=0
 } VkFrameUbo;
 
 typedef struct {
@@ -76,6 +77,18 @@ typedef struct {
     VkBuffer uboBuf[VK_FIF];
     VkDeviceMemory uboMem[VK_FIF];
     void *uboPtr[VK_FIF];
+    // SDF-объём 176x64x176 R8 тороид (кольцо R+1): байт=(d/12)*.5+.5.
+#define VK_SDF_W 176
+#define VK_SDF_H 64
+#define VK_SDF_D 176
+    VkImage sdfImg;
+    VkDeviceMemory sdfMem;
+    VkImageView sdfView;
+    VkSampler sdfSmp;
+    VkBuffer sdfStg;
+    VkDeviceMemory sdfStgMem;
+    void *sdfStgPtr;
+    int sdfOX, sdfOZ; // мировой воксель угла объёма
     VkImage tileImg;
     VkDeviceMemory tileMem;
     VkImageView tileView;
@@ -107,6 +120,9 @@ typedef struct {
 static double vk_time(void) {
     return glfwGetTime();
 }
+
+static int vk_once(VKCore *c, VkCommandBuffer *outCb);
+static int vk_once_end(VKCore *c, VkCommandBuffer cb);
 
 static VkBool32 vk_dbg_cb(VkDebugUtilsMessageSeverityFlagBitsEXT sev,
                            VkDebugUtilsMessageTypeFlagsEXT type,
@@ -236,6 +252,60 @@ static void core_set_origin(RenderCore *rc, int ox, int oz) {
     (void)rc; (void)ox; (void)oz;
 }
 
+static void core_set_sdf_origin(RenderCore *rc, int ox, int oy, int oz) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    (void)oy; // y всегда 0..64
+    c->sdfOX = ox;
+    c->sdfOZ = oz;
+}
+
+static int core_upload_sdf_chunk(RenderCore *rc, int cx, int cz, const uint8_t *sdf16) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    if (!c->ready || !c->sdfImg) return 0;
+    int ox = ((cx * VOX_SX - c->sdfOX) % VK_SDF_W + VK_SDF_W) % VK_SDF_W;
+    int oz = ((cz * VOX_SZ - c->sdfOZ) % VK_SDF_D + VK_SDF_D) % VK_SDF_D;
+    // Плоский 16x64x16 -> стейджинг с транспозицией y<->z:
+    // vox_idx идёт (x,z,y), а Vulkan 3D ждёт (x,y,z).
+    for (int y = 0; y < VOX_SY; y++)
+        for (int z = 0; z < VOX_SZ; z++)
+            memcpy((uint8_t *)c->sdfStgPtr + ((size_t)z * VOX_SY + y) * VOX_SX,
+                   sdf16 + ((size_t)y * VOX_SZ + z) * VOX_SX, VOX_SX);
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (!vk_once(c, &cb)) return 0;
+    VkImageMemoryBarrier b0;
+    memset(&b0, 0, sizeof b0);
+    b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b0.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b0.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b0.image = c->sdfImg;
+    b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b0.subresourceRange.levelCount = 1;
+    b0.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
+    VkBufferImageCopy cp;
+    memset(&cp, 0, sizeof cp);
+    cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cp.imageSubresource.layerCount = 1;
+    cp.imageOffset.x = ox;
+    cp.imageOffset.z = oz;
+    cp.imageExtent.width = VOX_SX;
+    cp.imageExtent.height = VOX_SY;
+    cp.imageExtent.depth = VOX_SZ;
+    vkCmdCopyBufferToImage(cb, c->sdfStg, c->sdfImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    VkImageMemoryBarrier b1 = b0;
+    b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+    if (!vk_once_end(c, cb)) return 0;
+    return 1;
+}
+
 static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
     for (int i = 0; i < VK_MESH_SLOTS; i++) {
@@ -287,6 +357,7 @@ static int vk_once_end(VKCore *c, VkCommandBuffer cb) {
 
 static int core_init2(RenderCore *rc);
 static int core_init3(RenderCore *rc);
+static int core_init_sdf(RenderCore *rc);
 
 static int core_init(RenderCore *rc, void *glfwWindow) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
@@ -563,9 +634,9 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
         }
     }
 
-    // Сет: 0=UBO, 1=атлас, 2=спек.
+    // Сет: 0=UBO, 1=атлас, 2=спек, 3=SDF-объём.
     {
-        VkDescriptorSetLayoutBinding b[3];
+        VkDescriptorSetLayoutBinding b[4];
         memset(b, 0, sizeof b);
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -579,15 +650,20 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
         b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[2].descriptorCount = 1;
         b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        b[3].binding = 3;
+        b[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[3].descriptorCount = 1;
+        b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo li;
         memset(&li, 0, sizeof li);
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 3;
+        li.bindingCount = 4;
         li.pBindings = b;
         VKCHK(vkCreateDescriptorSetLayout(c->dev, &li, 0, &c->setLayout));
     }
     if (!core_init2(rc)) return 0;
     if (!core_init3(rc)) return 0;
+    if (!core_init_sdf(rc)) return 0;
     c->prevT = vk_time();
     c->ready = 1;
     return 1;
@@ -609,6 +685,8 @@ RenderCore *rc_vk_create(void) {
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
     w->api.unload_chunk = core_unload_chunk;
+    w->api.upload_sdf_chunk = core_upload_sdf_chunk;
+    w->api.set_sdf_origin = core_set_sdf_origin;
     w->api.fps = core_fps;
     return &w->api;
 }
@@ -625,7 +703,7 @@ static int core_init2(RenderCore *rc) {
         ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         ps[0].descriptorCount = VK_FIF;
         ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        ps[1].descriptorCount = VK_FIF * 2;
+        ps[1].descriptorCount = VK_FIF * 3; // атлас+спек+SDF на сет
         VkDescriptorPoolCreateInfo pi;
         memset(&pi, 0, sizeof pi);
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1044,6 +1122,118 @@ static int core_init3(RenderCore *rc) {
     return 1;
 }
 
+// --- init SDF: объём 176x64x176 R8, старт «далеко» (0xFF), стейджинг 64КБ ---
+static int core_init_sdf(RenderCore *rc) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    {
+        VkImageCreateInfo ici;
+        memset(&ici, 0, sizeof ici);
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_3D;
+        ici.format = VK_FORMAT_R8_UNORM;
+        ici.extent.width = VK_SDF_W;
+        ici.extent.height = VK_SDF_H;
+        ici.extent.depth = VK_SDF_D;
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        VKCHK(vkCreateImage(c->dev, &ici, 0, &c->sdfImg));
+        VkMemoryRequirements mr;
+        vkGetImageMemoryRequirements(c->dev, c->sdfImg, &mr);
+        uint32_t mi = find_mem(c->pdev, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (mi == 0xFFFFFFFFu) return 0;
+        VkMemoryAllocateInfo mai;
+        memset(&mai, 0, sizeof mai);
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = mr.size;
+        mai.memoryTypeIndex = mi;
+        VKCHK(vkAllocateMemory(c->dev, &mai, 0, &c->sdfMem));
+        VKCHK(vkBindImageMemory(c->dev, c->sdfImg, c->sdfMem, 0));
+        VkImageViewCreateInfo vi;
+        memset(&vi, 0, sizeof vi);
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = c->sdfImg;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vi.format = VK_FORMAT_R8_UNORM;
+        vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        vi.subresourceRange.levelCount = 1;
+        vi.subresourceRange.layerCount = 1;
+        VKCHK(vkCreateImageView(c->dev, &vi, 0, &c->sdfView));
+        VkSamplerCreateInfo sm;
+        memset(&sm, 0, sizeof sm);
+        sm.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sm.magFilter = VK_FILTER_LINEAR; // SDF интерполируем
+        sm.minFilter = VK_FILTER_LINEAR;
+        sm.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; // тороид
+        sm.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; // y 0..64 весь
+        sm.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        VKCHK(vkCreateSampler(c->dev, &sm, 0, &c->sdfSmp));
+    }
+    // Стейджинг 16x64x16 и заливка «далеко» всего объёма (разово, инит).
+    if (!vk_hbuf(c, VOX_N, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 &c->sdfStg, &c->sdfStgMem, &c->sdfStgPtr)) return 0;
+    {
+        VkBuffer far = VK_NULL_HANDLE;
+        VkDeviceMemory farM = VK_NULL_HANDLE;
+        void *fp = 0;
+        size_t vol = (size_t)VK_SDF_W * VK_SDF_H * VK_SDF_D;
+        if (!vk_hbuf(c, vol, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &far, &farM, &fp)) return 0;
+        memset(fp, 0xFF, vol); // пусто = далеко = тени нет
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        if (!vk_once(c, &cb)) return 0;
+        VkImageMemoryBarrier b0;
+        memset(&b0, 0, sizeof b0);
+        b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b0.image = c->sdfImg;
+        b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b0.subresourceRange.levelCount = 1;
+        b0.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
+        VkBufferImageCopy cp;
+        memset(&cp, 0, sizeof cp);
+        cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        cp.imageSubresource.layerCount = 1;
+        cp.imageExtent.width = VK_SDF_W;
+        cp.imageExtent.height = VK_SDF_H;
+        cp.imageExtent.depth = VK_SDF_D;
+        vkCmdCopyBufferToImage(cb, far, c->sdfImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+        VkImageMemoryBarrier b1 = b0;
+        b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+        if (!vk_once_end(c, cb)) return 0;
+        vkDestroyBuffer(c->dev, far, 0);
+        vkFreeMemory(c->dev, farM, 0);
+    }
+    // Биндинг 3 в оба сета.
+    for (int i = 0; i < VK_FIF; i++) {
+        VkDescriptorImageInfo ii;
+        ii.sampler = c->sdfSmp;
+        ii.imageView = c->sdfView;
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w;
+        memset(&w, 0, sizeof w);
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = c->sets[i];
+        w.dstBinding = 3;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &ii;
+        vkUpdateDescriptorSets(c->dev, 1, &w, 0, 0);
+    }
+    printf("vk sdf vol OK: %dx%dx%d R8\n", VK_SDF_W, VK_SDF_H, VK_SDF_D);
+    return 1;
+}
+
 static void core_frame(RenderCore *rc, const RcView *v) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
     double now = vk_time();
@@ -1092,6 +1282,11 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     ub->sunDiff[0] = 1.7f; ub->sunDiff[1] = 1.6f; ub->sunDiff[2] = 1.45f; ub->sunDiff[3] = 1.0f;
     ub->sunSpec[0] = 0.3f; ub->sunSpec[1] = 0.28f; ub->sunSpec[2] = 0.25f;
     ub->sunSpec[3] = 32.0f; // shininess
+    ub->sdfMin[0] = (float)c->sdfOX; ub->sdfMin[1] = 0.0f;
+    ub->sdfMin[2] = (float)c->sdfOZ; ub->sdfMin[3] = 0.0f;
+    // А/Б для проверки: VOX_NO_SDFSH=1 гасит SDF-тени (должно стать плоско).
+    if (getenv("VOX_NO_SDFSH") && getenv("VOX_NO_SDFSH")[0])
+        ub->sdfMin[3] = -1.0f;
 
     VkCommandBuffer cb = c->cmds[fi];
     vkResetCommandBuffer(cb, 0);
@@ -1277,6 +1472,12 @@ static void core_shutdown(RenderCore *rc) {
     if (c->specView) vkDestroyImageView(c->dev, c->specView, 0);
     if (c->specImg) vkDestroyImage(c->dev, c->specImg, 0);
     if (c->specMem) vkFreeMemory(c->dev, c->specMem, 0);
+    if (c->sdfSmp) vkDestroySampler(c->dev, c->sdfSmp, 0);
+    if (c->sdfView) vkDestroyImageView(c->dev, c->sdfView, 0);
+    if (c->sdfImg) vkDestroyImage(c->dev, c->sdfImg, 0);
+    if (c->sdfMem) vkFreeMemory(c->dev, c->sdfMem, 0);
+    if (c->sdfStg) vkDestroyBuffer(c->dev, c->sdfStg, 0);
+    if (c->sdfStgMem) vkFreeMemory(c->dev, c->sdfStgMem, 0);
     if (c->meshPipe) vkDestroyPipeline(c->dev, c->meshPipe, 0);
     if (c->skyPipe) vkDestroyPipeline(c->dev, c->skyPipe, 0);
     if (c->meshPipeLayout) vkDestroyPipelineLayout(c->dev, c->meshPipeLayout, 0);
