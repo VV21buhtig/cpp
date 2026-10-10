@@ -59,6 +59,7 @@ typedef struct {
     Vec3 mainPos;          // замороженная главная камера (дебаг летает сам)
     double mainYaw, mainPitch;
     int debugCam; // 1 — летим дебагом (F1), мир смотрим со стороны
+    int ctrlHeld; // 1 — в дебаге ввод едет фрикамом, иначе главной (вид всегда от фри)
     time_t cfgMtime; // дозор settings.cfg (пишет страница Electron)
     WGPUBindGroupLayout bgl;
     SkyLuts sky;
@@ -211,7 +212,9 @@ static void vox_stream_sync(App *app, int pcx, int pcz) {
 
 static void on_mouse(GLFWwindow *w, double x, double y) {
     (void)w;
+    // Мышь — только своей камере: в дебаге без Ctrl главная едет вслепую, вид не трогаем.
     if (!g_locked || !g_app) { g_lx = x; g_ly = y; return; }
+    if (g_app->debugCam && !g_app->ctrlHeld) { g_lx = x; g_ly = y; return; }
     g_app->yaw += (x - g_lx) * g_sens;
     g_app->pitch -= (y - g_ly) * g_sens;
     if (g_app->pitch > 1.45) g_app->pitch = 1.45;
@@ -533,6 +536,9 @@ static int app_frame(App *app) {
     int nDown = glfwGetKey(app->win, GLFW_KEY_N) == GLFW_PRESS;
     if (nDown && !nPrev) { app->mode = (app->mode + 1) % 4; printf("view mode=%d\n", app->mode); }
     nPrev = nDown;
+    int ctrlHeld = glfwGetKey(app->win, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                   glfwGetKey(app->win, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+    app->ctrlHeld = ctrlHeld;
     // F1: дебаг-камера. Вкл — главная замирает, летим сами; выкл — возврат.
     int f1D = glfwGetKey(app->win, GLFW_KEY_F1) == GLFW_PRESS;
     if (f1D && !f1Prev) {
@@ -616,8 +622,12 @@ static int app_frame(App *app) {
         else if (app->fpsEma > 57.0f && app->maxSteps < 100.0f) app->maxSteps += 1.0f;
     }
 
-    float cp = cosf((float)app->pitch);
-    Vec3 fwd = v3(cp * cosf((float)app->yaw), sinf((float)app->pitch), cp * sinf((float)app->yaw));
+    // Цель ввода: в дебаге без Ctrl едет главная (вид от свободной), иначе активная.
+    Vec3 *CP = &app->camPos;
+    double *YW = &app->yaw, *PT = &app->pitch;
+    if (app->debugCam && !app->ctrlHeld) { CP = &app->mainPos; YW = &app->mainYaw; PT = &app->mainPitch; }
+    float cp = cosf((float)*PT);
+    Vec3 fwd = v3(cp * cosf((float)*YW), sinf((float)*PT), cp * sinf((float)*YW));
     Vec3 right = v3_norm(v3_cross(fwd, v3(0.0f, 1.0f, 0.0f)));
     // Горизонталь отдельно от вертикали: W/S не втыкают в холм носом.
     Vec3 fh = v3_norm(v3(fwd.x, 0.0f, fwd.z));
@@ -629,35 +639,40 @@ static int app_frame(App *app) {
     if (glfwGetKey(win, GLFW_KEY_D) == GLFW_PRESS) wish = v3_add(wish, v3_mul(rh, sp));
     if (glfwGetKey(win, GLFW_KEY_A) == GLFW_PRESS) wish = v3_sub(wish, v3_mul(rh, sp));
     // Скольжение вдоль холма: целиком -> только X -> только Z -> стоим.
-    float cy0 = app->camPos.y;
-    float nx = app->camPos.x + wish.x, nz = app->camPos.z + wish.z;
+    float cy0 = CP->y;
+    float nx = CP->x + wish.x, nz = CP->z + wish.z;
     if (check_aabb(nx, nz, cy0)) {
-        app->camPos.x = nx;
-        app->camPos.z = nz;
+        CP->x = nx;
+        CP->z = nz;
     }
-    else if (check_aabb(app->camPos.x + wish.x, app->camPos.z, cy0)) { app->camPos.x += wish.x; }
-    else if (check_aabb(app->camPos.x, app->camPos.z + wish.z, cy0)) { app->camPos.z += wish.z; }
-    if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) app->camPos.y += sp;
+    else if (check_aabb(CP->x + wish.x, CP->z, cy0)) { CP->x += wish.x; }
+    else if (check_aabb(CP->x, CP->z + wish.z, cy0)) { CP->z += wish.z; }
+    if (glfwGetKey(win, GLFW_KEY_SPACE) == GLFW_PRESS) CP->y += sp;
     if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-        glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) app->camPos.y -= sp;
-    float cx = app->camPos.x, cy = app->camPos.y, cz = app->camPos.z;
+        glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) CP->y -= sp;
+    float cx = CP->x, cy = CP->y, cz = CP->z;
     // Пол: не ниже поверхности + 0.6 (только посадка, без телепортов вверх).
     float fl = vox_floor_y(cx, cz);
     if (cy < fl) cy = fl;
-    app->camPos = v3(cx, cy, cz);
+    CP->x = cx; CP->y = cy; CP->z = cz;
+    // Рендер всегда от свободной/активной камеры вида.
+    float rcx = app->camPos.x, rcy = app->camPos.y, rcz = app->camPos.z;
 
     SdfUBO u;
     memset(&u, 0, sizeof u);
     Vec3 sunDir = sdf_sun((float)app->dayT);
     Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
+    // Рендер и стриминг — от камеры вида (в дебаге это свободная).
+    float rcp = cosf((float)app->pitch);
+    Vec3 rfwd = v3(rcp * cosf((float)app->yaw), sinf((float)app->pitch), rcp * sinf((float)app->yaw));
     // Стриминг за игроком: чанк из позиции камеры (floor делит отрицательные верно).
     {
-        int pcx = (int)floorf(cx / 16.0f), pcz = (int)floorf(cz / 16.0f);
+        int pcx = (int)floorf(rcx / 16.0f), pcz = (int)floorf(rcz / 16.0f);
         vox_stream_sync(app, pcx, pcz);
     }
-    app->rebakes += sky_luts_update(&app->sky, sunDir, moonDir, cy);
-    u.camPos = app->camPos; u.time = (float)app->cloudT;
-    u.camTarget = v3_add(app->camPos, fwd); u.resX = (float)ww;
+    app->rebakes += sky_luts_update(&app->sky, sunDir, moonDir, rcy);
+    u.camPos = v3(rcx, rcy, rcz); u.time = (float)app->cloudT;
+    u.camTarget = v3_add(v3(rcx, rcy, rcz), rfwd); u.resX = (float)ww;
     u.sunDir = sunDir; u.maxSteps = app->maxSteps;
     u.resY = (float)hh; u.mode = (float)app->mode;
     u.pad[0] = app->streamOX; u.pad[1] = app->streamOZ;
@@ -756,9 +771,9 @@ static int app_frame(App *app) {
     }
     if (t - app->lastLog >= 4.0) {
         app->lastLog = t;
-        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f dtmax=%.0fms rebake=%d\n",
-            app->frame, cx, cy, cz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps, app->timeScale,
-            app->dtMax * 1000.0f, app->rebakes);
+        printf("f=%d pos=(%.2f,%.2f,%.2f) yaw=%.2f pitch=%.2f spd=%.1f fps=%.0f steps=%.0f x%.0f dtmax=%.0fms rebake=%d%s\n",
+            app->frame, rcx, rcy, rcz, app->yaw, app->pitch, app->speed, app->fpsEma, app->maxSteps, app->timeScale,
+            app->dtMax * 1000.0f, app->rebakes, app->debugCam ? (app->ctrlHeld ? " DBG+ctrl" : " DBG") : "");
         app->dtMax = 0.0f;
         app->rebakes = 0;
     }
