@@ -84,7 +84,10 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let dayL = clamp(dayF * 2.0 + 0.25, 0.04, 1.0);
   let lightCol = mix(vec3f(1.0, 0.50, 0.25), vec3f(1.25, 1.21, 1.12), clamp(dayF * 2.0, 0.0, 1.0));
   let skyAmb = sky(vec3f(0.0, 1.0, 0.0), sunDir);
+  // Верх травы — grayscale-оверлей: красим биомным тинтом (как MC),
+  // иначе серый x синий ambient = голубой. Низ/бока уже цветные в тайле.
   var base = textureSampleLevel(tileTex, tileSmp, tileUV(pos, n), tileLayer(hit.id, n), 0.0).rgb;
+  if (hit.id == 1u && n.y > 0.5) { base *= vec3f(0.55, 0.85, 0.35); }
   let amb = mix(vec3f(0.27, 0.24, 0.21), skyAmb, n.y * 0.5 + 0.5) * (0.35 + 0.65 * dayL);
   let ndl = max(dot(n, sunDir), 0.0);
   var col = base * (amb + lightCol * ndl * sh * dayL);
