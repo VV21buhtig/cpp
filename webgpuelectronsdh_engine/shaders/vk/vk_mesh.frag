@@ -45,7 +45,11 @@ layout(location = 0) out vec4 outColor;
 float sdfShadow(vec3 wpos, vec3 sundir) {
     if (fr.sdfMin.w < -0.5) return 1.0; // А/Б: VOX_NO_SDFSH=1
     float res = 1.0;
-    float t = 0.05;
+    // Старт 0.35, не 0: первые сэмплы сидят в интерполяционном скате самой
+    // поверхности (R8 + linear дают ~0 на границе) — было зеброй акне.
+    // В воксельной сетке ближе 0.35 только сама поверхность: угловые тени
+    // стыков уже даёт вершинное AO, ничего не теряем.
+    float t = 0.35;
     for (int i = 0; i < 24; i++) {
         vec3 p = wpos + sundir * t;
         int ok = 0;
