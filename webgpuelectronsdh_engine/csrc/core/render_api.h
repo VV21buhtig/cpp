@@ -44,5 +44,6 @@ struct RenderCore {
 };
 
 RenderCore *rc_webgpu_create(void);
+RenderCore *rc_gl_create(void); // натив only (GL 4.5, не WebGL)
 void rc_destroy(RenderCore *rc);
 #endif

@@ -134,7 +134,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // Верх травы — grayscale-оверлей: красим биомным тинтом (как MC),
   // иначе серый x синий ambient = голубой. Низ/бока уже цветные в тайле.
   var base = textureSampleLevel(tileTex, tileSmp, tileUV(pos, n), tileLayer(hit.id, n), 0.0).rgb;
-  if (hit.id == 1u && n.y > 0.5) { base *= vec3f(0.55, 0.85, 0.35); }
+  if (hit.id == 1u && n.y > 0.5) { base *= vec3f(0.569, 0.741, 0.349); } // их тинт #91BD59
   // Анти-муар: дальше 20-80 тексель тает в плоский цвет (мипов нет).
   {
     var flat = vec3f(0.5, 0.5, 0.52);

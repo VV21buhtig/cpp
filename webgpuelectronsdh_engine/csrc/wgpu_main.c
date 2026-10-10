@@ -334,8 +334,19 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) app.maxFrames = atoi(argv[++i]);
 
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    app.win = glfwCreateWindow(1280, 720, "voxels DDA — freecam WASD", 0, 0);
+    // Ядро выбирается до окна: GL нужен контекст 4.5, webgpu — NO_API.
+    const char *coreName = "webgpu";
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--core") && i + 1 < argc) coreName = argv[++i];
+    int wantGL = !strcmp(coreName, "gl");
+    if (wantGL) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    } else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
+    app.win = glfwCreateWindow(1280, 720, "voxels — freecam WASD", 0, 0);
     if (!app.win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
     g_app = &app;
     glfwSetCursorPosCallback(app.win, on_mouse);
@@ -343,8 +354,9 @@ int main(int argc, char **argv) {
     glfwSetScrollCallback(app.win, on_scroll);
     set_locked(app.win, 1);
 
-    app.rc = rc_webgpu_create();
+    app.rc = wantGL ? rc_gl_create() : rc_webgpu_create();
     if (!app.rc || !app.rc->init(app.rc, app.win)) { fprintf(stderr, "core init fail\n"); return 1; }
+    printf("core: %s\n", wantGL ? "gl" : "webgpu");
     vox_world_init(&app.world, 1337);
     sdf_settings_load(&app.settings, "settings.cfg");
     printf("settings: gamma=%.2f exposure=%.2f fog=%.2f fov=%.2f shadow=%.0f\n",
