@@ -21,7 +21,7 @@ fn tileLayer(id: u32, n: vec3f) -> i32 {
     return 1;
   }
   if (id == 2u) { return 2; } // земля
-  if (id == 4u) { return select(4, 5, abs(n.y) > 0.5); } // бревно: бок/торец
+  if (id == 4u) { return select(7, 8, abs(n.y) > 0.5); } // бревно: бок/торец (их индексы)
   if (id == 5u) { return 6; } // листва
   return 3; // камень, бедрок, остальное
 }

@@ -25,12 +25,13 @@ static inline int vox_opaque(uint8_t id) {
 static inline int vox_cutout(uint8_t id) {
     return id == B_LEAVES;
 }
-// Слой атласа 16x16x7 под грань: top/bottom/side (сводка с vox_tex).
+// Слой атласа 16x16x9 под грань: индексы их BlockRegistry
+// (tile 5 = лава светится в шейдере, 6 = листва с discard).
 static inline int vox_tile(uint8_t id, int axis, int sign) {
     if (id == B_GRASS) return (axis == 1 && sign > 0) ? 0 : 1;
     if (id == B_DIRT) return 2;
-    if (id == B_LOG) return (axis == 1) ? 5 : 4;
+    if (id == B_LOG) return (axis == 1) ? 8 : 7;
     if (id == B_LEAVES) return 6;
-    return 3; // stone, bedrock, остальное
+    return 3; // stone, bedrock, sand, остальное
 }
 #endif

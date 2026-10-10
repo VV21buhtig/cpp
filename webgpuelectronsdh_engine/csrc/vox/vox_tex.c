@@ -7,7 +7,8 @@
 int vox_tex_load(const char *dir, uint8_t *out) {
     static const char *names[VOX_LAYERS] = {
         "grass_top", "grass_side", "dirt", "stone",
-        "log_side", "log_top", "leaves",
+        "water", "lava", "leaves",
+        "log_side", "log_top",
     };
     for (int l = 0; l < VOX_LAYERS; l++) {
         char path[256];

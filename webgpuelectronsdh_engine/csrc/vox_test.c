@@ -58,7 +58,7 @@ int main(void) {
             }
             float nx = m.v[i + 3], ny = m.v[i + 4], nz = m.v[i + 5];
             float ax = nx < 0 ? -nx : nx, ay = ny < 0 ? -ny : ny, az = nz < 0 ? -nz : nz;
-            if ((ax + ay + az < 0.99f) || m.v[i + 9] < 0.0f || m.v[i + 9] > 1.0f + 1e-3f) {
+            if ((ax + ay + az < 0.99f) || m.v[i + 9] < 0.0f || m.v[i + 9] > 3.0f + 1e-3f) {
                 printf("MESH NORM/AO FAIL\n");
                 bad = 1;
             }

@@ -110,7 +110,6 @@ static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox1
     memcpy(tmp.id, vox16, VOX_N);
     VoxMeshOut m = {0, 0, 0};
     vox_mesh_build(&tmp, nb, &m);
-    if (!m.n) return 1; // пусто — нечего грузить, но dirty гасим
     // Слот: точное совпадение, свободный, иначе замена по хэшу.
     int slot = -1;
     for (int i = 0; i < GL_MESH_SLOTS; i++)
@@ -126,7 +125,10 @@ static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox1
     if (g->used) {
         glDeleteVertexArrays(1, &g->vao);
         glDeleteBuffers(1, &g->vbo);
+        g->used = 0;
+        g->count = 0;
     }
+    if (!m.n) return 1; // пусто — слот зачищен, dirty гасим
     glGenVertexArrays(1, &g->vao);
     glGenBuffers(1, &g->vbo);
     glBindVertexArray(g->vao);
