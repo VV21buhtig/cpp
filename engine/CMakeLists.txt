@@ -99,3 +99,22 @@ target_include_directories(gl_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(gl_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(gl_demo PRIVATE -Wall -Wextra)
+# SPIR-V для vk-ядра из наших shaders/vk (glslc).
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/spv_vk)
+foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv
+    COMMAND glslc -O -o ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vk/${SH}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vk/${SH}
+    COMMENT "glslc ${SH}")
+  list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
+endforeach()
+# Живое ядро орфана 6: vk-растр на RHI (меши greedy, статика 9x9 с соседями).
+add_executable(vk_demo vk_demo.c vk_core.c corelib.c rhi_vk.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c ${VK_SPV})
+target_compile_definitions(vk_demo PRIVATE
+  VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
+target_include_directories(vk_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
+target_link_libraries(vk_demo PRIVATE glfw ${VULKAN_LIB} m)
+target_compile_options(vk_demo PRIVATE -Wall -Wextra)
