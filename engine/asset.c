@@ -37,10 +37,29 @@ AssetId asset_import(const char *root, const char *path) {
     uint64_t h = fnv(buf, n);
     char dst[512], idx[512];
     snprintf(dst, sizeof dst, "%s/%016llx.%s", root, (unsigned long long)h, ext_of(path));
-    // Дедуп: уже лежит — просто вернуть ID.
+    // Дедуп: уже лежит — СРАВНИВАЕМ БАЙТЫ, а не верим хешу слепо.
+    // Совпало -> тот же ID. Разошлось -> коллизия, отказываем (0).
     {
         FILE *f = fopen(dst, "rb");
-        if (f) { fclose(f); free(buf); return h; }
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long old = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            int same = (old == (long)n);
+            if (same) {
+                static uint8_t probe[1 << 20];
+                size_t off = 0;
+                while (off < n) {
+                    size_t step = n - off > sizeof probe ? sizeof probe : n - off;
+                    if (fread(probe, 1, step, f) != step) { same = 0; break; }
+                    if (memcmp(probe, buf + off, step)) { same = 0; break; }
+                    off += step;
+                }
+            }
+            fclose(f);
+            free(buf);
+            return same ? h : 0;
+        }
     }
     FILE *f = fopen(dst, "wb");
     if (!f) { free(buf); return 0; }
