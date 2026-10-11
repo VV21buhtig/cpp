@@ -599,13 +599,18 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
 
 static void core_shutdown(RenderCore *rc) {
     VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
-    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        wgpuBindGroupRelease(c->bind[i]);
-        wgpuBufferRelease(c->ubo[i]);
+    // Ядро могли не построить (ни одного кадра: build ленивый) — тогда
+    // хендлы NULL, а wgpu-native на release(NULL) паникует. Гасим только RHI.
+    if (c->ready) {
+        for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+            wgpuBindGroupRelease(c->bind[i]);
+            wgpuBufferRelease(c->ubo[i]);
+        }
+        wgpuBindGroupLayoutRelease(c->bgl);
+        wgpuRenderPipelineRelease(c->pipeline);
+        wgpuShaderModuleRelease(c->mod);
+        c->ready = 0;
     }
-    wgpuBindGroupLayoutRelease(c->bgl);
-    wgpuRenderPipelineRelease(c->pipeline);
-    wgpuShaderModuleRelease(c->mod);
     rhi_webgpu_shutdown(&c->rhi);
 }
 

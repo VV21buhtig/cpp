@@ -48,13 +48,23 @@ Viewport::~Viewport() {
         free(cpuBuf);
         cpuBuf = nullptr;
     }
+    if (world) {
+        free(world);
+        world = nullptr;
+    }
     // Цель и окно переживут? Окно скрытое — отдаём движку? Нет: окно наше.
     // Упрощение скелета: окно и цель живут до конца процесса (утечка
     // пары дескрипторов на выход — честно зафиксировано, не скрыто).
 }
 
 bool Viewport::init(int be) {
+    return initDomain(RC_CAP_VOXEL, be);
+}
+
+bool Viewport::initDomain(unsigned dom, int be) {
     backend = be;
+    domain = dom;
+    sdfFed = vecFed = meshFed = 0;
     if (!glfwInit()) return false;
     if (backend == 2) { // GL: контекст 4.5
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -67,14 +77,17 @@ bool Viewport::init(int be) {
     GLFWwindow *win = glfwCreateWindow(1280, 720, "ed-viewport", 0, 0);
     if (!win) return false;
     glfwWin = win;
-    // Ядро по таблице «домен x бэкенд» (воксельный домен, бэкенд из хаба).
-    rc = rc_create_by(1u, (unsigned)backend);
+    // Ядро по таблице «домен x бэкенд» (домен из шаблона, бэкенд из хаба).
+    // Нет ячейки (напр. SDF под Vulkan) — честный false, редактор скажет.
+    rc = rc_create_by(domain, (unsigned)backend);
     if (!rc || !rc->init(rc, win)) return false;
-    // Vec-ядро для гизмо-оверлея делит окно/контекст (только GL-режим).
-    if (backend == 2) {
-        vrc = rc_create_by(4u, 2u);
+    // Vec-ядро для гизмо-оверлея делит окно/контекст (воксель под GL).
+    if (domain == RC_CAP_VOXEL && backend == 2) {
+        vrc = rc_create_by(RC_CAP_VECTOR, 2u);
         if (vrc && !vrc->init(vrc, win)) { vrc = nullptr; }
     }
+    // Воксельный мир — только воксельному домену.
+    if (domain == RC_CAP_VOXEL) {
     world = calloc(GW * GW, sizeof(VoxChunk));
     if (!world) return false;
     for (int cz = 0; cz < GW; cz++)
@@ -84,6 +97,7 @@ bool Viewport::init(int be) {
             c->cz = cz - GW / 2;
             vox_gen(c, 1337);
         }
+    }
     target = (RcTarget *)calloc(1, sizeof(RcTarget));
     // Цель и показ — только под GL (frame_to есть только там).
     if (backend == 2) {
@@ -126,13 +140,19 @@ bool Viewport::switchBackend(int be) {
         comp_target_gl_free(target);
         // presentProg/Vao переживают (дешёвые, общие для GL-сессий).
     }
-    // Мир не трогаем (воксели общие), fed-флаги сбрасываем — перезальём.
+    // Мир пересоздаём (initDomain заливает заново под домен).
+    if (world) {
+        free(world);
+        world = nullptr;
+    }
+    // fed-флаги сбрасываем — перезальём.
     for (int i = 0; i < GW * GW; i++) fed[i] = 0;
     fedLeft = GW * GW;
     fedCur = 0;
+    sdfFed = vecFed = meshFed = 0;
     havePV = 0;
     dragAxis = -1;
-    if (!init(be)) return false;
+    if (!initDomain(domain, be)) return false;
     return true;
 }
 
@@ -170,8 +190,9 @@ static float seg_dist(float px, float py, float ax, float ay, float bx, float by
 void Viewport::renderOnce() {
     if (!rc) return;
     int isGL = (backend == 2);
-    // Догрузка мира по 12 чанков за тик.
+    // Догрузка мира по 12 чанков за тик — только вокселю.
     // DDA (webgpu) ест сырьё, растр (gl/vk) — через фидер движка.
+    if (domain == RC_CAP_VOXEL) {
     for (int k = 0; k < 12 && fedLeft > 0; k++) {
         while (fedCur < GW * GW && fed[fedCur]) fedCur++;
         if (fedCur >= GW * GW) { fedLeft = 0; break; }
@@ -190,25 +211,115 @@ void Viewport::renderOnce() {
         if (ok) { fed[fedCur] = 1; fedLeft--; }
         fedCur++;
     }
+    } // domain == VOXEL
+    // Не-воксель: разовая заливка демо-сцены шаблона (та же что в scene3d).
+    if (domain == RC_CAP_SDF && !sdfFed && rc->upload_sdf) {
+        RcSdfObj prims[4];
+        memset(prims, 0, sizeof prims);
+        prims[0].kind = 0; // сфера
+        prims[0].p0.x = 8; prims[0].p0.y = 56; prims[0].p0.z = 8;
+        prims[0].r = 3.0f; prims[0].mat = 0;
+        prims[1].kind = 1; // короб
+        prims[1].p0.x = 20; prims[1].p0.y = 54; prims[1].p0.z = -6;
+        prims[1].p1.x = 2.5f; prims[1].p1.y = 2.5f; prims[1].p1.z = 2.5f;
+        prims[1].mat = 1;
+        prims[2].kind = 2; // тор
+        prims[2].p0.x = -4; prims[2].p0.y = 55; prims[2].p0.z = 14;
+        prims[2].p1.x = 1.0f;
+        prims[2].r = 3.0f; prims[2].mat = 2;
+        prims[3].kind = 4; // капсула
+        prims[3].p0.x = -12; prims[3].p0.y = 58; prims[3].p0.z = 2;
+        prims[3].p1.x = -6; prims[3].p1.y = 62; prims[3].p1.z = 2;
+        prims[3].r = 0.8f; prims[3].mat = 3;
+        if (rc->upload_sdf(rc, prims, 4)) sdfFed = 1;
+    }
+    if (domain == RC_CAP_VECTOR && !vecFed && rc->upload_vector) {
+        RcVecShape sh[4];
+        memset(sh, 0, sizeof sh);
+        float white[4] = {0.9f, 0.9f, 0.9f, 1};
+        float red[4] = {1, 0.25f, 0.25f, 1};
+        float green[4] = {0.25f, 1, 0.25f, 1};
+        float blue[4] = {0.3f, 0.5f, 1, 1};
+        sh[0].kind = 0; // рамка: x,y,w,h
+        sh[0].a = 440; sh[0].b = 220; sh[0].c = 400; sh[0].d = 280;
+        memcpy(sh[0].rgba, white, sizeof white);
+        sh[1].kind = 1; // круг: cx,cy,r
+        sh[1].a = 640; sh[1].b = 360; sh[1].c = 120;
+        memcpy(sh[1].rgba, red, sizeof red);
+        sh[2].kind = 2; // диагональ: x0,y0,x1,y1
+        sh[2].a = 100; sh[2].b = 600; sh[2].c = 1180; sh[2].d = 120;
+        memcpy(sh[2].rgba, green, sizeof green);
+        sh[3].kind = 0; // плашка снизу
+        sh[3].a = 100; sh[3].b = 620; sh[3].c = 300; sh[3].d = 40;
+        memcpy(sh[3].rgba, blue, sizeof blue);
+        if (rc->upload_vector(rc, sh, 4)) vecFed = 1;
+    }
+    if (domain == RC_CAP_MESH && !meshFed && rc->upload_mesh) {
+        // Куб-суп 36 вершин x 9 float (pos3 norm3 col3), как в scene3d.
+        static float cube[36 * 9];
+        static int cubeMade = 0;
+        if (!cubeMade) {
+            float C[6][3] = {{0.8f, 0.15f, 0.1f}, {1, 0.8f, 0.1f}, {0.15f, 0.7f, 0.15f},
+                             {0.3f, 0.3f, 0.32f}, {0.15f, 0.3f, 0.8f}, {0.15f, 0.7f, 0.7f}};
+            float NN[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            float P[6][4][3] = {{{1, -1, 1}, {1, -1, -1}, {1, 1, -1}, {1, 1, 1}},
+                                {{-1, -1, -1}, {-1, -1, 1}, {-1, 1, 1}, {-1, 1, -1}},
+                                {{-1, 1, 1}, {1, 1, 1}, {1, 1, -1}, {-1, 1, -1}},
+                                {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}},
+                                {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}},
+                                {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, -1}}};
+            int idx[6] = {0, 1, 2, 0, 2, 3}, n = 0;
+            for (int f = 0; f < 6; f++)
+                for (int k = 0; k < 6; k++) {
+                    int q = idx[k];
+                    cube[n * 9 + 0] = -24.0f + P[f][q][0] * 3.0f;
+                    cube[n * 9 + 1] = 56.0f + P[f][q][1] * 3.0f;
+                    cube[n * 9 + 2] = -16.0f + P[f][q][2] * 3.0f;
+                    cube[n * 9 + 3] = NN[f][0];
+                    cube[n * 9 + 4] = NN[f][1];
+                    cube[n * 9 + 5] = NN[f][2];
+                    cube[n * 9 + 6] = C[f][0];
+                    cube[n * 9 + 7] = C[f][1];
+                    cube[n * 9 + 8] = C[f][2];
+                    n++;
+                }
+            cubeMade = 1;
+        }
+        RcMesh m;
+        m.verts = cube;
+        m.nverts = 36;
+        if (rc->upload_mesh(rc, &m)) meshFed = 1;
+    }
     RcView v;
     memset(&v, 0, sizeof v);
     double t0 = glfwGetTime();
     // Орбита вокруг центра мира (8,26,8), взгляд всегда в него.
     // Орто-режимы тулбара: фиксированные камеры вместо орбиты.
+    // Не-воксель смотрит на свою витрину (SDF/меш висят на +50y).
+    float lookX = 8, lookY = 26.0f, lookZ = 8, orbitR = 90.0f, orbitY = 66.0f;
+    if (domain == RC_CAP_SDF) {
+        lookY = 52.0f;
+        orbitR = 60.0f;
+        orbitY = 62.0f;
+    } else if (domain == RC_CAP_MESH) {
+        lookX = -24.0f; lookY = 54.0f; lookZ = -16.0f;
+        orbitR = 30.0f;
+        orbitY = 60.0f;
+    }
     double a = frame * 0.004;
     if (viewMode == 1) { // верх
-        v.camPos.x = 8; v.camPos.y = 140.0f; v.camPos.z = 8.01f;
+        v.camPos.x = lookX; v.camPos.y = 140.0f; v.camPos.z = lookZ + 0.01f;
     } else if (viewMode == 2) { // бок (+x)
-        v.camPos.x = 120.0f; v.camPos.y = 30.0f; v.camPos.z = 8;
+        v.camPos.x = lookX + 120.0f; v.camPos.y = 30.0f; v.camPos.z = lookZ;
     } else if (viewMode == 3) { // фронт (+z)
-        v.camPos.x = 8; v.camPos.y = 30.0f; v.camPos.z = 120.0f;
+        v.camPos.x = lookX; v.camPos.y = 30.0f; v.camPos.z = lookZ + 120.0f;
     } else {
-        v.camPos.x = 8 + 90.0f * (float)cos(a);
-        v.camPos.y = 66.0f;
-        v.camPos.z = 8 + 90.0f * (float)sin(a);
+        v.camPos.x = lookX + orbitR * (float)cos(a);
+        v.camPos.y = orbitY;
+        v.camPos.z = lookZ + orbitR * (float)sin(a);
     }
     {
-        float dx = 8 - v.camPos.x, dy = 26.0f - v.camPos.y, dz = 8 - v.camPos.z;
+        float dx = lookX - v.camPos.x, dy = lookY - v.camPos.y, dz = lookZ - v.camPos.z;
         float dl = sqrtf(dx * dx + dy * dy + dz * dz);
         v.yaw = (float)atan2(dz, dx);
         v.pitch = (float)asin(dy / dl);
@@ -335,6 +446,11 @@ void Viewport::tick() {
     update();
 }
 
+void Viewport::frameNow() {
+    if (rc) renderOnce();
+    update();
+}
+
 bool Viewport::hasPicture() const {
     if (img.isNull()) return false;
     // Центр 100x100 ярче порога (небо/террейн, не чернота).
@@ -386,6 +502,12 @@ void Viewport::mousePressEvent(QMouseEvent *e) {
         dragPX = et.pos.x;
         dragPY = et.pos.y;
         dragPZ = et.pos.z;
+        dragRX = et.rot.x;
+        dragRY = et.rot.y;
+        dragRZ = et.rot.z;
+        dragEX = et.scale.x;
+        dragEY = et.scale.y;
+        dragEZ = et.scale.z;
     }
 }
 
@@ -413,11 +535,28 @@ void Viewport::mouseMoveEvent(QMouseEvent *e) {
                        (pcamY - dragPY) * (pcamY - dragPY) +
                        (pcamZ - dragPZ) * (pcamZ - dragPZ));
     float wpp = dist / (pfov > 0.2f ? pfov : 1.6f) / 720.0f;
-    float along = ((ix - dragSX) * dx + (iy - dragSY) * dy) * wpp;
+    float pixAlong = (ix - dragSX) * dx + (iy - dragSY) * dy;
+    float along = pixAlong * wpp;
     ScTransform et = sc_get(ui_world(), sel);
-    if (dragAxis == 0) et.pos.x = dragPX + along;
-    else if (dragAxis == 1) et.pos.y = dragPY + along;
-    else et.pos.z = dragPZ + along;
+    if (gizmoMode == 1) {
+        // Крутить: пиксели вдоль оси -> радианы (0.01/px).
+        float a = pixAlong * 0.01f;
+        if (dragAxis == 0) et.rot.x = dragRX + a;
+        else if (dragAxis == 1) et.rot.y = dragRY + a;
+        else et.rot.z = dragRZ + a;
+    } else if (gizmoMode == 2) {
+        // Тянуть: пиксели вдоль оси -> множитель (0.004/px), пол 0.05.
+        float k = 1.0f + pixAlong * 0.004f;
+        if (k < 0.05f) k = 0.05f;
+        if (dragAxis == 0) et.scale.x = dragEX * k;
+        else if (dragAxis == 1) et.scale.y = dragEY * k;
+        else et.scale.z = dragEZ * k;
+    } else {
+        // Двигать: мировые единицы вдоль оси.
+        if (dragAxis == 0) et.pos.x = dragPX + along;
+        else if (dragAxis == 1) et.pos.y = dragPY + along;
+        else et.pos.z = dragPZ + along;
+    }
     sc_set(ui_world(), sel, &et);
 }
 

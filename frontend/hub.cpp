@@ -17,6 +17,8 @@
 #include <QImage>
 #include <QPixmap>
 #include <QDateTime>
+#include <QMenu>
+#include <QShortcut>
 #include <cstring>
 
 // Индекс комбо -> значение бэкенда (0 WebGPU, 1 Vulkan, 2 OpenGL в списке).
@@ -89,19 +91,27 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     auto mkItem = [=](const char *t, bool active) -> QPushButton * {
         auto *b = new QPushButton(t, side);
         b->setFlat(true);
-        b->setStyleSheet(active
-                             ? "text-align: left; padding: 8px; background: #094771; color: white;"
-                             : "text-align: left; padding: 8px; color: #cccccc;");
+        // Явный селектор на базе: без него Qt роняет весь лист.
+        QString base = active
+                           ? "QPushButton { text-align: left; padding: 8px; background: #094771; color: white; }"
+                           : "QPushButton { text-align: left; padding: 8px; color: #cccccc; }";
+        b->setStyleSheet(base + "QPushButton:disabled { color: #5a5a5a; background: transparent; }");
         sl->addWidget(b);
         return b;
     };
     mkHead("BROWSE");
     mkItem("Projects", true);
-    mkItem("Templates", false);
+    // Позже — серым и честно, а не муляжом.
+    auto later = [=](const char *t) {
+        auto *b = mkItem(t, false);
+        b->setEnabled(false);
+        b->setToolTip("позже");
+    };
+    later("Templates");
     mkHead("LIBRARY");
-    mkItem("Assets", false);
-    mkItem("Samples", false);
-    mkItem("Tutorials", false);
+    later("Assets");
+    later("Samples");
+    later("Tutorials");
     sl->addStretch(1);
     lay->addWidget(side);
     // Право: верхняя панель + сетка.
@@ -116,12 +126,17 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     apiBox->addItems({"WebGPU", "Vulkan", "OpenGL"});
     top->addWidget(apiBox);
     top->addStretch(1);
-    // Иконки справа: поиск, шестерёнка, профиль (текстом, без эмодзи).
-    auto *btnFind = new QPushButton("Search", main);
+    // Иконки справа: поиск живой (фильтр сетки), остальное позже.
+    searchEdit = new QLineEdit(main);
+    searchEdit->setPlaceholderText("Search...");
+    searchEdit->setMaximumWidth(160);
+    top->addWidget(searchEdit);
     auto *btnGear = new QPushButton("Settings", main);
     auto *btnProf = new QPushButton("Profile", main);
-    for (auto *b : {btnFind, btnGear, btnProf}) {
+    for (auto *b : {btnGear, btnProf}) {
         b->setFlat(true);
+        b->setEnabled(false);
+        b->setToolTip("позже");
         top->addWidget(b);
     }
     ml->addLayout(top);
@@ -130,7 +145,7 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     nameEdit = new QLineEdit(main);
     nameEdit->setPlaceholderText("Project name...");
     tplBox = new QComboBox(main);
-    tplBox->addItems({"Empty", "Voxel Terrain", "SDF Primitives", "Vector Shapes"});
+    tplBox->addItems({"Empty", "Voxel Terrain", "SDF Primitives", "Vector Shapes", "Mesh Soup"});
     auto *btnCreate = new QPushButton("Create", main);
     form->addWidget(new QLabel("Name:", main));
     form->addWidget(nameEdit);
@@ -151,7 +166,12 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     loadRegistry();
     refresh();
 
-    QObject::connect(btnNew, &QPushButton::clicked, [=]() { nameEdit->setFocus(); });
+    QObject::connect(btnNew, &QPushButton::clicked, [=]() {
+        // Новая карточка: чистая форма + фокус (создаёт Create).
+        nameEdit->clear();
+        tplBox->setCurrentIndex(0);
+        nameEdit->setFocus();
+    });
     QObject::connect(btnCreate, &QPushButton::clicked, [=]() {
         QString nm = nameEdit->text().trimmed();
         if (nm.isEmpty()) return;
@@ -174,11 +194,37 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     auto doOpen = [=]() {
         QListWidgetItem *it = grid->currentItem();
         if (!it) return;
-        int r = grid->row(it);
+        int r = it->data(Qt::UserRole).toInt();
         if (r < 0 || r >= paths.size()) return;
         if (onOpen) onOpen(paths[r], backends[r]);
     };
     QObject::connect(grid, &QListWidget::itemDoubleClicked, [=]() { doOpen(); });
+    // Удаление из хаба: Del или правая кнопка. Только из реестра,
+    // файлы проекта НЕ трогаем (удалять данные молча — нельзя).
+    auto doDelete = [=]() {
+        QListWidgetItem *it = grid->currentItem();
+        if (!it) return;
+        int r = it->data(Qt::UserRole).toInt();
+        if (r < 0 || r >= paths.size()) return;
+        names.removeAt(r);
+        paths.removeAt(r);
+        backends.removeAt(r);
+        saveRegistry();
+        refresh();
+    };
+    grid->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(grid, &QListWidget::customContextMenuRequested, [=](const QPoint &at) {
+        QListWidgetItem *it = grid->itemAt(at);
+        if (!it) return;
+        grid->setCurrentItem(it);
+        QMenu m(grid);
+        m.addAction("Убрать из хаба", doDelete);
+        m.exec(grid->mapToGlobal(at));
+    });
+    auto *delKey = new QShortcut(QKeySequence::Delete, grid);
+    QObject::connect(delKey, &QShortcut::activated, [=]() { doDelete(); });
+    // Живой поиск: фильтр карточек по имени.
+    QObject::connect(searchEdit, &QLineEdit::textChanged, [=]() { refresh(); });
 }
 
 void HubWindow::loadRegistry() {
@@ -244,10 +290,14 @@ void HubWindow::registerProject(const QString &path) {
     refresh();
 }
 
-void HubWindow::refresh() {    grid->clear();
+void HubWindow::refresh() {
+    grid->clear();
+    QString flt = searchEdit ? searchEdit->text().trimmed().toLower() : "";
     for (int i = 0; i < names.size(); i++) {
+        if (!flt.isEmpty() && !names[i].toLower().contains(flt)) continue;
         // Карточка: миниатюра 70% + текст 30% (имя, версия, дата).
         auto *it = new QListWidgetItem();
+        it->setData(Qt::UserRole, i); // индекс в реестре (фильтр сдвигает ряды)
         it->setIcon(projThumb(paths[i], names[i]));
         QString ver = projVersion(paths[i]);
         it->setText(QString("%1  %2\nLast Modified: %3").arg(names[i]).arg(ver).arg(agoStr(paths[i])));

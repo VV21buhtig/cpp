@@ -14,6 +14,7 @@ public:
     explicit Viewport(QWidget *parent = nullptr);
     ~Viewport() override;
     bool init(int backend); // движок + мир + цель; false если бэкенда нет
+    bool initDomain(unsigned domain, int backend); // домен из шаблона проекта
     void setPlaying(bool on);
     bool isPlaying() const { return playing; }
     double fps() const { return fpsEma; }
@@ -27,6 +28,12 @@ public:
     // Пересадка на другой бэкенд (панель активности): ядра пересоздаются,
     // мир перезаливается. 1 ок.
     bool switchBackend(int be);
+    // Один кадр сразу (чтобы вьюпорт не был чёрным до Play).
+    void frameNow();
+    int api() const { return backend; } // текущий бэкенд (для подсветки кнопок)
+    // Режим гизмо с тулбара: 0 двигать, 1 крутить, 2 тянуть. Таскание то же.
+    void setGizmoMode(int m) { gizmoMode = m < 0 ? 0 : (m > 2 ? 2 : m); }
+    int gizmoModeGet() const { return gizmoMode; }
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -46,6 +53,9 @@ private:
     uint8_t *cpuBuf = nullptr; // RGBA 1280x720 для frame_cpu (VK/WebGPU), разово
     int placeheld = 0; // 1 если кадра нет: рисуем текст
     int backend = 2; // выбранный в хабе (1 webgpu, 3 vk, 2 gl)
+    unsigned domain = 1; // домен из шаблона (1 воксель, 2 sdf, 4 вектор, 16 меш)
+    int gizmoMode = 0; // 0 двигать, 1 крутить, 2 тянуть (тулбар)
+    int sdfFed = 0, vecFed = 0, meshFed = 0; // разовые заливки не-вокселя
     QTimer *timer = nullptr;
     bool playing = false;
     int frame = 0;
@@ -62,6 +72,8 @@ private:
     int dragAxis = -1;
     float dragSX = 0, dragSY = 0;
     float dragPX = 0, dragPY = 0, dragPZ = 0;
+    float dragRX = 0, dragRY = 0, dragRZ = 0; // rot на старте (режим крутить)
+    float dragEX = 1, dragEY = 1, dragEZ = 1; // scale на старте (режим тянуть)
     // Кадр для пикинга: PV-матрица + камера + fov последнего рендера.
     float pvM[16] = {0};
     float pcamX = 0, pcamY = 0, pcamZ = 0, pfov = 1.6f;

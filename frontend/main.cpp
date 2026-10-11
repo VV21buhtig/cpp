@@ -15,6 +15,7 @@
 #include <QPixmap>
 #include <QSettings>
 #include <string>
+#include <cstring>
 #include <QStyle>
 #include "panels.h"
 #include "viewport.h"
@@ -41,6 +42,28 @@ static void applyTheme(QApplication &app, const QString &name) {
         s.setValue("theme", name);
         return;
     }
+}
+
+// Шаблон проекта -> домен ядра (выбор рендера живёт в хабе, не в коде).
+// Нет шаблона/неизвестен — воксель. Возвращает бит RC_CAP_*.
+static unsigned domainForTemplate(const QString &project) {
+    FILE *f = fopen((project + "/project.txt").toUtf8().constData(), "rb");
+    if (!f) return 1u;
+    char line[256];
+    QString tpl;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "template=", 9)) {
+            char *nl = strchr(line, '\n');
+            if (nl) *nl = 0;
+            tpl = QString::fromUtf8(line + 9);
+            break;
+        }
+    }
+    fclose(f);
+    if (tpl == "SDF Primitives") return 2u;
+    if (tpl == "Vector Shapes") return 4u;
+    if (tpl == "Mesh Soup") return 16u;
+    return 1u; // Empty, Voxel Terrain и всё остальное
 }
 
 static QMainWindow *openEditor(const QString &project, int backend) {
@@ -76,6 +99,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     help->addAction("About", [con]() { con->log("voxengine editor skeleton on libengine.so"); });
 
     auto *bar = win->addToolBar("main");
+    bar->setMovable(false); // тулбар не утащить мышью (кнопки не «пропадают»)
     // Текстовые кнопки как в референсах (стандартные иконки Qt —
     // цветастые эмодзи, нам не надо).
     Viewport *vp = nullptr;
@@ -96,9 +120,8 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         gizmos->addAction(g);
     }
     gT->setChecked(true);
-    QObject::connect(gizmos, &QActionGroup::triggered, [con](QAction *a) {
-        con->log(QString("gizmo mode: %1 (visual only)").arg(a->text()));
-    });
+    // Режим гизмо вьюпорту отдаём позже (vp ещё не создан): см. коннекты
+    // после создания вьюпорта. Тут только эксклюзивность группы.
     // Орто-виды как в референсах (фиксированные камеры вьюпорта).
     bar->addSeparator();
     auto *vTop = bar->addAction("Top");
@@ -110,6 +133,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     // (без картинок и эмодзи), активная — с левой синей полосой через QSS.
     auto *activity = new QToolBar("activity", win);
     activity->setOrientation(Qt::Vertical);
+    activity->setMovable(false); // панель API не утащить мышью
     activity->setIconSize(QSize(40, 40));
     activity->setStyleSheet(
         "QToolBar { background: #252526; border: none; }"
@@ -132,14 +156,8 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     if (backend == 1) apiW->setChecked(true);
     else if (backend == 3) apiV->setChecked(true);
     else apiG->setChecked(true);
-    auto apiSwitch = [vp, con](int be, const char *nm) {
-        if (!vp) return;
-        if (vp->switchBackend(be)) con->log(QString("api: %1").arg(nm));
-        else con->log(QString("api %1 FAILED (see terminal)").arg(nm));
-    };
-    QObject::connect(apiW, &QAction::triggered, [=]() { apiSwitch(1, "webgpu"); });
-    QObject::connect(apiG, &QAction::triggered, [=]() { apiSwitch(2, "opengl"); });
-    QObject::connect(apiV, &QAction::triggered, [=]() { apiSwitch(3, "vulkan"); });
+    // Переключение API — ПОСЛЕ создания вьюпорта (vp захватываем живым,
+    // иначе nullptr навсегда и кнопки молчат — так и было). Коннекты ниже.
 
     auto *hier = new QDockWidget("Hierarchy & Outliner", win);
     hier->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
@@ -155,10 +173,62 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     vpTabs->setTabsClosable(true);
     win->setCentralWidget(vpTabs);
     win->setProperty("viewport", (qulonglong)vp);
-    if (!vp->init(backend)) {
-        con->log("viewport: engine init FAILED (see terminal)");
+    // Крестик вкладки: стоп + снять вкладку (раньше был мёртвый).
+    QObject::connect(vpTabs, &QTabWidget::tabCloseRequested, [vp, vpTabs, con](int i) {
+        if (vp) vp->setPlaying(false);
+        vpTabs->removeTab(i);
+        con->log("viewport closed");
+    });
+    unsigned dom = domainForTemplate(project);
+    if (!vp->initDomain(dom, backend)) {
+        const char *dn = dom == 2 ? "SDF" : (dom == 4 ? "Vector" : (dom == 16 ? "Mesh" : "Voxel"));
+        con->log(QString("viewport: NO CORE for %1 on backend %2 (see terminal)").arg(dn).arg(backend));
     } else {
         con->log(QString("viewport: engine ok (%1)").arg(be));
+        vp->frameNow(); // первый кадр сразу: не чёрный вьюпорт до Play
+    }
+    // Переключатель API: vp уже живой (захват по значению — рабочий).
+    // Промах — вернуть чек на текущий бэкенд, не врать подсветкой.
+    auto apiSwitch = [vp, con, apiW, apiG, apiV](int be, const char *nm) {
+        if (!vp) return;
+        if (vp->switchBackend(be)) {
+            con->log(QString("api: %1").arg(nm));
+            printf("api: %s\n", nm);
+            fflush(stdout);
+        } else {
+            con->log(QString("api %1 FAILED (see terminal)").arg(nm));
+            int cur = vp->api();
+            if (cur == 1) apiW->setChecked(true);
+            else if (cur == 3) apiV->setChecked(true);
+            else apiG->setChecked(true);
+        }
+    };
+    QObject::connect(apiW, &QAction::triggered, [=]() { apiSwitch(1, "webgpu"); });
+    QObject::connect(apiG, &QAction::triggered, [=]() { apiSwitch(2, "opengl"); });
+    QObject::connect(apiV, &QAction::triggered, [=]() { apiSwitch(3, "vulkan"); });
+    // Режим гизмо: тулбар -> вьюпорт (двигать/крутить/тянуть тасканием осей).
+    QObject::connect(gT, &QAction::triggered, [vp, con]() {
+        if (vp) vp->setGizmoMode(0);
+        con->log("gizmo mode: Translate");
+    });
+    QObject::connect(gR, &QAction::triggered, [vp, con]() {
+        if (vp) vp->setGizmoMode(1);
+        con->log("gizmo mode: Rotate");
+    });
+    QObject::connect(gS, &QAction::triggered, [vp, con]() {
+        if (vp) vp->setGizmoMode(2);
+        con->log("gizmo mode: Scale");
+    });
+    // Тест кнопок API: ED_APISEQ=132 -> по очереди trigger() W/G/V через 2с.
+    // Проверяет именно кнопки (не switchBackend напрямую, его крыла матрица).
+    if (getenv("ED_APISEQ") && getenv("ED_APISEQ")[0]) {
+        QString seq = QString::fromUtf8(getenv("ED_APISEQ"));
+        QAction *btns[4] = {nullptr, apiW, apiG, apiV};
+        for (int i = 0; i < seq.size(); i++) {
+            int b = seq[i].digitValue();
+            if (b < 1 || b > 3 || !btns[b]) continue;
+            QTimer::singleShot(2000 * (i + 1), [btns, b]() { btns[b]->trigger(); });
+        }
     }
 
     // Право: вверху Solution Explorer (файлы проекта), внизу Details.

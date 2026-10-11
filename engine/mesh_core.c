@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <math.h>
 #include "render_api.h"
+#include "rtarget.h"
 #include "mat4.h"
 #include "rhi_gl.h"
 
@@ -69,17 +70,8 @@ static int mesh_upload(RenderCore *rc, const RcMesh *m) {
     return 1;
 }
 
-static void mesh_frame(RenderCore *rc, const RcView *v) {
-    MeshWrap *c = (MeshWrap *)rc->ctx;
-    double now = glfwGetTime();
-    float dt = (float)(now - c->prevT);
-    c->prevT = now;
-    if (dt > 0.0f) {
-        float fps = 1.0f / dt;
-        c->fpsEma = c->fpsEma > 0.0f ? c->fpsEma * 0.95f + fps * 0.05f : fps;
-    }
-    int ww = v->resW > 0 ? v->resW : 1280;
-    int hh = v->resH > 0 ? v->resH : 720;
+// Рисунок без swap (цель — окно или FBO композитора).
+static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh) {
     Vec3 f, r, u;
     cam_basis(v->yaw, v->pitch, &f, &r, &u);
     Mat4 proj = m4persp(2.0f * atanf(0.5f / (v->fov > 0.2f ? v->fov : 1.6f)),
@@ -107,6 +99,20 @@ static void mesh_frame(RenderCore *rc, const RcView *v) {
     glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
+}
+
+static void mesh_frame(RenderCore *rc, const RcView *v) {
+    MeshWrap *c = (MeshWrap *)rc->ctx;
+    double now = glfwGetTime();
+    float dt = (float)(now - c->prevT);
+    c->prevT = now;
+    if (dt > 0.0f) {
+        float fps = 1.0f / dt;
+        c->fpsEma = c->fpsEma > 0.0f ? c->fpsEma * 0.95f + fps * 0.05f : fps;
+    }
+    int ww = v->resW > 0 ? v->resW : 1280;
+    int hh = v->resH > 0 ? v->resH : 720;
+    mesh_draw(c, v, ww, hh);
     {
         const char *sp = getenv("VOX_SHOT");
         if (sp && sp[0]) {
@@ -131,6 +137,16 @@ static void mesh_frame(RenderCore *rc, const RcView *v) {
     }
     glfwSwapBuffers(c->win);
     c->frame++;
+}
+
+// Кадр в цель композитора (Qt-вьюпорт): тот же рисунок, без swap/шота.
+static int mesh_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
+    MeshWrap *c = (MeshWrap *)rc->ctx;
+    if (!t || t->backend != 2 || !t->fbo) return 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    mesh_draw(c, v, t->w, t->h);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return 1;
 }
 
 static int mesh_init(RenderCore *rc, void *glfwWindow) {
@@ -195,6 +211,7 @@ RenderCore *rc_mesh_create(void) {
     w->api.init = mesh_init;
     w->api.shutdown = mesh_shutdown;
     w->api.frame = mesh_frame;
+    w->api.frame_to = mesh_frame_to;
     w->api.upload_mesh = mesh_upload;
     w->api.fps = mesh_fps;
     return &w->api;
