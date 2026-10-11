@@ -16,6 +16,7 @@ typedef struct VoxChunk VoxChunk;
 #define RC_CAP_SDF    (1u << 1) // сцена примитивов: upload_sdf
 #define RC_CAP_VECTOR (1u << 2) // 2D-примитивы: upload_vector
 #define RC_CAP_PIXEL  (1u << 3) // CPU-кадр RGBA: upload_pixels
+#define RC_CAP_MESH   (1u << 4) // суп треугольников: upload_mesh
 
 typedef struct {
     // Кадр вида (рендер-камера). 2D-доменам нужны в основном resW/resH/time.
@@ -46,6 +47,13 @@ typedef struct {
     float r;
     int mat;
 } RcSdfObj;
+
+// Треугольный суп (домен RC_CAP_MESH): неиндексированный, вершина 9 float
+// (pos3 + nrm3 + col3). Нормали даёт загрузчик (плоские грани — по грани).
+typedef struct {
+    const float *verts;
+    int nverts;
+} RcMesh;
 
 // 2D-примитив (домен RC_CAP_VECTOR). a,b,c,d — параметры фигуры:
 // rect: x,y,w,h; circle: cx,cy,r,-; line: x0,y0,x1,y1.
@@ -98,6 +106,8 @@ struct RenderCore {
     // --- Домен PIXEL (NULL если нет RC_CAP_PIXEL). CPU-кадр на весь экран. ---
     // Строка 0 = ВЕРХ кадра (натурально для CPU-буферов; ядро флипает под GPU).
     int (*upload_pixels)(RenderCore *rc, const uint8_t *rgba, int w, int h);
+    // --- Домен MESH (NULL если нет RC_CAP_MESH). Суп целиком за раз. ---
+    int (*upload_mesh)(RenderCore *rc, const RcMesh *m);
     // fps кадра для губернатора снаружи (0 пока нет данных)
     float (*fps)(RenderCore *rc);
 };

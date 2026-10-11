@@ -99,3 +99,10 @@ target_include_directories(gl_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(gl_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(gl_demo PRIVATE -Wall -Wextra)
+# Живое ядро орфана 5: mesh на RHI (треугольный суп, свой домен).
+add_executable(mesh_demo mesh_demo.c mesh_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(mesh_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(mesh_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(mesh_demo PRIVATE -Wall -Wextra)
