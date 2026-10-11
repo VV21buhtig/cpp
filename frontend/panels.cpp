@@ -19,6 +19,33 @@
 static ScWorld g_world;
 static int g_worldInit = 0;
 static Entity g_selected = 0;
+static QDoubleSpinBox *g_spins[9] = {0};
+
+unsigned ui_selected(void) { return g_selected; }
+
+static void ensureWorld(ConsolePanel *con);
+
+struct ScWorld *ui_world(void) {
+    ensureWorld(nullptr);
+    return &g_world;
+}
+
+static void refreshInspector(void) {
+    ScTransform t = sc_get(&g_world, g_selected);
+    double v[9] = {t.pos.x, t.pos.y, t.pos.z, t.rot.x, t.rot.y, t.rot.z,
+                   t.scale.x, t.scale.y, t.scale.z};
+    for (int i = 0; i < 9; i++) {
+        if (!g_spins[i]) continue;
+        g_spins[i]->blockSignals(true);
+        g_spins[i]->setValue(v[i]);
+        g_spins[i]->blockSignals(false);
+    }
+}
+
+void ui_select(unsigned id) {
+    g_selected = id;
+    refreshInspector();
+}
 
 static void ensureWorld(ConsolePanel *con) {
     if (g_worldInit) return;
@@ -55,19 +82,35 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     auto *root = new QTreeWidgetItem(tree, {"Scene"});
     Entity list[64];
     int n = sc_list(&g_world, list, 64);
-    for (int i = 0; i < n; i++) {
+    // Двухуровневое вложение: сначала записи, потом развеска по родителям.
+    // Сущность "Scene" прячем (её место занимает UI-корень).
+    QTreeWidgetItem *items[64] = {0};
+    Entity ids[64] = {0};
+    int m = n > 64 ? 64 : n;
+    for (int i = 0; i < m; i++) {
         const char *nm = sc_name(&g_world, list[i]);
         if (!strcmp(nm, "Scene")) continue;
-        auto *it = new QTreeWidgetItem(root, {nm});
-        it->setData(0, Qt::UserRole, (qlonglong)list[i]);
-        it->setCheckState(0, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
+        items[i] = new QTreeWidgetItem({nm});
+        items[i]->setData(0, Qt::UserRole, (qlonglong)list[i]);
+        items[i]->setCheckState(0, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
+        ids[i] = list[i];
+    }
+    for (int i = 0; i < m; i++) {
+        if (!items[i]) continue;
+        Entity par = sc_parent_of(&g_world, ids[i]);
+        QTreeWidgetItem *dst = root;
+        if (par && strcmp(sc_name(&g_world, par), "Scene")) {
+            for (int k = 0; k < m; k++)
+                if (ids[k] == par && items[k]) { dst = items[k]; break; }
+        }
+        dst->addChild(items[i]);
     }
     root->setExpanded(true);
     lay->addWidget(tree);
     QObject::connect(tree, &QTreeWidget::itemClicked, [=](QTreeWidgetItem *it, int) {
         qlonglong id = it->data(0, Qt::UserRole).toLongLong();
         if (id > 0) {
-            g_selected = (Entity)id;
+            ui_select((unsigned)id);
             if (con) con->log(QString("select: %1").arg(sc_name(&g_world, g_selected)));
         }
     });
@@ -112,6 +155,9 @@ QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con) {
     lay->addRow("scale", sx);
     lay->addRow("", sy);
     lay->addRow("", sz);
+    QDoubleSpinBox *all[9] = {px, py, pz, rx, ry, rz, sx, sy, sz};
+    for (int i = 0; i < 9; i++) g_spins[i] = all[i];
+    refreshInspector();
     auto push = [=]() {
         if (!g_selected || !sc_alive(&g_world, g_selected)) return;
         ScTransform nt;

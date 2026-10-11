@@ -108,6 +108,26 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         vp->setPlaying(true);
         con->log("autoplay");
     }
+    // Тест выбора: ED_SELECT=имя -> выбрать сущность после загрузки.
+    if (getenv("ED_SELECT") && getenv("ED_SELECT")[0]) {
+        QString nm = QString::fromUtf8(getenv("ED_SELECT"));
+        QTimer::singleShot(500, [nm, con]() {
+            extern void ui_select(unsigned);
+            extern struct ScWorld *ui_world(void);
+            extern int sc_list(const struct ScWorld *, unsigned *, int);
+            extern const char *sc_name(const struct ScWorld *, unsigned);
+            struct ScWorld *w = ui_world();
+            unsigned list[64];
+            int n = sc_list(w, list, 64);
+            for (int i = 0; i < n; i++) {
+                if (nm == QString::fromUtf8(sc_name(w, list[i]))) {
+                    ui_select(list[i]);
+                    con->log(QString("select test: %1").arg(nm));
+                    break;
+                }
+            }
+        });
+    }
     // Тест сейва: ED_SAVE=1 -> сохранить проект через секунду.
     if (getenv("ED_SAVE") && getenv("ED_SAVE")[0]) {
         QString pr = project;

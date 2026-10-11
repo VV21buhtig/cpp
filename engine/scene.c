@@ -45,8 +45,7 @@ void sc_kill(ScWorld *w, Entity e) {
         if (w->alive[k] && w->parent[k] == i) w->parent[k] = -1;
 }
 
-int sc_parent(ScWorld *w, Entity e, Entity parent) {
-    if (!w) return 0;
+int sc_parent(ScWorld *w, Entity e, Entity parent) {    if (!w) return 0;
     int i = idx(e);
     if (i < 0 || i >= SC_MAX || !w->alive[i]) return 0;
     if (!parent) { w->parent[i] = -1; return 1; }
@@ -56,6 +55,15 @@ int sc_parent(ScWorld *w, Entity e, Entity parent) {
     if (w->parent[p] == i) return 0;
     w->parent[i] = p;
     return 1;
+}
+
+Entity sc_parent_of(const ScWorld *w, Entity e) {
+    if (!w) return 0;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return 0;
+    int p = w->parent[i];
+    if (p < 0 || p >= SC_MAX || !w->alive[p]) return 0;
+    return (Entity)(p + 1);
 }
 
 ScTransform sc_get(const ScWorld *w, Entity e) {

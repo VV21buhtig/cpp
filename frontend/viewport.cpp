@@ -9,9 +9,13 @@
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "rhi_gl.h"
+#include "mat4.h"
+#include "scene.h"
+#include "panels.h"
 #include "vox/vox_chunk.h"
 #include "vox/vox_gen.h"
 #include "vox_feed.h"
+#include <QMouseEvent>
 
 Viewport::Viewport(QWidget *parent) : QWidget(parent) {
     setMinimumSize(480, 270);
@@ -25,6 +29,11 @@ Viewport::~Viewport() {
         rc->shutdown(rc);
         rc_destroy(rc);
         rc = nullptr;
+    }
+    if (vrc) {
+        vrc->shutdown(vrc);
+        rc_destroy(vrc);
+        vrc = nullptr;
     }
     // Цель и окно переживут? Окно скрытое — отдаём движку? Нет: окно наше.
     // Упрощение скелета: окно и цель живут до конца процесса (утечка
@@ -47,6 +56,11 @@ bool Viewport::init(int be) {
     // Ядро по таблице «домен x бэкенд» (воксельный домен, бэкенд из хаба).
     rc = rc_create_by(1u, (unsigned)backend);
     if (!rc || !rc->init(rc, win)) return false;
+    // Vec-ядро для гизмо-оверлея делит окно/контекст (только GL-режим).
+    if (backend == 2) {
+        vrc = rc_create_by(4u, 2u);
+        if (vrc && !vrc->init(vrc, win)) { vrc = nullptr; }
+    }
     world = calloc(GW * GW, sizeof(VoxChunk));
     if (!world) return false;
     for (int cz = 0; cz < GW; cz++)
@@ -75,12 +89,35 @@ void Viewport::setPlaying(bool on) {
     else timer->stop();
 }
 
-static const VoxChunk *vfind(void *world, int cx, int cz) {
-    VoxChunk *w = (VoxChunk *)world;
+static const VoxChunk *vfind(void *world, int cx, int cz) {    VoxChunk *w = (VoxChunk *)world;
     const int GW = 5;
     int ix = cx + GW / 2, iz = cz + GW / 2;
     if (ix < 0 || iz < 0 || ix >= GW || iz >= GW) return 0;
     return &w[iz * GW + ix];
+}
+
+// Проекция мировой точки в пиксели кадра 1280x720 (GL Y-вверх -> вниз).
+// Возвращает 1, wout[0..1] = пиксели. w<=0 (за камерой) -> 0.
+static int project_pt(const float *pv, float x, float y, float z, float *ox, float *oy) {
+    float cx = pv[0] * x + pv[4] * y + pv[8] * z + pv[12];
+    float cy = pv[1] * x + pv[5] * y + pv[9] * z + pv[13];
+    float cw = pv[3] * x + pv[7] * y + pv[11] * z + pv[15];
+    if (cw <= 0.0f) return 0;
+    float nx = cx / cw, ny = cy / cw;
+    *ox = (nx * 0.5f + 0.5f) * 1280.0f;
+    *oy = (1.0f - (ny * 0.5f + 0.5f)) * 720.0f;
+    return 1;
+}
+
+// Дистанция точка-отрезок в пикселях (пикинг осей).
+static float seg_dist(float px, float py, float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay;
+    float l2 = dx * dx + dy * dy;
+    float t = l2 > 1e-9f ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float qx = ax + dx * t - px, qy = ay + dy * t - py;
+    return sqrtf(qx * qx + qy * qy);
 }
 
 void Viewport::renderOnce() {
@@ -126,6 +163,64 @@ void Viewport::renderOnce() {
     v.sunDir.x = 0.4f; v.sunDir.y = 0.75f; v.sunDir.z = 0.3f;
     if (isGL && target && rc->frame_to) {
         rc->frame_to(rc, &v, target);
+        // Гизмо-оверлей вторым проходом (vec, бленд): оси выбранной сущности.
+        if (vrc && vrc->frame_to) {
+            unsigned sel = ui_selected();
+            RcVecShape gs[4];
+            int ng = 0;
+            if (sel) {
+                ScTransform et = sc_get(ui_world(), sel);
+                // PV из той же камеры что сцена.
+                Vec3 f2, r2, u2;
+                cam_basis(v.yaw, v.pitch, &f2, &r2, &u2);
+                Mat4 pr = m4persp(2.0f * atanf(0.5f / (v.fov > 0.2f ? v.fov : 1.6f)),
+                                  1280.0f / 720.0f, 0.1f, 600.0f);
+                Mat4 vw = m4look(v.camPos.x, v.camPos.y, v.camPos.z,
+                                 v.camPos.x + f2.x, v.camPos.y + f2.y, v.camPos.z + f2.z);
+                Mat4 pv = m4mul(&pr, &vw);
+                memcpy(pvM, pv.m, sizeof pvM);
+                pcamX = v.camPos.x; pcamY = v.camPos.y; pcamZ = v.camPos.z;
+                pfov = v.fov;
+                havePV = 1;
+                float L = 4.0f;
+                float cols[3][4] = {{1, 0.2f, 0.2f, 1}, {0.2f, 1, 0.2f, 1}, {0.2f, 0.4f, 1, 1}};
+                for (int ax = 0; ax < 3; ax++) {
+                    float ex = et.pos.x + (ax == 0 ? L : 0);
+                    float ey = et.pos.y + (ax == 1 ? L : 0);
+                    float ez = et.pos.z + (ax == 2 ? L : 0);
+                    float ax0, ay0, ax1, ay1;
+                    if (!project_pt(pv.m, et.pos.x, et.pos.y, et.pos.z, &ax0, &ay0)) continue;
+                    if (!project_pt(pv.m, ex, ey, ez, &ax1, &ay1)) continue;
+                    gs[ng].kind = 2;
+                    gs[ng].a = ax0; gs[ng].b = ay0; gs[ng].c = ax1; gs[ng].d = ay1;
+                    gs[ng].rgba[0] = cols[ax][0];
+                    gs[ng].rgba[1] = cols[ax][1];
+                    gs[ng].rgba[2] = cols[ax][2];
+                    gs[ng].rgba[3] = cols[ax][3];
+                    ng++;
+                }
+                if (dragAxis >= 0 && dragAxis < 3 && ng > dragAxis) {
+                    // Активная ось поверх жёлтой.
+                    gs[3] = gs[dragAxis];
+                    gs[3].rgba[0] = 1; gs[3].rgba[1] = 1; gs[3].rgba[2] = 0;
+                    ng = 4;
+                }
+            }
+            if (ng > 0) {
+                vrc->upload_vector(vrc, gs, ng);
+            } else {
+                // Чистим оверлей: вырожденный примитив (fb memset внутри).
+                RcVecShape clr;
+                memset(&clr, 0, sizeof clr);
+                clr.kind = 0;
+                vrc->upload_vector(vrc, &clr, 1);
+            }
+            RcView vv;
+            memset(&vv, 0, sizeof vv);
+            vv.resW = 1280;
+            vv.resH = 720;
+            vrc->frame_to(vrc, &vv, target);
+        }
         // Цель -> QImage (верх GL снизу: строки флипаем).
         glBindFramebuffer(GL_FRAMEBUFFER, target->fbo);
         static uint8_t row[1280 * 3];
@@ -154,6 +249,86 @@ void Viewport::renderOnce() {
 void Viewport::tick() {
     renderOnce();
     update();
+}
+
+// Виджет -> пиксели кадра 1280x720 (с учётом letterbox).
+static int to_image(Viewport *vp, float mx, float my, float *ix, float *iy) {
+    int w = vp->width(), h = vp->height();
+    if (w <= 0 || h <= 0) return 0;
+    float sc = w / 1280.0f < h / 720.0f ? w / 1280.0f : h / 720.0f;
+    float ox = (w - 1280.0f * sc) * 0.5f, oy = (h - 720.0f * sc) * 0.5f;
+    *ix = (mx - ox) / sc;
+    *iy = (my - oy) / sc;
+    return *ix >= 0 && *ix < 1280 && *iy >= 0 && *iy < 720;
+}
+
+void Viewport::mousePressEvent(QMouseEvent *e) {
+    if (e->button() != Qt::LeftButton || !havePV) return;
+    unsigned sel = ui_selected();
+    if (!sel) return;
+    ScTransform et = sc_get(ui_world(), sel);
+    float ix, iy;
+    if (!to_image(this, (float)e->pos().x(), (float)e->pos().y(), &ix, &iy)) return;
+    float L = 4.0f, best = 10.0f;
+    int hit = -1;
+    for (int ax = 0; ax < 3; ax++) {
+        float ex = et.pos.x + (ax == 0 ? L : 0);
+        float ey = et.pos.y + (ax == 1 ? L : 0);
+        float ez = et.pos.z + (ax == 2 ? L : 0);
+        float ax0, ay0, ax1, ay1;
+        if (!project_pt(pvM, et.pos.x, et.pos.y, et.pos.z, &ax0, &ay0)) continue;
+        if (!project_pt(pvM, ex, ey, ez, &ax1, &ay1)) continue;
+        float d = seg_dist(ix, iy, ax0, ay0, ax1, ay1);
+        if (d < best) { best = d; hit = ax; }
+    }
+    if (hit >= 0) {
+        dragAxis = hit;
+        dragSX = ix;
+        dragSY = iy;
+        dragPX = et.pos.x;
+        dragPY = et.pos.y;
+        dragPZ = et.pos.z;
+    }
+}
+
+void Viewport::mouseMoveEvent(QMouseEvent *e) {
+    if (dragAxis < 0 || !havePV) return;
+    unsigned sel = ui_selected();
+    if (!sel) { dragAxis = -1; return; }
+    float ix, iy;
+    if (!to_image(this, (float)e->pos().x(), (float)e->pos().y(), &ix, &iy)) return;
+    // Экранное направление оси из стартовой проекции.
+    float L = 4.0f;
+    float ex = dragPX + (dragAxis == 0 ? L : 0);
+    float ey = dragPY + (dragAxis == 1 ? L : 0);
+    float ez = dragPZ + (dragAxis == 2 ? L : 0);
+    float ax0, ay0, ax1, ay1;
+    if (!project_pt(pvM, dragPX, dragPY, dragPZ, &ax0, &ay0)) return;
+    if (!project_pt(pvM, ex, ey, ez, &ax1, &ay1)) return;
+    float dx = ax1 - ax0, dy = ay1 - ay0;
+    float dl = sqrtf(dx * dx + dy * dy);
+    if (dl < 1e-6f) return;
+    dx /= dl;
+    dy /= dl;
+    // Мировых единиц на пиксель на глубине сущности.
+    float dist = sqrtf((pcamX - dragPX) * (pcamX - dragPX) +
+                       (pcamY - dragPY) * (pcamY - dragPY) +
+                       (pcamZ - dragPZ) * (pcamZ - dragPZ));
+    float wpp = dist / (pfov > 0.2f ? pfov : 1.6f) / 720.0f;
+    float along = ((ix - dragSX) * dx + (iy - dragSY) * dy) * wpp;
+    ScTransform et = sc_get(ui_world(), sel);
+    if (dragAxis == 0) et.pos.x = dragPX + along;
+    else if (dragAxis == 1) et.pos.y = dragPY + along;
+    else et.pos.z = dragPZ + along;
+    sc_set(ui_world(), sel, &et);
+}
+
+void Viewport::mouseReleaseEvent(QMouseEvent *e) {
+    (void)e;
+    if (dragAxis >= 0) {
+        dragAxis = -1;
+        ui_select(ui_selected()); // обновить спинбоксы инспектора
+    }
 }
 
 void Viewport::paintEvent(QPaintEvent *) {

@@ -18,8 +18,13 @@ int main(void) {
         printf("SCENE FAIL: parent\n");
         bad = 1;
     }
-    // Цикл запрещён.
+    // Цикл запрещён. Геттер родителя для дерева.
     if (sc_parent(&w, root, cam)) { printf("SCENE FAIL: cycle\n"); bad = 1; }
+    if (sc_parent_of(&w, cam) != root || sc_parent_of(&w, root) != 0 ||
+        sc_parent_of(&w, 99999) != 0) {
+        printf("SCENE FAIL: parent_of\n");
+        bad = 1;
+    }
     if (sc_parent(&w, cam, cam)) { printf("SCENE FAIL: self\n"); bad = 1; }
     // Трансформ туда-обратно (ползунки инспектора).
     ScTransform t = sc_get(&w, cam);

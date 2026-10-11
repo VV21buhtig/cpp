@@ -16,13 +16,13 @@ extern "C" {
 
 typedef uint32_t Entity; // 0 = нет такой (индекс+1, без поколений v1)
 
-typedef struct {
+typedef struct ScTransform {
     Vec3 pos;    // позиция
     Vec3 rot;    // yaw/pitch/roll, радианы
     Vec3 scale;  // масштаб (1,1,1 = как есть)
 } ScTransform;
 
-typedef struct {
+typedef struct ScWorld {
     int alive[SC_MAX];
     int parent[SC_MAX]; // индекс родителя или -1 (корень)
     int visible[SC_MAX];
@@ -39,6 +39,8 @@ void sc_kill(ScWorld *w, Entity e);
 // Родитель (рекурсий не проверяем глубже прямого цикла — не стреляй в ногу).
 // Возвращает 1 если встал.
 int sc_parent(ScWorld *w, Entity e, Entity parent);
+// Чей ребёнок (сущность родителя, 0 корень/нет). Для дерева иерархии.
+Entity sc_parent_of(const ScWorld *w, Entity e);
 // Трансформ get/set. set на мёртвой — игнор.
 ScTransform sc_get(const ScWorld *w, Entity e);
 void sc_set(ScWorld *w, Entity e, const ScTransform *t);

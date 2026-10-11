@@ -1,6 +1,6 @@
 #ifndef FRONT_VIEWPORT_H
 #define FRONT_VIEWPORT_H
-// Вьюпорт редактора: воксельная сцена движка -> QImage.
+// Вьюпорт редактора: воксельная сцена + гизмо-оси в одной цели.
 // GL-контекст — скрытое GLFW-окно (Qt его не касается); кадр идёт
 // в FBO-цель через frame_to, пиксели забираем glReadPixels в QImage.
 // Никакого QOpenGLWidget: обмен через память, контексты не делим.
@@ -21,12 +21,16 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *) override;
+    void mousePressEvent(QMouseEvent *) override;
+    void mouseMoveEvent(QMouseEvent *) override;
+    void mouseReleaseEvent(QMouseEvent *) override;
 
 private:
     void tick();
     void renderOnce();
 
     struct RenderCore *rc = nullptr;
+    struct RenderCore *vrc = nullptr; // vec-ядро для гизмо-оверлея (та же цель)
     struct RcTarget *target = nullptr;
     unsigned presentProg = 0, presentVao = 0;
     QImage img;
@@ -42,5 +46,13 @@ private:
     int fed[25] = {0};
     int fedLeft = 25, fedCur = 0;
     float camYaw = 0.6f, camPitch = -0.4f, camFov = 1.6f;
+    // Гизмо-таскание: -1 нет, 0/1/2 ось XYZ. Точка старта и якорь мыши.
+    int dragAxis = -1;
+    float dragSX = 0, dragSY = 0;
+    float dragPX = 0, dragPY = 0, dragPZ = 0;
+    // Кадр для пикинга: PV-матрица + камера + fov последнего рендера.
+    float pvM[16] = {0};
+    float pcamX = 0, pcamY = 0, pcamZ = 0, pfov = 1.6f;
+    int havePV = 0;
 };
 #endif

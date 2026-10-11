@@ -24,6 +24,12 @@ private:
 QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con);
 QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con);
 QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot);
+// Выбор сущности извне (иерархия зовёт сама; вьюпорту/гизмо — сюда же).
+// scene.h целиком: нужен полный ScWorld (мир живёт в панелях).
+#include "scene.h"
+void ui_select(unsigned id);
+unsigned ui_selected(void);
+struct ScWorld *ui_world(void);
 // Проект: scene.txt туда-обратно (имена/родители/трансформы/видимость).
 // Формат строк: e <имя> <parentIdx|-1> <vis> <px py pz rx ry rz sx sy sz>
 void scene_save(const QString &projectDir);
