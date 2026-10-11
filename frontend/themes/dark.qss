@@ -1,0 +1,28 @@
+/* VS Code Dark+ (dark_vs.json + дефолты). Только текст и рамки, без картинок. */
+QMainWindow, QWidget { background: #1E1E1E; color: #D4D4D4; }
+QMenuBar { background: #2D2D2D; color: #CCCCCC; }
+QMenuBar::item:selected { background: #094771; }
+QMenu { background: #252526; color: #CCCCCC; border: 1px solid #2A2A2E; }
+QMenu::item:selected { background: #094771; }
+QToolBar { background: #2D2D2D; border: none; border-bottom: 1px solid #2A2A2E; spacing: 2px; }
+QToolBar QToolButton { background: transparent; color: #CCCCCC; padding: 4px 8px; }
+QToolBar QToolButton:checked { background: #094771; color: white; }
+QDockWidget { color: #CCCCCC; }
+QDockWidget::title { background: #252526; padding: 4px; border-bottom: 1px solid #2A2A2E; }
+QTabWidget::pane { border: 1px solid #2A2A2E; background: #1E1E1E; }
+QTabBar::tab { background: #2D2D2D; color: #CCCCCC; border: 1px solid #2A2A2E; padding: 4px 10px; }
+QTabBar::tab:selected { background: #1E1E1E; color: white; }
+QTreeView, QListView, QTextEdit, QLineEdit { background: #252526; color: #D4D4D4; border: 1px solid #2A2A2E; }
+QTreeView::item:selected, QListView::item:selected { background: #094771; color: white; }
+QGroupBox { border: 1px solid #2A2A2E; margin-top: 14px; color: #CCCCCC; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; }
+QDoubleSpinBox, QComboBox { background: #3C3C3C; color: #D4D4D4; border: 1px solid #2A2A2E; padding: 2px; }
+QPushButton { background: #0E639C; color: white; border: none; padding: 5px 14px; }
+QPushButton:flat { background: transparent; color: #CCCCCC; }
+QSlider::groove:horizontal { background: #3C3C3C; height: 4px; }
+QSlider::handle:horizontal { background: #0E639C; width: 12px; margin: -5px 0; }
+QScrollBar:vertical { background: #252526; width: 12px; }
+QScrollBar::handle:vertical { background: #4E4E4E; min-height: 20px; }
+QStatusBar { background: #007ACC; color: white; }
+QStatusBar::item { border: none; }
+QSplitter::handle { background: #2A2A2E; }

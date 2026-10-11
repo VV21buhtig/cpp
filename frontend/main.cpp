@@ -13,6 +13,8 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QPixmap>
+#include <QSettings>
+#include <string>
 #include <QStyle>
 #include "panels.h"
 #include "viewport.h"
@@ -20,6 +22,27 @@
 #include "scene.h"
 
 // Окно редактора под проект (путь) и бэкенд из хаба (1/3/2).
+// Темы из frontend/themes (цвета VS Code dark/light). Переключатель —
+// в меню View, выбор помним в QSettings. Без картинок и тулчейнов.
+static void applyTheme(QApplication &app, const QString &name) {
+    QStringList roots = {"frontend/themes/" + name + ".qss",
+                         QString(getenv("VOX_THEMES") ? getenv("VOX_THEMES") : "") + "/" + name + ".qss"};
+    for (const QString &p : roots) {
+        FILE *f = fopen(p.toUtf8().constData(), "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        std::string css((size_t)n, 0);
+        if (fread(&css[0], 1, (size_t)n, f) == (size_t)n)
+            app.setStyleSheet(QString::fromUtf8(css.c_str()));
+        fclose(f);
+        QSettings s("voxengine", "editor");
+        s.setValue("theme", name);
+        return;
+    }
+}
+
 static QMainWindow *openEditor(const QString &project, int backend) {
     auto *win = new QMainWindow();    const char *be = backend == 1 ? "WebGPU" : (backend == 3 ? "Vulkan" : "OpenGL");
     win->setWindowTitle(QString("Engine Editor - %1 [%2]").arg(project).arg(be));
@@ -30,6 +53,12 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     auto *file = win->menuBar()->addMenu("File");
     auto *edit = win->menuBar()->addMenu("Edit");
     auto *view = win->menuBar()->addMenu("View");
+    view->addAction("Theme: Dark", []() {
+        if (auto *a = qobject_cast<QApplication *>(QApplication::instance())) applyTheme(*a, "dark");
+    });
+    view->addAction("Theme: Light", []() {
+        if (auto *a = qobject_cast<QApplication *>(QApplication::instance())) applyTheme(*a, "light");
+    });
     auto *tools = win->menuBar()->addMenu("Tools");
     auto *assets = win->menuBar()->addMenu("Assets");
     auto *build = win->menuBar()->addMenu("Build");
@@ -234,35 +263,15 @@ static QMainWindow *openEditor(const QString &project, int backend) {
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     app.setApplicationName("voxengine-editor");
-    // Тёмная тема как в референсах (UE/VSCode): палитра Fusion, без зависимостей.
-    // Рамки панелей и вкладки с крестиками как в референсах.
-    // Никаких картинок: только текст, границы и отступы.
-    app.setStyle("Fusion");
-    app.setStyleSheet(
-        "QDockWidget { border: 1px solid #2a2a2e; }"
-        "QDockWidget::title { background: #2d2d30; padding: 4px; border-bottom: 1px solid #2a2a2e; }"
-        "QTabWidget::pane { border: 1px solid #2a2a2e; }"
-        "QTabBar::tab { background: #2d2d30; border: 1px solid #2a2a2e; padding: 4px 10px; }"
-        "QTabBar::tab:selected { background: #3e3e42; }"
-        "QGroupBox { border: 1px solid #2a2a2e; margin-top: 14px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; }"
-        "QTreeView, QListView, QTextEdit { border: 1px solid #2a2a2e; }"
-        "QToolBar { border-bottom: 1px solid #2a2a2e; spacing: 4px; }"
-        "QStatusBar { border-top: 1px solid #2a2a2e; }");
-    {
-        QPalette p;
-        p.setColor(QPalette::Window, QColor(45, 45, 48));
-        p.setColor(QPalette::WindowText, QColor(220, 220, 220));
-        p.setColor(QPalette::Base, QColor(30, 30, 30));
-        p.setColor(QPalette::AlternateBase, QColor(45, 45, 48));
-        p.setColor(QPalette::Text, QColor(220, 220, 220));
-        p.setColor(QPalette::Button, QColor(60, 60, 63));
-        p.setColor(QPalette::ButtonText, QColor(220, 220, 220));
-        p.setColor(QPalette::Highlight, QColor(0, 122, 204));
-        p.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-        app.setPalette(p);
-    }
     QMainWindow *editor = nullptr;
+    {
+        QSettings s("voxengine", "editor");
+        QString theme = s.value("theme", "dark").toString();
+        // Тест тем: ED_THEME=light|dark перебивает запомненную.
+        if (getenv("ED_THEME") && getenv("ED_THEME")[0])
+            theme = QString::fromUtf8(getenv("ED_THEME"));
+        applyTheme(app, theme);
+    }
     HubWindow hub([&](const QString &project, int backend) {
         // Эстафета: параметры из хаба -> окно редактора.
         editor = openEditor(project, backend);
