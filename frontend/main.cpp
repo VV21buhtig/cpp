@@ -13,18 +13,19 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QPixmap>
+#include <QStyle>
 #include "panels.h"
 #include "viewport.h"
 #include "hub.h"
 
 // Окно редактора под проект (путь) и бэкенд из хаба (1/3/2).
 static QMainWindow *openEditor(const QString &project, int backend) {
-    auto *win = new QMainWindow();
-    const char *be = backend == 1 ? "WebGPU" : (backend == 3 ? "Vulkan" : "OpenGL");
+    auto *win = new QMainWindow();    const char *be = backend == 1 ? "WebGPU" : (backend == 3 ? "Vulkan" : "OpenGL");
     win->setWindowTitle(QString("Engine Editor - %1 [%2]").arg(project).arg(be));
     win->resize(1500, 900);
 
     auto *con = new ConsolePanel();
+    console_capture_stderr(con); // stderr движка -> вкладка Console
     auto *file = win->menuBar()->addMenu("File");
     auto *edit = win->menuBar()->addMenu("Edit");
     auto *view = win->menuBar()->addMenu("View");
@@ -45,9 +46,14 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     help->addAction("About", [con]() { con->log("voxengine editor skeleton on libengine.so"); });
 
     auto *bar = win->addToolBar("main");
+    // Текстовые кнопки как в референсах (стандартные иконки Qt —
+    // цветастые эмодзи, нам не надо).
     Viewport *vp = nullptr;
     auto *actPlay = bar->addAction("Play");
     auto *actStop = bar->addAction("Stop");
+    bar->addSeparator();
+    auto *actSave = bar->addAction("Save");
+    auto *actNew = bar->addAction("New");
     bar->addSeparator();
     auto *gizmos = new QActionGroup(win);
     gizmos->setExclusive(true);
@@ -62,8 +68,16 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     QObject::connect(gizmos, &QActionGroup::triggered, [con](QAction *a) {
         con->log(QString("gizmo mode: %1 (visual only)").arg(a->text()));
     });
+    // Орто-виды как в референсах (фиксированные камеры вьюпорта).
+    bar->addSeparator();
+    auto *vTop = bar->addAction("Top");
+    auto *vSide = bar->addAction("Side");
+    auto *vFront = bar->addAction("Front");
+    auto *vOrbit = bar->addAction("Orbit");
 
     auto *hier = new QDockWidget("Hierarchy", win);
+    hier->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                      QDockWidget::DockWidgetFloatable);
     scene_load(project); // проект -> мир (до построения дерева!)
     hier->setWidget(makeHierarchy(hier, con));
     win->addDockWidget(Qt::LeftDockWidgetArea, hier);
@@ -72,7 +86,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     // Вкладки вьюпорта как в референсах (пока одна сцена).
     auto *vpTabs = new QTabWidget(win);
     vpTabs->addTab(vp, "Viewport Scene");
-    vpTabs->setTabsClosable(false);
+    vpTabs->setTabsClosable(true);
     win->setCentralWidget(vpTabs);
     if (!vp->init(backend)) {
         con->log("viewport: engine init FAILED (see terminal)");
@@ -81,12 +95,17 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     }
 
     auto *insp = new QDockWidget("Inspector", win);
+    insp->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                      QDockWidget::DockWidgetFloatable);
     insp->setWidget(makeInspector(insp, vp, con));
     win->addDockWidget(Qt::RightDockWidgetArea, insp);
 
     auto *bottom = new QDockWidget("Bottom", win);
+    bottom->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                        QDockWidget::DockWidgetFloatable);
     bottom->setTitleBarWidget(new QWidget(bottom));
     auto *tabs = new QTabWidget(bottom);
+    tabs->setTabsClosable(true);
     tabs->addTab(makeAssets(tabs, con, project + "/depot"), "Asset Browser");
     tabs->addTab(con, "Console");
     auto *term = new QLabel("Terminal: use system terminal (skeleton)", bottom);
@@ -103,11 +122,24 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         if (vp) vp->setPlaying(false);
         con->log("stop");
     });
+    auto setView = [vp, con](int m, const char *nm) {
+        if (vp) vp->setViewMode(m);
+        con->log(QString("view: %1").arg(nm));
+    };
+    QObject::connect(vTop, &QAction::triggered, [=]() { setView(1, "top"); });
+    QObject::connect(vSide, &QAction::triggered, [=]() { setView(2, "side"); });
+    QObject::connect(vFront, &QAction::triggered, [=]() { setView(3, "front"); });
+    QObject::connect(vOrbit, &QAction::triggered, [=]() { setView(0, "orbit"); });
 
     win->statusBar()->showMessage(
         QString("engine: libengine.so | %1 | %2").arg(be).arg(project));
     win->show();
     con->log("editor skeleton ready");
+    // Тест видов: ED_VIEW=0..3 (орбита/верх/бок/фронт).
+    if (getenv("ED_VIEW") && getenv("ED_VIEW")[0]) {
+        vp->setViewMode(atoi(getenv("ED_VIEW")));
+        con->log(QString("view mode %1").arg(getenv("ED_VIEW")));
+    }
     if (getenv("ED_PLAY") && getenv("ED_PLAY")[0]) {
         vp->setPlaying(true);
         con->log("autoplay");
@@ -147,7 +179,20 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     app.setApplicationName("voxengine-editor");
     // Тёмная тема как в референсах (UE/VSCode): палитра Fusion, без зависимостей.
+    // Рамки панелей и вкладки с крестиками как в референсах.
+    // Никаких картинок: только текст, границы и отступы.
     app.setStyle("Fusion");
+    app.setStyleSheet(
+        "QDockWidget { border: 1px solid #2a2a2e; }"
+        "QDockWidget::title { background: #2d2d30; padding: 4px; border-bottom: 1px solid #2a2a2e; }"
+        "QTabWidget::pane { border: 1px solid #2a2a2e; }"
+        "QTabBar::tab { background: #2d2d30; border: 1px solid #2a2a2e; padding: 4px 10px; }"
+        "QTabBar::tab:selected { background: #3e3e42; }"
+        "QGroupBox { border: 1px solid #2a2a2e; margin-top: 14px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; }"
+        "QTreeView, QListView, QTextEdit { border: 1px solid #2a2a2e; }"
+        "QToolBar { border-bottom: 1px solid #2a2a2e; spacing: 4px; }"
+        "QStatusBar { border-top: 1px solid #2a2a2e; }");
     {
         QPalette p;
         p.setColor(QPalette::Window, QColor(45, 45, 48));

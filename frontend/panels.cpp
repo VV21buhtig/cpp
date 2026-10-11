@@ -3,6 +3,7 @@
 #include "viewport.h"
 #include <functional>
 #include <QVBoxLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QTreeWidget>
@@ -75,6 +76,29 @@ void ConsolePanel::log(const QString &s) {
     if (out) out->append(s);
 }
 
+// Перехват stderr движка в консоль панели (логи ядра — в UI, а не мимо).
+// Ставится один раз из main до создания ядер.
+#include <QSocketNotifier>
+#include <unistd.h>
+static int errPipe[2] = {-1, -1};
+static QSocketNotifier *errSn = nullptr;
+
+void console_capture_stderr(ConsolePanel *con) {
+    if (errPipe[0] >= 0) return;
+    if (pipe(errPipe) != 0) return;
+    dup2(errPipe[1], STDERR_FILENO);
+    errSn = new QSocketNotifier(errPipe[0], QSocketNotifier::Read, con);
+    QObject::connect(errSn, &QSocketNotifier::activated, [con]() {
+        char buf[1024];
+        ssize_t n = read(errPipe[0], buf, sizeof buf - 1);
+        if (n > 0) {
+            buf[n] = 0;
+            QString s = QString::fromUtf8(buf).trimmed();
+            if (!s.isEmpty()) con->log(QString("[engine] %1").arg(s));
+        }
+    });
+}
+
 QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     ensureWorld(con);
     auto *w = new QWidget(parent);
@@ -115,6 +139,18 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     }
     root->setExpanded(true);
     lay->addWidget(tree);
+    // Футер как в референсах: "N actors (1 selected)".
+    auto *foot = new QLabel(w);
+    lay->addWidget(foot);
+    auto footRefresh = [=]() {
+        int alive = 0;
+        for (int i = 0; i < m; i++)
+            if (items[i]) alive++;
+        unsigned sel = ui_selected();
+        foot->setText(sel ? QString("%1 actors (1 selected)").arg(alive)
+                          : QString("%1 actors").arg(alive));
+    };
+    footRefresh();
     // Фильтр: виден совпадающий или чей потомок совпал.
     std::function<bool(QTreeWidgetItem *, const QString &)> match;
     match = [&](QTreeWidgetItem *it, const QString &q) -> bool {
@@ -135,6 +171,7 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
         if (id > 0) {
             ui_select((unsigned)id);
             if (con) con->log(QString("select: %1").arg(sc_name(&g_world, g_selected)));
+            footRefresh();
         }
     });
     QObject::connect(tree, &QTreeWidget::itemChanged, [=](QTreeWidgetItem *it, int) {
@@ -156,7 +193,11 @@ static QDoubleSpinBox *mkSpin(double v, double lo, double hi) {
 QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con) {
     ensureWorld(con);
     auto *w = new QWidget(parent);
-    auto *lay = new QFormLayout(w);
+    auto *outer = new QVBoxLayout(w);
+    outer->setContentsMargins(2, 2, 2, 2);
+    // Секция Transform как в референсах (рамка + заголовок).
+    auto *tg = new QGroupBox("Transform", w);
+    auto *lay = new QFormLayout(tg);
     QDoubleSpinBox *px, *py, *pz, *rx, *ry, *rz, *sx, *sy, *sz;
     // Читаем текущее выбранного (или нули, если никого).
     ScTransform t = sc_get(&g_world, g_selected);
@@ -200,10 +241,15 @@ QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con) {
         QObject::connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                          [=](double) { push(); });
     // FOV-слайдер вьюпорта (камера движка через w->fov).
+    auto *cg = new QGroupBox("Camera", w);
+    auto *cl = new QFormLayout(cg);
     auto *fov = new QSlider(Qt::Horizontal);
     fov->setRange(30, 160);
     fov->setValue(90);
-    lay->addRow("fov", fov);
+    cl->addRow("fov", fov);
+    outer->addWidget(tg);
+    outer->addWidget(cg);
+    outer->addStretch(1);
     QObject::connect(fov, &QSlider::valueChanged, [=](int v) {
         if (vp) vp->setFov(v / 100.0f);
         if (con) con->log(QString("fov=%1").arg(v / 100.0, 0, 'f', 2));
@@ -254,9 +300,13 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
             QString flt = search->text();
             if (!flt.isEmpty() && !q.contains(flt, Qt::CaseInsensitive)) continue;
             // Миниатюра: картинки грузим, остальное — без иконки.
+            // Подпись в две строки: имя + FNV-ID (как в референсах).
             QString full = depot + "/" + q;
             QImage thumb(full);
-            auto *it = new QListWidgetItem(q);
+            QString stem = q;
+            int dot = stem.lastIndexOf('.');
+            if (dot > 0) stem = stem.left(dot);
+            auto *it = new QListWidgetItem(q + "\n" + stem);
             if (!thumb.isNull())
                 it->setIcon(QIcon(QPixmap::fromImage(
                     thumb.scaled(64, 64, Qt::KeepAspectRatio, Qt::FastTransformation))));
