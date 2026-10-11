@@ -118,3 +118,10 @@ target_include_directories(vk_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
 target_link_libraries(vk_demo PRIVATE glfw ${VULKAN_LIB} m)
 target_compile_options(vk_demo PRIVATE -Wall -Wextra)
+# Живое ядро орфана 5: mesh на RHI (треугольный суп, свой домен).
+add_executable(mesh_demo mesh_demo.c mesh_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(mesh_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(mesh_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(mesh_demo PRIVATE -Wall -Wextra)
