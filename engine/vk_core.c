@@ -13,7 +13,6 @@
 #include "mat4.h"
 #include "vk_conv.h" // все GL/VK-противоречия — там, см. шапку
 #include "vec.h"
-#include "vox/vox_mesh.h"
 #include "vox/vox_tex.h"
 
 #ifndef VK_SPV_DIR
@@ -27,10 +26,11 @@
     fprintf(stderr, "vk fail %d (%s:%d)\n", _r, __FILE__, __LINE__); return 0; } } while (0)
 
 typedef struct {
-    int cx, cz, used;
+    int used;
     VkBuffer buf;
     VkDeviceMemory mem;
     int count;
+    float model[16]; // матрица от фидера (чанков ядро не знает)
 } VKMesh;
 
 // Frame UBO std140 — зеркало struct Frame в shaders/vk/vk_mesh.*.
@@ -134,26 +134,10 @@ static float core_fps(RenderCore *rc) {
     return ((VKCoreWrap *)rc->ctx)->core.fpsEma;
 }
 
-static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox16,
-                             const VoxChunk *nb[6]) {
+static int core_upload_voxmesh(RenderCore *rc, int slot, const float *v12,
+                               int nverts, const float *model) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
-    if (!c->ready) return 0;
-    VoxChunk tmp;
-    tmp.cx = cx;
-    tmp.cz = cz;
-    memcpy(tmp.id, vox16, VOX_N);
-    VoxMeshOut m = {0, 0, 0};
-    vox_mesh_build(&tmp, nb, &m);
-    int slot = -1;
-    for (int i = 0; i < VK_MESH_SLOTS; i++)
-        if (c->meshes[i].used && c->meshes[i].cx == cx && c->meshes[i].cz == cz) { slot = i; break; }
-    if (slot < 0)
-        for (int i = 0; i < VK_MESH_SLOTS; i++)
-            if (!c->meshes[i].used) { slot = i; break; }
-    if (slot < 0) {
-        unsigned h = (unsigned)(cx * 73856093 ^ cz * 19349663);
-        slot = (int)(h % VK_MESH_SLOTS);
-    }
+    if (!c->ready || slot < 0 || slot >= VK_MESH_SLOTS) return 0;
     VKMesh *g = &c->meshes[slot];
     if (g->used) {
         // Слот в полёте (2 кадра): сносим только после простоя очереди,
@@ -164,37 +148,28 @@ static int core_upload_chunk(RenderCore *rc, int cx, int cz, const uint8_t *vox1
         g->used = 0;
         g->count = 0;
     }
-    if (!m.n) return 1;
+    if (!v12 || nverts <= 0) return 1; // пусто — слот зачищен
     void *ptr = 0;
-    if (!vk_hbuf(c, (VkDeviceSize)(m.n * sizeof(float)), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                 &g->buf, &g->mem, &ptr)) {
-        vox_mesh_free(&m);
+    size_t n = (size_t)nverts * 12 * sizeof(float);
+    if (!vk_hbuf(c, (VkDeviceSize)n, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                 &g->buf, &g->mem, &ptr))
         return 0;
-    }
-    memcpy(ptr, m.v, m.n * sizeof(float));
-    g->cx = cx;
-    g->cz = cz;
-    g->count = (int)(m.n / 12);
+    memcpy(ptr, v12, n);
+    if (model) memcpy(g->model, model, sizeof g->model);
+    else { Mat4 id = m4id(); memcpy(g->model, id.m, sizeof g->model); }
+    g->count = nverts;
     g->used = 1;
-    vox_mesh_free(&m);
     return 1;
 }
 
-static void core_set_origin(RenderCore *rc, int ox, int oz) {
-    (void)rc; (void)ox; (void)oz;
-}
-
-static void core_unload_chunk(RenderCore *rc, int cx, int cz) {
+static void core_unload_voxmesh(RenderCore *rc, int slot) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
-    for (int i = 0; i < VK_MESH_SLOTS; i++) {
-        if (!c->meshes[i].used || c->meshes[i].cx != cx || c->meshes[i].cz != cz) continue;
-        vkQueueWaitIdle(c->rhi.q); // как в upload: слот может быть в полёте
-        vkDestroyBuffer(c->rhi.dev, c->meshes[i].buf, 0);
-        vkFreeMemory(c->rhi.dev, c->meshes[i].mem, 0);
-        c->meshes[i].used = 0;
-        c->meshes[i].count = 0;
-        break;
-    }
+    if (slot < 0 || slot >= VK_MESH_SLOTS || !c->meshes[slot].used) return;
+    vkQueueWaitIdle(c->rhi.q); // как в upload: слот может быть в полёте
+    vkDestroyBuffer(c->rhi.dev, c->meshes[slot].buf, 0);
+    vkFreeMemory(c->rhi.dev, c->meshes[slot].mem, 0);
+    c->meshes[slot].used = 0;
+    c->meshes[slot].count = 0;
 }
 
 // Разовая команда (аплоад текстур на ините, не во фрейме).
@@ -398,9 +373,11 @@ RenderCore *rc_vk_create(void) {
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;
-    w->api.upload_chunk = core_upload_chunk;
-    w->api.set_origin = core_set_origin;
-    w->api.unload_chunk = core_unload_chunk;
+    w->api.upload_chunk = 0; // сырые воксели ест только DDA (webgpu)
+    w->api.set_origin = 0;
+    w->api.unload_chunk = 0;
+    w->api.upload_voxmesh = core_upload_voxmesh;
+    w->api.unload_voxmesh = core_unload_voxmesh;
     w->api.fps = core_fps;
     return &w->api;
 }
@@ -910,10 +887,8 @@ static void core_frame(RenderCore *rc, const RcView *v) {
                             0, 1, &c->sets[fi], 0, 0);
     for (int i = 0; i < VK_MESH_SLOTS; i++) {
         if (!c->meshes[i].used) continue;
-        Mat4 model = m4translate((float)(c->meshes[i].cx * 16), 0.0f,
-                                 (float)(c->meshes[i].cz * 16));
         vkCmdPushConstants(cb, c->meshPipeLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, 64, model.m);
+                           0, 64, c->meshes[i].model);
         VkDeviceSize off = 0;
         vkCmdBindVertexBuffers(cb, 0, 1, &c->meshes[i].buf, &off);
         vkCmdDraw(cb, (uint32_t)c->meshes[i].count, 1, 0, 0);

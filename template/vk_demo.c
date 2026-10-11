@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include "render_api.h"
+#include "vox_feed.h"
 #include "vox/vox_chunk.h"
 #include "vox/vox_gen.h"
 
@@ -44,26 +45,26 @@ int main(int argc, char **argv) {
         }
     int upDone[GW][GW] = {{0}};
     int upLeft = GW * GW;
+    int cur = 0;
     int frame = 0;
     while (!glfwWindowShouldClose(win)) {
         glfwPollEvents();
         if (maxFrames && frame >= maxFrames) break;
-        if (upLeft > 0) {
-            int up = 0;
-            for (int cz = 0; cz < GW && up < 12; cz++)
-                for (int cx = 0; cx < GW && up < 12; cx++) {
-                    if (upDone[cx][cz]) continue;
-                    int wx = cx - GW / 2, wz = cz - GW / 2;
-                    const VoxChunk *nb[6] = {
-                        findc(wx - 1, wz), findc(wx + 1, wz), 0, 0,
-                        findc(wx, wz - 1), findc(wx, wz + 1),
-                    };
-                    if (rc->upload_chunk(rc, wx, wz, world[cx][cz].id, nb)) {
-                        upDone[cx][cz] = 1;
-                        upLeft--;
-                    }
-                    up++;
-                }
+        // Фидер: мешинг + слоты + модели внутри, по 12 чанков за кадр.
+        for (int k = 0; k < 12 && upLeft > 0; k++) {
+            while (cur < GW * GW && upDone[cur % GW][cur / GW]) cur++;
+            if (cur >= GW * GW) { upLeft = 0; break; }
+            int cx = cur % GW, cz = cur / GW;
+            int wx = cx - GW / 2, wz = cz - GW / 2;
+            const VoxChunk *nb[6] = {
+                findc(wx - 1, wz), findc(wx + 1, wz), 0, 0,
+                findc(wx, wz - 1), findc(wx, wz + 1),
+            };
+            if (vox_feed_one(rc, &world[cx][cz], nb) >= 0) {
+                upDone[cx][cz] = 1;
+                upLeft--;
+            }
+            cur++;
         }
         RcView v;
         memset(&v, 0, sizeof v);

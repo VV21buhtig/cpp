@@ -94,6 +94,12 @@ struct RenderCore {
     void (*set_origin)(RenderCore *rc, int ox, int oz); // чанк texel (0,*,0)
     // Выселение: чанк ушёл из кольца — выкинуть меш/тексели (NULL если не надо).
     void (*unload_chunk)(RenderCore *rc, int cx, int cz);
+    // Готовый textured-меш (12 float: pos3 norm3 uv2 tile ao day night)
+    // в слот + модель. Мешинг (чанки/соседи) — дело фидера, не ядра.
+    // upload=NULL у ядер без textured-мешей.
+    int (*upload_voxmesh)(RenderCore *rc, int slot, const float *v12,
+                          int nverts, const float *model16);
+    void (*unload_voxmesh)(RenderCore *rc, int slot);
     // SDF-объём (VOXEL-домен, NULL если ядро не ест): печёный R8 16x64x16,
     // байт = clamp(d/12,-1,1)*0.5+0.5. Тороид на ядре, швы решает app.
     int (*upload_sdf_chunk)(RenderCore *rc, int cx, int cz, const uint8_t *sdf16);

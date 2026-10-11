@@ -93,7 +93,7 @@ target_include_directories(lua_demo PRIVATE
 target_link_libraries(lua_demo PRIVATE glfw OpenGL::GL lua m)
 target_compile_options(lua_demo PRIVATE -Wall -Wextra)
 # Живое ядро орфана 4: gl-растр на RHI (меши greedy, статике 9x9 с соседями).
-add_executable(gl_demo ../template/gl_demo.c gl_core.c corelib.c rhi_gl.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c third-party/glad/gl.c)
+add_executable(gl_demo ../template/gl_demo.c gl_core.c corelib.c rhi_gl.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c third-party/glad/gl.c)
 target_include_directories(gl_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
@@ -110,7 +110,7 @@ foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
   list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
 endforeach()
 # Живое ядро орфана 6: vk-растр на RHI (меши greedy, статика 9x9 с соседями).
-add_executable(vk_demo ../template/vk_demo.c vk_core.c corelib.c rhi_vk.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c ${VK_SPV})
+add_executable(vk_demo ../template/vk_demo.c vk_core.c corelib.c rhi_vk.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c ${VK_SPV})
 target_compile_definitions(vk_demo PRIVATE
   VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
 target_include_directories(vk_demo PRIVATE
