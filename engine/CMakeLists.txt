@@ -92,3 +92,10 @@ target_include_directories(lua_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(lua_demo PRIVATE glfw OpenGL::GL lua m)
 target_compile_options(lua_demo PRIVATE -Wall -Wextra)
+# Живое ядро орфана 4: gl-растр на RHI (меши greedy, статике 9x9 с соседями).
+add_executable(gl_demo gl_demo.c gl_core.c corelib.c rhi_gl.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c third-party/glad/gl.c)
+target_include_directories(gl_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(gl_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(gl_demo PRIVATE -Wall -Wextra)
