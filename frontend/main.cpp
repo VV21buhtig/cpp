@@ -154,6 +154,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     vpTabs->addTab(vp, "Viewport Scene");
     vpTabs->setTabsClosable(true);
     win->setCentralWidget(vpTabs);
+    win->setProperty("viewport", (qulonglong)vp);
     if (!vp->init(backend)) {
         con->log("viewport: engine init FAILED (see terminal)");
     } else {
@@ -304,7 +305,64 @@ int main(int argc, char **argv) {
             app.quit();
         });
     }
-    // Скриншот-тест редактора: ED_SHOT=путь -> снять активное окно, выйти.
+    // Матричный прогон: ED_MATRIX=1 -> бэкенды по 30с каждый с вердиктом.
+    // Окна видно вживую (без offscreen), орбита крутится сама.
+    // Вердикты в stdout с flush (stderr в этой среде теряется) + кадры фаз.
+    printf("matrix: setup editor=%d\n", !!editor);
+    fflush(stdout);
+    if (getenv("ED_MATRIX") && getenv("ED_MATRIX")[0] && editor) {
+        Viewport *mvp = (Viewport *)editor->property("viewport").toULongLong();
+        struct Mx {
+            Viewport *vp;
+            int phases[3];
+            const char *names[3];
+            int pi;
+            int f0;
+        };
+        auto *mx = new Mx{mvp, {2, 3, 1}, {"OpenGL", "Vulkan", "WebGPU"}, 0, 0};
+        if (mvp) {
+            mvp->setPlaying(true);
+            mx->f0 = mvp->frameCount();
+        }
+        auto *mt = new QTimer(editor);
+        QObject::connect(mt, &QTimer::timeout, [mx, &app, editor]() mutable {
+            if (mx->vp) {
+                int f1 = mx->vp->frameCount();
+                bool adv = f1 > mx->f0;
+                bool pic = mx->vp->hasPicture();
+                printf("matrix %s: frames %d->%d %s %s\n", mx->names[mx->pi], mx->f0, f1,
+                       adv ? "ADVANCE-OK" : "STUCK-FAIL",
+                       mx->pi == 0 ? (pic ? "PICTURE-OK" : "BLACK-FAIL") : "(no frame_to)");
+                fflush(stdout);
+                // Кадр фазы для доказательства (ED_MATRIX_SHOTDIR=/tmp/x).
+                if (getenv("ED_MATRIX_SHOTDIR") && getenv("ED_MATRIX_SHOTDIR")[0] && editor) {
+                    QString sp = QString("%1/phase%2-%3.png")
+                                     .arg(getenv("ED_MATRIX_SHOTDIR"))
+                                     .arg(mx->pi)
+                                     .arg(mx->names[mx->pi]);
+                    QPixmap px = editor->grab();
+                    if (!px.isNull() && px.save(sp)) {
+                        printf("matrix shot: %s\n", sp.toUtf8().constData());
+                        fflush(stdout);
+                    }
+                }
+            }
+            mx->pi++;
+            if (mx->pi >= 3) {
+                printf("matrix DONE\n");
+                fflush(stdout);
+                app.quit();
+                return;
+            }
+            if (mx->vp && mx->vp->switchBackend(mx->phases[mx->pi])) {
+                mx->vp->setPlaying(true);
+                mx->f0 = mx->vp->frameCount();
+            }
+        });
+        mt->start(getenv("ED_MATRIX_MS") && getenv("ED_MATRIX_MS")[0]
+                      ? atoi(getenv("ED_MATRIX_MS"))
+                      : 30000);
+    }
     if (getenv("ED_SHOT") && getenv("ED_SHOT")[0]) {
         QString sp = QString::fromUtf8(getenv("ED_SHOT"));
         QTimer::singleShot(4000, [sp, &app, &editor]() {

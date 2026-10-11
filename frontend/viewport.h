@@ -19,6 +19,10 @@ public:
     void setFov(float f) { camFov = f; }
     float fov() const { return camFov; }
     void setViewMode(int m) { viewMode = m; }
+    // Матричный прогон: кадров отрисовано (кадр растёт только при рендере).
+    int frameCount() const { return frame; }
+    // Есть ли картинка (центр ярче порога)? Для автопроверки стенда.
+    bool hasPicture() const;
     // Пересадка на другой бэкенд (панель активности): ядра пересоздаются,
     // мир перезаливается. 1 ок.
     bool switchBackend(int be);

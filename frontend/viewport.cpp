@@ -4,6 +4,7 @@
 #include "viewport.h"
 #include <QPainter>
 #include <QPaintEvent>
+#include <QRgb>
 #include <GLFW/glfw3.h>
 #include "render_api.h"
 #include "rtarget.h"
@@ -298,6 +299,20 @@ void Viewport::renderOnce() {
 void Viewport::tick() {
     renderOnce();
     update();
+}
+
+bool Viewport::hasPicture() const {
+    if (img.isNull()) return false;
+    // Центр 100x100 ярче порога (небо/террейн, не чернота).
+    long sum = 0;
+    int n = 0;
+    for (int y = 310; y < 410; y += 2)
+        for (int x = 590; x < 690; x += 2) {
+            QRgb p = img.pixel(x, y);
+            sum += qRed(p) + qGreen(p) + qBlue(p);
+            n++;
+        }
+    return n > 0 && sum / n > 36; // средняя >12 на канал
 }
 
 // Виджет -> пиксели кадра 1280x720 (с учётом letterbox).
