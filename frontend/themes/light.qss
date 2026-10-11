@@ -26,3 +26,5 @@ QScrollBar::handle:vertical { background: #CCCCCC; min-height: 20px; }
 QStatusBar { background: #007ACC; color: white; }
 QStatusBar::item { border: none; }
 QSplitter::handle { background: #CCCCCC; }
+QTreeView::item, QListView::item { padding: 3px 4px; }
+QToolBar QToolButton:checked { background: #C4C4C4; color: black; }
