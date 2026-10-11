@@ -23,5 +23,5 @@ private:
 
 QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con);
 QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con);
-QWidget *makeAssets(QWidget *parent, ConsolePanel *con);
+QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot);
 #endif

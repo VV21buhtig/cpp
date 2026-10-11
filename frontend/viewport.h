@@ -12,7 +12,7 @@ class Viewport : public QWidget {
 public:
     explicit Viewport(QWidget *parent = nullptr);
     ~Viewport() override;
-    bool init();          // движок + мир + цель; false если GL нет
+    bool init(int backend); // движок + мир + цель; false если бэкенда нет
     void setPlaying(bool on);
     bool isPlaying() const { return playing; }
     double fps() const { return fpsEma; }
@@ -30,6 +30,8 @@ private:
     struct RcTarget *target = nullptr;
     unsigned presentProg = 0, presentVao = 0;
     QImage img;
+    int placeheld = 0; // 1 если кадра нет (бэкенд без frame_to): рисуем текст
+    int backend = 2; // выбранный в хабе (1 webgpu, 3 vk, 2 gl)
     QTimer *timer = nullptr;
     bool playing = false;
     int frame = 0;

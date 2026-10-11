@@ -13,7 +13,7 @@ if(NOT EXISTS ${ENGINE_LIB})
   message(FATAL_ERROR "no libengine.so: собери engine (ebuild) прежде чем editor")
 endif()
 
-add_executable(editor main.cpp viewport.cpp panels.cpp)
+add_executable(editor main.cpp viewport.cpp panels.cpp hub.cpp)
 target_include_directories(editor PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../engine

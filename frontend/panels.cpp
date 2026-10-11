@@ -142,7 +142,7 @@ QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con) {
     return w;
 }
 
-QWidget *makeAssets(QWidget *parent, ConsolePanel *con) {
+QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) {
     auto *w = new QWidget(parent);
     auto *lay = new QVBoxLayout(w);
     lay->setContentsMargins(2, 2, 2, 2);
@@ -155,13 +155,14 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con) {
     lay->addLayout(top);
     auto *list = new QListWidget(w);
     lay->addWidget(list);
-    const char *depot = "./depot";
+    // Депо проекта из хаба (папка проекта + /depot). Движок читает по ID.
+    QByteArray dep = depot.toUtf8();
     QDir().mkpath(depot);
     auto refresh = [=]() {
         list->clear();
-        int n = asset_count(depot);
+        int n = asset_count(dep.constData());
         // Список из index.txt парсим тем же форматом что движок пишет.
-        FILE *f = fopen("./depot/index.txt", "rb");
+        FILE *f = fopen((depot + "/index.txt").toUtf8().constData(), "rb");
         if (!f) {
             if (con && n < 0) con->log("depot: empty (import files to begin)");
             return;
@@ -188,7 +189,7 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con) {
     QObject::connect(imp, &QPushButton::clicked, [=]() {
         QString fn = QFileDialog::getOpenFileName(w, "Import asset");
         if (fn.isEmpty()) return;
-        uint64_t id = asset_import(depot, fn.toUtf8().constData());
+        uint64_t id = asset_import(dep.constData(), fn.toUtf8().constData());
         if (con) {
             if (id) con->log(QString("imported %1 id=%2").arg(fn).arg((qlonglong)id, 16, 16, QChar('0')));
             else con->log(QString("import FAILED %1").arg(fn));

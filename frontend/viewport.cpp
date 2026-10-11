@@ -13,8 +13,6 @@
 #include "vox/vox_gen.h"
 #include "vox_feed.h"
 
-RenderCore *rc_gl_create(void);
-
 Viewport::Viewport(QWidget *parent) : QWidget(parent) {
     setMinimumSize(480, 270);
     timer = new QTimer(this);
@@ -33,15 +31,21 @@ Viewport::~Viewport() {
     // пары дескрипторов на выход — честно зафиксировано, не скрыто).
 }
 
-bool Viewport::init() {
+bool Viewport::init(int be) {
+    backend = be;
     if (!glfwInit()) return false;
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    if (backend == 2) { // GL: контекст 4.5
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    } else { // WebGPU/Vulkan: без API (поверхность создаст RHI ядра)
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow *win = glfwCreateWindow(1280, 720, "ed-viewport", 0, 0);
     if (!win) return false;
-    rc = rc_gl_create();
+    // Ядро по таблице «домен x бэкенд» (воксельный домен, бэкенд из хаба).
+    rc = rc_create_by(1u, (unsigned)backend);
     if (!rc || !rc->init(rc, win)) return false;
     world = calloc(GW * GW, sizeof(VoxChunk));
     if (!world) return false;
@@ -53,13 +57,16 @@ bool Viewport::init() {
             vox_gen(c, 1337);
         }
     target = (RcTarget *)calloc(1, sizeof(RcTarget));
-    if (!target || !comp_target_gl_new(target, 1280, 720)) return false;
-    presentProg = rhi_gl_prog("engine/shaders/blit/blit.vert",
-                              "engine/shaders/blit/blit.frag");
-    presentVao = rhi_gl_empty_vao();
+    // Цель и показ — только под GL (frame_to есть только там).
+    if (backend == 2) {
+        if (!target || !comp_target_gl_new(target, 1280, 720)) return false;
+        presentProg = rhi_gl_prog("engine/shaders/blit/blit.vert",
+                                  "engine/shaders/blit/blit.frag");
+        presentVao = rhi_gl_empty_vao();
+    }
     img = QImage(1280, 720, QImage::Format_RGB888);
     img.fill(Qt::black);
-    return presentProg && presentVao;
+    return true;
 }
 
 void Viewport::setPlaying(bool on) {
@@ -77,18 +84,26 @@ static const VoxChunk *vfind(void *world, int cx, int cz) {
 }
 
 void Viewport::renderOnce() {
-    if (!rc || !target) return;
-    // Догрузка мира по 12 чанков за тик (фидер движка).
+    if (!rc) return;
+    int isGL = (backend == 2);
+    // Догрузка мира по 12 чанков за тик.
+    // DDA (webgpu) ест сырьё, растр (gl/vk) — через фидер движка.
     for (int k = 0; k < 12 && fedLeft > 0; k++) {
         while (fedCur < GW * GW && fed[fedCur]) fedCur++;
         if (fedCur >= GW * GW) { fedLeft = 0; break; }
         int cx = fedCur % GW, cz = fedCur / GW;
         VoxChunk *c = &((VoxChunk *)world)[cz * GW + cx];
-        const VoxChunk *nb[6] = {
-            vfind(world, c->cx - 1, c->cz), vfind(world, c->cx + 1, c->cz), 0, 0,
-            vfind(world, c->cx, c->cz - 1), vfind(world, c->cx, c->cz + 1),
-        };
-        if (vox_feed_one(rc, c, nb) >= 0) { fed[fedCur] = 1; fedLeft--; }
+        int ok = 0;
+        if (backend == 1 && rc->upload_chunk) {
+            ok = rc->upload_chunk(rc, c->cx, c->cz, c->id, 0);
+        } else {
+            const VoxChunk *nb[6] = {
+                vfind(world, c->cx - 1, c->cz), vfind(world, c->cx + 1, c->cz), 0, 0,
+                vfind(world, c->cx, c->cz - 1), vfind(world, c->cx, c->cz + 1),
+            };
+            ok = vox_feed_one(rc, c, nb) >= 0;
+        }
+        if (ok) { fed[fedCur] = 1; fedLeft--; }
         fedCur++;
     }
     RcView v;
@@ -109,16 +124,25 @@ void Viewport::renderOnce() {
     v.resW = 1280;
     v.resH = 720;
     v.sunDir.x = 0.4f; v.sunDir.y = 0.75f; v.sunDir.z = 0.3f;
-    if (rc->frame_to) rc->frame_to(rc, &v, target);
-    // Цель -> QImage (верх GL снизу: строки флипаем).
-    glBindFramebuffer(GL_FRAMEBUFFER, target->fbo);
-    static uint8_t row[1280 * 3];
-    for (int y = 0; y < 720; y++) {
-        glReadPixels(0, y, 1280, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
-        uint8_t *dst = img.scanLine(719 - y);
-        memcpy(dst, row, sizeof row);
+    if (isGL && target && rc->frame_to) {
+        rc->frame_to(rc, &v, target);
+        // Цель -> QImage (верх GL снизу: строки флипаем).
+        glBindFramebuffer(GL_FRAMEBUFFER, target->fbo);
+        static uint8_t row[1280 * 3];
+        for (int y = 0; y < 720; y++) {
+            glReadPixels(0, y, 1280, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
+            uint8_t *dst = img.scanLine(719 - y);
+            memcpy(dst, row, sizeof row);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    } else {
+        // Не-GL: ядра рисуют в своё скрытое окно (невидимо) — держим
+        // устройство живым, а в панель пишем заглушку. frame_to для них —
+        // следующий шаг, честно зафиксировано.
+        rc->frame(rc, &v);
+        img.fill(Qt::black);
+        placeheld = 1;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     double dt = glfwGetTime() - t0;
     if (dt > 0) {
         double fps = 1.0 / dt;
@@ -135,7 +159,12 @@ void Viewport::tick() {
 void Viewport::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.fillRect(rect(), Qt::black);
-    if (!img.isNull()) {
+    if (placeheld) {
+        // Честная заглушка вместо чёрного экрана: бэкенд жив, вьюпорта нет.
+        p.setPen(Qt::yellow);
+        p.drawText(rect(), Qt::AlignCenter,
+                   QString("backend %1: core runs, viewport embedding later\n(frame_to pending)").arg(backend));
+    } else if (!img.isNull()) {
         QSize s = img.size().scaled(size(), Qt::KeepAspectRatio);
         QPoint at((width() - s.width()) / 2, (height() - s.height()) / 2);
         p.drawImage(QRect(at, s), img);
