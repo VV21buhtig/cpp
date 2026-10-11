@@ -13,12 +13,13 @@ mkbuild() {
 }
 mkdemo() {
     ROOT=$1
+    BE=${2:-2}
     PROJ=$ROOT/run/demo
     mkdir -p "$PROJ/depot"
-    cat > "$PROJ/project.txt" <<'EOF'
+    cat > "$PROJ/project.txt" <<EOF
 name=Neon Voxel City
 template=Voxel Terrain
-backend=1
+backend=$BE
 version=0.8.2
 EOF
     cat > "$PROJ/scene.txt" <<'EOF'

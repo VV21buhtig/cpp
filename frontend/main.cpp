@@ -288,6 +288,11 @@ int main(int argc, char **argv) {
         editor = openEditor(project, backend);
     });
     hub.show();
+    // Нормальный вход: ED_HUB_ADD=путь -> подселить проект в реестр хаба
+    // (карточка с миниатюрой, открытие даблкликом). ED_PROJECT остаётся
+    // только для безголовых прогонов (матрица/скриншоты), не для людей.
+    if (getenv("ED_HUB_ADD") && getenv("ED_HUB_ADD")[0])
+        hub.registerProject(QString::fromUtf8(getenv("ED_HUB_ADD")));
     // Автооткрытие для тестов: ED_PROJECT=путь ED_BACKEND=1/3/2.
     if (getenv("ED_PROJECT") && getenv("ED_PROJECT")[0]) {
         QString pr = QString::fromUtf8(getenv("ED_PROJECT"));

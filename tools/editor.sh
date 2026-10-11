@@ -9,9 +9,12 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 . "$ROOT/tools/mkdemo.sh"
 mkbuild "$ROOT"
-PROJ=$(mkdemo "$ROOT")
+# Арг = бэкенд карточки в хабе (2 GL, 3 VK, 1 WebGPU).
+PROJ=$(mkdemo "$ROOT" "$BE")
 if [ -z "$DISPLAY" ]; then
     echo "need DISPLAY (окно редактора некуда показать)" >&2
     exit 1
 fi
-ED_PROJECT=$PROJ ED_BACKEND=$BE ./frontend/build/editor
+# Нормальный вход: через Хаб (карточка демо-проекта, даблклик).
+# ED_PROJECT тут НЕ ставим — это шорткат безголовых прогонов, не для людей.
+ED_HUB_ADD=$PROJ ./frontend/build/editor

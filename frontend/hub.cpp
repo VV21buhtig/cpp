@@ -17,6 +17,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QDateTime>
+#include <cstring>
 
 // Индекс комбо -> значение бэкенда (0 WebGPU, 1 Vulkan, 2 OpenGL в списке).
 static int hubBackendValue(int idx) {
@@ -203,8 +204,47 @@ void HubWindow::saveRegistry() {
     }
 }
 
-void HubWindow::refresh() {
-    grid->clear();
+// Одно значение key= из project.txt (пусто если нет).
+static QString projValue(const QString &path, const char *key) {
+    FILE *f = fopen((path + "/project.txt").toUtf8().constData(), "rb");
+    if (!f) return "";
+    char line[256];
+    size_t kl = strlen(key);
+    QString v;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, key, kl) && line[kl] == '=') {
+            char *nl = strchr(line, '\n');
+            if (nl) *nl = 0;
+            v = QString::fromUtf8(line + kl + 1);
+            break;
+        }
+    }
+    fclose(f);
+    return v;
+}
+
+void HubWindow::registerProject(const QString &path) {
+    if (path.isEmpty()) return;
+    {
+        // Без project.txt — не проект, молча мимо.
+        FILE *f = fopen((path + "/project.txt").toUtf8().constData(), "rb");
+        if (!f) return;
+        fclose(f);
+    }
+    for (int i = 0; i < paths.size(); i++)
+        if (paths[i] == path) return; // уже в реестре
+    QString nm = projValue(path, "name");
+    if (nm.isEmpty()) nm = QDir(path).dirName();
+    int be = projValue(path, "backend").toInt();
+    if (be < 1 || be > 3) be = 2;
+    names << nm;
+    paths << path;
+    backends << be;
+    saveRegistry();
+    refresh();
+}
+
+void HubWindow::refresh() {    grid->clear();
     for (int i = 0; i < names.size(); i++) {
         // Карточка: миниатюра 70% + текст 30% (имя, версия, дата).
         auto *it = new QListWidgetItem();
