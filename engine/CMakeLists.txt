@@ -4,6 +4,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(glfw3 REQUIRED)
+find_package(OpenGL REQUIRED)
 find_library(VULKAN_LIB vulkan REQUIRED)
 
 # База инструмента: окно+ввод+цикл, слепая к контенту. Ядра линкует игра.
@@ -26,10 +27,17 @@ add_executable(comp_test comp_test.c comp.c)
 target_include_directories(comp_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(comp_test PRIVATE -Wall -Wextra)
 # Тест RHI: GL-контекст + VK-девайс, без контента.
-add_executable(rhi_test rhi_test.c rhi_vk.c third-party/glad/gl.c)
+add_executable(rhi_test rhi_test.c rhi_vk.c rhi_gl.c third-party/glad/gl.c)
 target_include_directories(rhi_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
 target_link_libraries(rhi_test PRIVATE glfw ${VULKAN_LIB} m)
 target_compile_options(rhi_test PRIVATE -Wall -Wextra)
+# Живое ядро орфана: vec на RHI (первый переезд домена).
+add_executable(vec_demo vec_demo.c vec_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(vec_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(vec_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(vec_demo PRIVATE -Wall -Wextra)

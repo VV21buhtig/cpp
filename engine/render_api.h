@@ -56,6 +56,7 @@ typedef struct {
 } RcVecShape;
 
 typedef struct RenderCore RenderCore;
+typedef struct RcTarget RcTarget; // opaque цель кадра (FBO/картинка), создаёт композитор
 // Бэкенд ядра (на чём рисуем). Только три: Metal нет (не на чем запускать),
 // DX12 не нужен (Vulkan удобнее и шире), DX11 хуже GL. Точка.
 #define RC_BACKEND_NONE 0
@@ -72,6 +73,10 @@ struct RenderCore {
     void (*shutdown)(RenderCore *rc);
     // Кадр мира из вида. Внутри: bake-if-needed, заливки, сабмит, present.
     void (*frame)(RenderCore *rc, const RcView *v);
+    // Кадр НЕ на экран, а в цель (композитор L3: несколько доменов в кадре).
+    // NULL = только свой экран (такие ядра в композицию не берём).
+    // Цель создаёт композитор под бэкенд (GL: FBO; VK: позже).
+    int (*frame_to)(RenderCore *rc, const RcView *v, RcTarget *t);
     // --- Домен VOXEL (NULL если нет RC_CAP_VOXEL) ---
     // Стриминг: app решает ЧТО (dirty из мира), ядро — КАК.
     // nb[6]: соседи (-x,+x,-y,+y,-z,+z) для швов, NULL = воздух.
