@@ -56,3 +56,8 @@ target_include_directories(sdf_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(sdf_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
+# Тест L4: гравитация + часы фиксированного шага, чистый CPU.
+add_executable(phys_test phys_test.c)
+target_include_directories(phys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(phys_test PRIVATE m)
+target_compile_options(phys_test PRIVATE -Wall -Wextra)
