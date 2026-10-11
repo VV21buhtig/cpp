@@ -85,3 +85,10 @@ target_include_directories(vox_demo PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_link_libraries(vox_demo PRIVATE glfw webgpu m)
 target_compile_options(vox_demo PRIVATE -Wall -Wextra)
+# Lua-демо: геймплей на скриптах (vec.lua), рендер в движке.
+add_executable(lua_demo lua_demo.c vec_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(lua_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(lua_demo PRIVATE glfw OpenGL::GL lua m)
+target_compile_options(lua_demo PRIVATE -Wall -Wextra)
