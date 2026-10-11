@@ -11,6 +11,8 @@
 #include <QTabWidget>
 #include <QLabel>
 #include <QStatusBar>
+#include <QTimer>
+#include <QPixmap>
 #include "panels.h"
 #include "viewport.h"
 
@@ -100,5 +102,22 @@ int main(int argc, char **argv) {
     win.statusBar()->showMessage("engine: libengine.so | backend: GL voxel-raster");
     win.show();
     con->log("editor skeleton ready");
+    // ED_PLAY=1: сразу играть (скриншот-тест без кликов).
+    if (getenv("ED_PLAY") && getenv("ED_PLAY")[0]) {
+        vp->setPlaying(true);
+        con->log("autoplay");
+    }
+    // Скриншот-тест: ED_SHOT=путь -> показать, снять, выйти (для offscreen).
+    if (getenv("ED_SHOT") && getenv("ED_SHOT")[0]) {
+        QString sp = QString::fromUtf8(getenv("ED_SHOT"));
+        // sp — ЗНАЧЕНИЕМ: блок if кончится раньше, чем сработает таймер.
+        QTimer::singleShot(2000, [sp, &win, &app, con]() {
+            QPixmap px = win.grab();
+            fprintf(stderr, "edshot: null=%d size=%dx%d -> %s\n", px.isNull(),
+                    px.width(), px.height(), sp.toUtf8().constData());
+            if (!px.isNull() && px.save(sp)) con->log(QString("shot: %1").arg(sp));
+            app.quit();
+        });
+    }
     return app.exec();
 }

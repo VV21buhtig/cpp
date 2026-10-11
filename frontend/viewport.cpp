@@ -94,11 +94,17 @@ void Viewport::renderOnce() {
     RcView v;
     memset(&v, 0, sizeof v);
     double t0 = glfwGetTime();
-    v.camPos.x = 8 + 90.0f * cosf(camYaw * 3.0f);
+    // Орбита вокруг центра мира (8,26,8), взгляд всегда в него.
+    double a = frame * 0.004;
+    v.camPos.x = 8 + 90.0f * (float)cos(a);
     v.camPos.y = 66.0f;
-    v.camPos.z = 8 + 90.0f * sinf(camYaw * 3.0f);
-    v.yaw = camYaw;
-    v.pitch = camPitch;
+    v.camPos.z = 8 + 90.0f * (float)sin(a);
+    {
+        float dx = 8 - v.camPos.x, dy = 26.0f - 66.0f, dz = 8 - v.camPos.z;
+        float dl = sqrtf(dx * dx + dy * dy + dz * dz);
+        v.yaw = (float)atan2(dz, dx);
+        v.pitch = (float)asin(dy / dl);
+    }
     v.fov = camFov;
     v.resW = 1280;
     v.resH = 720;
