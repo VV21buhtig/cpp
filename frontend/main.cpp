@@ -38,7 +38,10 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     (void)assets;
     (void)build;
     (void)help;
-    file->addAction("Save Project", [con]() { con->log("save: scene dump not yet (skeleton)"); });
+    file->addAction("Save Project", [con, project]() {
+        scene_save(project);
+        con->log(QString("saved %1/scene.txt").arg(project));
+    });
     help->addAction("About", [con]() { con->log("voxengine editor skeleton on libengine.so"); });
 
     auto *bar = win->addToolBar("main");
@@ -61,6 +64,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     });
 
     auto *hier = new QDockWidget("Hierarchy", win);
+    scene_load(project); // проект -> мир (до построения дерева!)
     hier->setWidget(makeHierarchy(hier, con));
     win->addDockWidget(Qt::LeftDockWidgetArea, hier);
 
@@ -103,6 +107,14 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     if (getenv("ED_PLAY") && getenv("ED_PLAY")[0]) {
         vp->setPlaying(true);
         con->log("autoplay");
+    }
+    // Тест сейва: ED_SAVE=1 -> сохранить проект через секунду.
+    if (getenv("ED_SAVE") && getenv("ED_SAVE")[0]) {
+        QString pr = project;
+        QTimer::singleShot(1000, [pr, con]() {
+            scene_save(pr);
+            con->log(QString("saved %1/scene.txt").arg(pr));
+        });
     }
     return win;
 }

@@ -142,8 +142,7 @@ QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con) {
     return w;
 }
 
-QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) {
-    auto *w = new QWidget(parent);
+QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) {    auto *w = new QWidget(parent);
     auto *lay = new QVBoxLayout(w);
     lay->setContentsMargins(2, 2, 2, 2);
     auto *top = new QHBoxLayout();
@@ -198,4 +197,69 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) {
     });
     refresh();
     return w;
+}
+
+// --- Проект: scene.txt туда-обратно ---
+void scene_save(const QString &projectDir) {
+    ensureWorld(nullptr);
+    QString fn = projectDir + "/scene.txt";
+    FILE *f = fopen(fn.toUtf8().constData(), "w");
+    if (!f) return;
+    // Индекс в файле = порядок списка (родители — индексами в него).
+    Entity list[1024];
+    int n = sc_list(&g_world, list, 1024);
+    int idxOf[1025];
+    memset(idxOf, -1, sizeof idxOf);
+    for (int i = 0; i < n; i++) {
+        int id = (int)list[i];
+        if (id >= 1 && id <= 1024) idxOf[id] = i;
+    }
+    for (int i = 0; i < n; i++) {
+        // Родитель — индексом в этом же файле (-1 корень).
+        int pi = -1;
+        int internal = (int)list[i] - 1;
+        if (internal >= 0 && internal < 1024 && g_world.parent[internal] >= 0) {
+            int pe = g_world.parent[internal] + 1;
+            if (pe >= 1 && pe <= 1024) pi = idxOf[pe];
+        }
+        ScTransform t = sc_get(&g_world, list[i]);
+        fprintf(f, "e %s %d %d %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+                sc_name(&g_world, list[i]), pi, sc_visible(&g_world, list[i]),
+                t.pos.x, t.pos.y, t.pos.z, t.rot.x, t.rot.y, t.rot.z,
+                t.scale.x, t.scale.y, t.scale.z);
+    }
+    fclose(f);
+}
+
+void scene_load(const QString &projectDir) {
+    ensureWorld(nullptr);
+    QString fn = projectDir + "/scene.txt";
+    FILE *f = fopen(fn.toUtf8().constData(), "rb");
+    if (!f) return; // нет файла — дефолтные сущности скелета
+    // Чистим текущих.
+    Entity list[1024];
+    int n = sc_list(&g_world, list, 1024);
+    for (int i = 0; i < n; i++) sc_kill(&g_world, list[i]);
+    // Проход 1: сущности. Проход 2: родители (порядок в файле любой).
+    Entity ids[1024];
+    int wantP[1024];
+    int nn = 0;
+    char name[64];
+    int pidx, vis;
+    ScTransform t;
+    while (nn < 1024 &&
+           fscanf(f, " e %63s %d %d %f %f %f %f %f %f %f %f %f", name, &pidx, &vis,
+                  &t.pos.x, &t.pos.y, &t.pos.z, &t.rot.x, &t.rot.y, &t.rot.z,
+                  &t.scale.x, &t.scale.y, &t.scale.z) == 12) {
+        Entity e = sc_spawn(&g_world, name);
+        if (!e) break;
+        sc_set(&g_world, e, &t);
+        sc_show(&g_world, e, vis);
+        ids[nn] = e;
+        wantP[nn] = pidx;
+        nn++;
+    }
+    fclose(f);
+    for (int i = 0; i < nn; i++)
+        if (wantP[i] >= 0 && wantP[i] < nn) sc_parent(&g_world, ids[i], ids[wantP[i]]);
 }
