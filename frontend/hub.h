@@ -1,8 +1,8 @@
 #ifndef FRONT_HUB_H
 #define FRONT_HUB_H
-// Хаб проектов (Unity Hub): первое окно eedit. Список проектов из реестра
-// (~/.config/voxengine/projects.ini), New Project (имя+шаблон+API),
-// Open -> callback (projectPath, backend) наружу. Без Q_OBJECT: лямбды.
+// Хаб проектов: сайдбар + сетка карточек (как в референсе).
+// Проекты из реестра, миниатюра = первый PNG депо (или буква),
+// версия и дата из project.txt / mtime. Без Q_OBJECT: лямбды.
 #include <QWidget>
 #include <QString>
 #include <functional>
@@ -10,7 +10,6 @@
 class QListWidget;
 class QComboBox;
 class QLineEdit;
-class ConsolePanel;
 
 class HubWindow : public QWidget {
 public:
@@ -20,27 +19,15 @@ public:
 
 private:
     OpenFn onOpen;
-    QListWidget *list = nullptr;
+    QListWidget *grid = nullptr;
     QComboBox *apiBox = nullptr;
     QComboBox *tplBox = nullptr;
     QLineEdit *nameEdit = nullptr;
-    ConsolePanel *con = nullptr;
+    QLineEdit *searchEdit = nullptr;
     void loadRegistry();
     void saveRegistry();
-    // Реестр в памяти: имена + пути + бэкенды.
     QStringList names, paths;
     QList<int> backends;
+    QStringList versions;
 };
-
-inline int hubBackendIndex(int be) {
-    if (be == 3) return 1; // VK
-    if (be == 2) return 2; // GL
-    return 0;              // WebGPU (дефолт)
-}
-
-inline int hubBackendValue(int idx) {
-    if (idx == 1) return 3;
-    if (idx == 2) return 2;
-    return 1;
-}
 #endif
