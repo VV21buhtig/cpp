@@ -41,3 +41,10 @@ target_include_directories(vec_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(vec_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(vec_demo PRIVATE -Wall -Wextra)
+# Песочница Noita-like: pix-ядро + клеточные частицы (первая L4-физика).
+add_executable(sand_demo sand_demo.c pix_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(sand_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(sand_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(sand_demo PRIVATE -Wall -Wextra)
