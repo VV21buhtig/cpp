@@ -48,7 +48,7 @@ add_library(engine_shared SHARED
   rhi_gl.c rhi_vk.c rhi_webgpu.c
   vec_core.c pix_core.c sdf_core.c mesh_core.c gl_core.c vk_core.c webgpu_core.c
   vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c
-  sky_lut.c asset.c third-party/glad/gl.c
+  sky_lut.c asset.c scene.c third-party/glad/gl.c
   ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.1.0 SOVERSION 0)
@@ -131,3 +131,8 @@ target_compile_options(asset_test PRIVATE -Wall -Wextra)
 add_executable(dlopen_test dlopen_test.c)
 target_include_directories(dlopen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(dlopen_test PRIVATE -Wall -Wextra)
+# Тест сцены: иерархия, трансформы, пул. Без GPU.
+add_executable(scene_test scene_test.c scene.c)
+target_include_directories(scene_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(scene_test PRIVATE engine_shared m)
+target_compile_options(scene_test PRIVATE -Wall -Wextra)
