@@ -1,5 +1,10 @@
 #ifndef RENDER_API_H
 #define RENDER_API_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Ядра рендера: РАЗНЫЕ движки на выбор (воксель-DDA, воксель-растр, SDF,
 // вектор, пиксели). Общее только рамка кадра (RcView + init/frame/fps),
 // входы у каждого домена свои. Ядро объявляет caps, app/редактор льют то,
@@ -137,4 +142,8 @@ const char *eng_version(void);
 void rc_register(const char *name, unsigned domain, unsigned backend,
                  RenderCore *(*fn)(void));
 void rc_destroy(RenderCore *rc);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // RENDER_API_H

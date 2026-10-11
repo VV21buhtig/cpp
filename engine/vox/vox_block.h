@@ -1,5 +1,10 @@
 #ifndef VOX_BLOCK_H
 #define VOX_BLOCK_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Типы блоков. id влезает в u8, таблица свойств — тут же.
 #include <stdint.h>
 
@@ -34,4 +39,8 @@ static inline int vox_tile(uint8_t id, int axis, int sign) {
     if (id == B_LEAVES) return 6;
     return 3; // stone, bedrock, sand, остальное
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // VOX_BLOCK_H

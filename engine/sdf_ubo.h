@@ -1,5 +1,10 @@
 #ifndef SDF_UBO_H
 #define SDF_UBO_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // CPU-зеркало UBO под WGSL из renderer.js-прототипа.
 // WGSL std140: каждый vec3f+f32 = 16Б, весь UBO 48Б. Проверяем статически.
 #include "vec.h"
@@ -31,4 +36,8 @@ static inline Vec3 sdf_sun(float t) {
     Vec3 s = { cosf(a), sinf(a), 0.35f };
     return v3_norm(s);
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // SDF_UBO_H

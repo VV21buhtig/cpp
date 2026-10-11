@@ -1,5 +1,10 @@
 #ifndef CORE_MAT4_H
 #define CORE_MAT4_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Минимальные mat4 column-major под OpenGL ([-1,1] глубина).
 // Общие для растровых ядер (GL сейчас, Vulkan потом).
 #include <math.h>
@@ -119,4 +124,8 @@ static inline Mat4 m4inv(const Mat4 *a) {
     for (int i = 0; i < 16; i++) o.m[i] = inv[i] / det;
     return o;
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // CORE_MAT4_H

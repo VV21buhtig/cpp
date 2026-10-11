@@ -1,5 +1,10 @@
 #ifndef ENGINE_RTARGET_H
 #define ENGINE_RTARGET_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Общая цель кадра: текстура, в которую рисуют несколько ядер по очереди.
 // Backend создаёт (сейчас только GL: FBO+RGBA; VK позже).
 // Имя struct совпадает с forward в render_api.h (один тип, не два).
@@ -11,4 +16,8 @@ struct RcTarget {
     unsigned tex; // GL: RGBA-текстура результата
     unsigned dbo; // GL: глубина мишени (живёт с ней)
 };
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_RTARGET_H

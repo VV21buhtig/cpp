@@ -12,8 +12,14 @@ int main(void) {
     int bad = 0;
     system("rm -rf " DEPOT);
     system("mkdir -p " DEPOT);
+    // Фикстуры ищем от корня репо и из движка (CWD зависит от запуска).
     const char *a = "engine/assets/tiles/grass_top.png";
     const char *b = "engine/assets/tiles/dirt.png";
+    {
+        FILE *probe = fopen(a, "rb");
+        if (!probe) { a = "assets/tiles/grass_top.png"; b = "assets/tiles/dirt.png"; }
+        else fclose(probe);
+    }
     AssetId i1 = asset_import(DEPOT, a);
     AssetId i2 = asset_import(DEPOT, a); // дубль
     AssetId i3 = asset_import(DEPOT, b);

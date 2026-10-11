@@ -1,5 +1,10 @@
 #ifndef ENGINE_API_H
 #define ENGINE_API_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Движок-инструмент: слеп к контенту. Окно + ввод + цикл, ничего про
 // воксели/чанки/текстуры. Игра (или редактор) даёт готовое ядро RenderCore*
 // и два колбэка: чем кормить (feed) и откуда смотреть (view).
@@ -36,4 +41,8 @@ void eng_destroy(EngEngine *e);
 int eng_frame(EngEngine *e);
 // Цикл до закрытия окна. Возвращает число кадров.
 int eng_run(EngEngine *e);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_API_H

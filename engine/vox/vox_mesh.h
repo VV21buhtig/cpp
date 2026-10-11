@@ -1,5 +1,10 @@
 #ifndef VOX_MESH_H
 #define VOX_MESH_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Greedy-мешинг чанка (их алгоритм, C11): 6 направлений, маска id+AO,
 // мерж по ширине/высоте, flip по диагонали AO. Вершина 12 float:
 // pos3 norm3 uv2 tile ao day night (страйд их lighting.vs 1:1).
@@ -14,4 +19,8 @@ typedef struct {
 
 void vox_mesh_build(const VoxChunk *c, const VoxChunk *nb[6], VoxMeshOut *out);
 void vox_mesh_free(VoxMeshOut *out);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // VOX_MESH_H

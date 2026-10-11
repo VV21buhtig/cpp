@@ -1,5 +1,10 @@
 #ifndef VOX_CHUNK_H
 #define VOX_CHUNK_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Чанк 16x16x64 = 16КБ, плотный массив. y вверх, индекс (y*SZ+z)*SX+x.
 #include "vox_block.h"
 #include <stddef.h>
@@ -28,4 +33,8 @@ static inline void vox_set(VoxChunk *c, int x, int y, int z, uint8_t id) {
     if (!vox_in(x, y, z)) return;
     c->id[vox_idx(x, y, z)] = id;
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // VOX_CHUNK_H

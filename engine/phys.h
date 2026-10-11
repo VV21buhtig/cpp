@@ -1,5 +1,10 @@
 #ifndef ENGINE_PHYS_H
 #define ENGINE_PHYS_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // L4: базовая физика (НЕ игровая!). Общая гравитация + интегратор,
 // конфиг на домен. Контакты, отклики, вода, свет — дело доменов и игры:
 // здесь только движение. Чистый CPU, без окна и GPU.
@@ -37,4 +42,8 @@ static inline int phys_ticks(PhysClock *c, double frameDt, double step) {
     if (n == 5) c->acc = 0.0;
     return n;
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_PHYS_H

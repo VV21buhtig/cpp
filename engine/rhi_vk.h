@@ -1,5 +1,10 @@
 #ifndef ENGINE_RHI_VK_H
 #define ENGINE_RHI_VK_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // RHI-VK: сырой бэкенд Vulkan 1.1. Instance -> surface -> device/queue ->
 // swapchain+views -> sync на N кадров + разовые команды + хост-буферы.
 // Без валидационных слоёв, без сцены: только устройство и слова ошибок.
@@ -47,4 +52,8 @@ uint32_t rhi_vk_mem(RhiVk *r, uint32_t mask, VkMemoryPropertyFlags fl);
 // Человеческий VkResult.
 const char *rhi_vk_str(VkResult r);
 void rhi_vk_shutdown(RhiVk *r);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_RHI_VK_H

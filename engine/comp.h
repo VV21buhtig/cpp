@@ -1,5 +1,10 @@
 #ifndef ENGINE_COMP_H
 #define ENGINE_COMP_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // L3: композиция доменов. Проходы одного бэкенда в общую цель по порядку:
 // view -> feed -> frame_to на каждый проход. GPU-композиция требует
 // frame_to у всех проходов (иначе ENG_COMP_NO_TARGET, честный отказ).
@@ -20,4 +25,8 @@ typedef struct {
 
 // Прогнать проходы по порядку в цель t. Возвращает ENG_COMP_*.
 int eng_comp_frame(const EngPass *passes, int n, RcTarget *t);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_COMP_H

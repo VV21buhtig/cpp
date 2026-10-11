@@ -1,5 +1,10 @@
 #ifndef ENGINE_GL_BLIT_H
 #define ENGINE_GL_BLIT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Блит CPU-кадра на экран поверх RHI-GL: текстура -> фулскрин -> present
 // + бейдж + VOX_SHOT. Ядро 2D (vec/pix) сидит на этом, а не на сыром GL.
 // static-функции: включает одно ядро.
@@ -143,4 +148,8 @@ static void blit_shutdown(BlitGL *b) {
     if (b->vao) glDeleteVertexArrays(1, &b->vao);
     if (b->tex) glDeleteTextures(1, &b->tex);
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_GL_BLIT_H

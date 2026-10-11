@@ -1,5 +1,10 @@
 #ifndef ENGINE_RHI_GL_H
 #define ENGINE_RHI_GL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // RHI-GL: сырой бэкенд OpenGL 4.5. Контекст, шейдеры с логами, UBO.
 // Без сцены и контента: только устройство + проверка ошибок словами.
 #define GLFW_INCLUDE_NONE
@@ -16,4 +21,8 @@ unsigned rhi_gl_prog(const char *vsPath, const char *fsPath);
 unsigned rhi_gl_empty_vao(void);
 // Человеческий код последней ошибки GL. "" если чисто.
 const char *rhi_gl_err(void);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_RHI_GL_H

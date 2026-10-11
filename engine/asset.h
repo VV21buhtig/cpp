@@ -1,5 +1,10 @@
 #ifndef ENGINE_ASSET_H
 #define ENGINE_ASSET_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Склад ассетов (модель CapCut): всё скидываешь в одно место, достаёшь по ID.
 // Import копирует файл в депо (`<root>/<hex16>.<ext>`), дубли по хешу
 // содержимого не плодятся (тот же ID). Проекты хранят ID, не пути.
@@ -14,4 +19,8 @@ AssetId asset_import(const char *root, const char *path);
 int asset_path(const char *root, AssetId id, char *out, int cap);
 // Сколько записей в индексе (для UI-списка). -1 если депо нет.
 int asset_count(const char *root);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_ASSET_H

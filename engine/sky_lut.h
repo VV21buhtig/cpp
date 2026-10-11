@@ -1,5 +1,10 @@
 #ifndef SKY_LUT_H
 #define SKY_LUT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Печка неба из K: trans 256x64 + ms 32x32 один раз, skyview 128x72 x2
 // при смене высоты тела >1e-3 / высоты камеры >1.0, ambient 6x1 следом.
 // Форматы HDR (Rgba16Float), семплер clamp/linear общий.
@@ -32,4 +37,8 @@ void sky_luts_init(SkyLuts *s, WGPUDevice dev, WGPUQueue q);
 int sky_luts_update(SkyLuts *s, Vec3 sunDir, Vec3 moonDir, float camY); // 1 если пекла
 // Цвета тел для ambient/LUT (палитра сцены, как sunCol в 30_sky.wgsl).
 void sky_body_cols(Vec3 sunDir, Vec3 *sunCol, Vec3 *moonCol);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // SKY_LUT_H

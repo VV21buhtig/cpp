@@ -1,5 +1,10 @@
 #ifndef ENGINE_RHI_WEBGPU_H
 #define ENGINE_RHI_WEBGPU_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // RHI-WebGPU: сырой бэкенд Dawn/wgpu-native. Instance -> surface ->
 // adapter -> device/queue -> configure. Без сцены: только устройство.
 // Асинхронность Dawn — слип-вейтом (ProcessEvents в native паникует).
@@ -25,4 +30,8 @@ int rhi_webgpu_configure(RhiWebgpu *r, uint32_t w, uint32_t h);
 // Человеческий статус getCurrentTexture (для лога, не ошибка).
 const char *rhi_webgpu_tex_status(int status);
 void rhi_webgpu_shutdown(RhiWebgpu *r);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_RHI_WEBGPU_H

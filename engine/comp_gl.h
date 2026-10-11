@@ -1,5 +1,10 @@
 #ifndef ENGINE_COMP_GL_H
 #define ENGINE_COMP_GL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // GL-цель композитора: FBO + RGBA-текстура + показ на экран.
 // Правило проходов v1: проход 0 (база, воксели) чистит и рисует,
 // остальные (UI) — рисуют поверх БЕЗ чистки, с блендом.
@@ -8,6 +13,9 @@
 #include <stdlib.h>
 #include "rhi_gl.h"
 #include "rtarget.h"
+#include "render_api.h" // typedef RcTarget
+#include "rtarget.h"
+#include "render_api.h" // typedef RcTarget
 
 static int comp_target_gl_new(RcTarget *t, int w, int h) {
     if (!t || w <= 0 || h <= 0) return 0;
@@ -64,4 +72,8 @@ static void comp_present_gl(unsigned prog, unsigned vao, const RcTarget *t, int 
     glBindVertexArray(0);
     glUseProgram(0);
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_COMP_GL_H

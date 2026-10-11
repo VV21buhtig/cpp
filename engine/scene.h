@@ -1,5 +1,10 @@
 #ifndef ENGINE_SCENE_H
 #define ENGINE_SCENE_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Сцена движка: сущности с именами, родителями и трансформами.
 // Нужно Hierarchy (дерево) и Inspector (ползунки) редактора.
 // Без GPU и рендера: чистые данные + тесты. Поведение/компоненты — позже.
@@ -44,4 +49,8 @@ int sc_alive(const ScWorld *w, Entity e);
 const char *sc_name(const ScWorld *w, Entity e);
 // Список живых (порядок создания). Возвращает число (<= cap).
 int sc_list(const ScWorld *w, Entity *out, int cap);
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_SCENE_H

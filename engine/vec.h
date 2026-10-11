@@ -1,5 +1,10 @@
 #ifndef ENGINE_VEC_H
 #define ENGINE_VEC_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Векторное ядро движка: свой vec3 без glm (детерминизм).
 // Чистая математика, ноль игровых зависимостей.
 #include <math.h>
@@ -26,4 +31,8 @@ static inline void cam_basis(float yaw, float pitch, Vec3 *f, Vec3 *r, Vec3 *u) 
     *r = v3_norm(v3_cross(*f, v3(0.0f, 1.0f, 0.0f)));
     *u = v3_cross(*r, *f);
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_VEC_H

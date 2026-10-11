@@ -1,5 +1,10 @@
 #ifndef VOX_GEN_H
 #define VOX_GEN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Генерация холмов по сиду: детерминированный value-noise, 3 октавы.
 // Пустыня/деревья/пещеры — позже, сейчас только рельеф + слои.
 #include "vox_chunk.h"
@@ -31,4 +36,8 @@ static inline float vox_floor_y(float x, float z) {
 static inline int vox_floor(float x, float z, float y) {
     return y >= vox_floor_y(x, z);
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // VOX_GEN_H

@@ -1,5 +1,10 @@
 #ifndef ENGINE_VFS_H
 #define ENGINE_VFS_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // VFS: байты по имени. Сейчас — десктоп (fopen), шов под веб (fetch).
 // Склад (asset.h) читает только через это — перенос на веб тронет
 // одну функцию, а не все ядра.
@@ -26,4 +31,8 @@ static inline size_t vfs_size(const char *path) {
     fclose(f);
     return n > 0 ? (size_t)n : 0;
 }
+
+#ifdef __cplusplus
+}
 #endif
+#endif // ENGINE_VFS_H
