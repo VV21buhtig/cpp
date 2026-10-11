@@ -10,8 +10,7 @@ MS=${1:-30000}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 . "$ROOT/tools/mkdemo.sh"
-cmake --build engine/build
-cmake --build frontend/build --target editor
+mkbuild "$ROOT"
 PROJ=$(mkdemo "$ROOT")
 SHOTS=$ROOT/run/matrix/shots
 mkdir -p "$SHOTS"

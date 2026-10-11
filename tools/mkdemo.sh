@@ -1,6 +1,16 @@
-# Библиотека для tools/*.sh: демо-проект редактора в run/demo.
+# Библиотека для tools/*.sh: сборка-минимум и демо-проект в run/demo.
 # Проект ГЕНЕРИРУЕТСЯ (в git не коммитится, run/ в .gitignore).
-# Использование: . "$(dirname "$0")/mkdemo.sh" && mkdemo "$ROOT"
+# Использование: . "$(dirname "$0")/mkdemo.sh" && mkbuild "$ROOT" && mkdemo "$ROOT"
+mkbuild() {
+    ROOT=$1
+    # С нуля: конфигурируем (был Ninja, но сойдёт и дефолтный генератор).
+    [ -f "$ROOT/engine/build/CMakeCache.txt" ] || cmake -S "$ROOT/engine" -B "$ROOT/engine/build"
+    # Только .so движка — без тестов и демок (быстро). Тесты отдельно:
+    # cmake --build engine/build (все цели).
+    cmake --build "$ROOT/engine/build" --target engine_shared
+    [ -f "$ROOT/frontend/build/CMakeCache.txt" ] || cmake -S "$ROOT/frontend" -B "$ROOT/frontend/build"
+    cmake --build "$ROOT/frontend/build" --target editor
+}
 mkdemo() {
     ROOT=$1
     PROJ=$ROOT/run/demo

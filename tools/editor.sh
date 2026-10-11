@@ -8,8 +8,7 @@ BE=${1:-2}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 . "$ROOT/tools/mkdemo.sh"
-cmake --build engine/build
-cmake --build frontend/build --target editor
+mkbuild "$ROOT"
 PROJ=$(mkdemo "$ROOT")
 if [ -z "$DISPLAY" ]; then
     echo "need DISPLAY (окно редактора некуда показать)" >&2
