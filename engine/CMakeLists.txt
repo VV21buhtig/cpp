@@ -48,3 +48,11 @@ target_include_directories(sand_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(sand_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(sand_demo PRIVATE -Wall -Wextra)
+
+# Живое ядро орфана 2: sdf на RHI (реймарш примитивов).
+add_executable(sdf_demo sdf_demo.c sdf_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(sdf_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(sdf_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
