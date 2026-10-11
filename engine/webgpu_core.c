@@ -48,6 +48,10 @@ typedef struct {
     int slotCZ[VOX_STREAM_CH][VOX_STREAM_CH];
     unsigned char slotOk[VOX_STREAM_CH][VOX_STREAM_CH];
     float streamOX, streamOZ;
+    // CPU-забор для Qt-вьюпорта (frame_cpu): скачать кадр в grabDst (RGBA).
+    int grabNext;
+    uint8_t *grabDst;
+    int grabW, grabH, grabOk;
     int ready;
     int frame;
     double prevT;
@@ -347,14 +351,17 @@ static void on_shot_map(WGPUMapAsyncStatus st, WGPUStringView msg, void *u1, voi
     w->done = 1;
 }
 
-static void wgpu_shot(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h, const char *path) {
+// Скриншот/забор: поверхность -> буфер -> PPM в файл (path) и/или RGBA
+// в память (rgba, верх первый). Возвращает 1 если скачал, 0 если map не встал.
+static int wgpu_grab(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h,
+                     const char *path, uint8_t *rgba) {
     uint32_t pitch = (w * 4 + 255) & ~255u;
     WGPUBufferDescriptor bd;
     memset(&bd, 0, sizeof bd);
     bd.size = (uint64_t)pitch * h;
     bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
     WGPUBuffer rb = wgpuDeviceCreateBuffer(c->rhi.device, &bd);
-    if (!rb) return;
+    if (!rb) return 0;
     WGPUCommandEncoderDescriptor ed;
     memset(&ed, 0, sizeof ed);
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(c->rhi.device, &ed);
@@ -388,10 +395,26 @@ static void wgpu_shot(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h, const
     // (проверено nm). Без него map-колбэк не прилетает никогда.
     void wgpuDevicePoll(WGPUDevice device, _Bool wait, const void *wrapped);
     for (int i = 0; i < 5000 && !sw.done; i++) wgpuDevicePoll(c->rhi.device, 1, 0);
+    int ok = 0;
     if (sw.done) {
         const uint8_t *px = (const uint8_t *)wgpuBufferGetConstMappedRange(rb, 0, bd.size);
         if (px) {
             int bgra = (c->fmt == WGPUTextureFormat_BGRA8Unorm);
+            if (rgba) {
+                // В память (RGBA, верх первый).
+                for (uint32_t y = 0; y < h; y++) {
+                    const uint8_t *row = px + (size_t)y * pitch;
+                    uint8_t *dst = rgba + (size_t)y * w * 4;
+                    for (uint32_t x = 0; x < w; x++) {
+                        dst[x * 4 + 0] = row[x * 4 + (bgra ? 2 : 0)];
+                        dst[x * 4 + 1] = row[x * 4 + 1];
+                        dst[x * 4 + 2] = row[x * 4 + (bgra ? 0 : 2)];
+                        dst[x * 4 + 3] = row[x * 4 + 3];
+                    }
+                }
+                ok = 1;
+            }
+            if (path) {
             FILE *f = fopen(path, "wb");
             if (f) {
                 fprintf(f, "P6\n%u %u\n255\n", w, h);
@@ -408,13 +431,21 @@ static void wgpu_shot(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h, const
                 }
                 fclose(f);
                 fprintf(stderr, "shot: %s (%ux%u)\n", path, w, h);
+                ok = 1;
             }
+            } // path
             wgpuBufferUnmap(rb);
         }
     }
     wgpuCommandBufferRelease(cb);
     wgpuCommandEncoderRelease(enc);
     wgpuBufferRelease(rb);
+    return ok;
+}
+
+// Скриншот: поверхность -> PPM (BGRA/RGBA по факту формата).
+static void wgpu_shot(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h, const char *path) {
+    wgpu_grab(c, tex, w, h, path, 0);
 }
 
 static void core_frame(RenderCore *rc, const RcView *v) {
@@ -516,6 +547,7 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     WGPUCommandBuffer cbuf = wgpuCommandEncoderFinish(enc, &cbdef);
     wgpuQueueSubmit(c->rhi.queue, 1, &cbuf);
     // VOX_SHOT: копия поверхности в хост (COPY_SRC выставлен в configure).
+    // Qt-забор (frame_cpu) — тем же путём, но в память, до present.
     {
         const char *sp = getenv("VOX_SHOT");
         if (sp && sp[0]) {
@@ -523,6 +555,8 @@ static void core_frame(RenderCore *rc, const RcView *v) {
             int at = sa && sa[0] ? atoi(sa) : 60;
             if (c->frame == at) wgpu_shot(c, st.texture, (uint32_t)ww, (uint32_t)hh, sp);
         }
+        if (c->grabNext && c->grabDst && ww == c->grabW && hh == c->grabH)
+            c->grabOk = wgpu_grab(c, st.texture, (uint32_t)ww, (uint32_t)hh, 0, c->grabDst);
     }
     wgpuSurfacePresent(c->rhi.surface);
 
@@ -531,6 +565,26 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     wgpuTextureViewRelease(view);
     wgpuTextureRelease(st.texture);
     c->frame++;
+}
+
+// CPU-забор для Qt-вьюпорта: рендер кадра + скачать в RGBA (верх первый).
+// WebGPU сам подгоняет поверхность под res кадра, так что размер берём
+// из вида (несоответствие заказу — честный 0, без записи мимо буфера).
+static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    if (!rgba || w <= 0 || h <= 0) return 0;
+    int ww = v->resW > 0 ? v->resW : 1280;
+    int hh = v->resH > 0 ? v->resH : 720;
+    if (w != ww || h != hh) return 0;
+    c->grabDst = rgba;
+    c->grabW = w;
+    c->grabH = h;
+    c->grabOk = 0;
+    c->grabNext = 1;
+    core_frame(rc, v);
+    c->grabDst = 0;
+    c->grabNext = 0;
+    return c->grabOk;
 }
 
 static int core_init(RenderCore *rc, void *glfwWindow) {
@@ -577,6 +631,7 @@ RenderCore *rc_webgpu_create(void) {
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
     w->api.unload_chunk = core_unload_chunk;
+    w->api.frame_cpu = core_frame_cpu;
     w->api.fps = core_fps;
     return &w->api;
 }

@@ -3,6 +3,7 @@
 // Вьюпорт редактора: воксельная сцена + гизмо-оси в одной цели.
 // GL-контекст — скрытое GLFW-окно (Qt его не касается); кадр идёт
 // в FBO-цель через frame_to, пиксели забираем glReadPixels в QImage.
+// VK/WebGPU — через frame_cpu (ядро рендерит и скачивает в RGBA).
 // Никакого QOpenGLWidget: обмен через память, контексты не делим.
 #include <QWidget>
 #include <QImage>
@@ -42,7 +43,8 @@ private:
     struct RcTarget *target = nullptr;
     unsigned presentProg = 0, presentVao = 0;
     QImage img;
-    int placeheld = 0; // 1 если кадра нет (бэкенд без frame_to): рисуем текст
+    uint8_t *cpuBuf = nullptr; // RGBA 1280x720 для frame_cpu (VK/WebGPU), разово
+    int placeheld = 0; // 1 если кадра нет: рисуем текст
     int backend = 2; // выбранный в хабе (1 webgpu, 3 vk, 2 gl)
     QTimer *timer = nullptr;
     bool playing = false;

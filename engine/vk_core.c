@@ -76,6 +76,10 @@ typedef struct {
     VkBuffer shotBuf;
     VkDeviceMemory shotMem;
     void *shotPtr;
+    // CPU-забор для Qt-вьюпорта (frame_cpu): кадр + скачать в grabDst (RGBA).
+    int grabNext;
+    uint8_t *grabDst;
+    int grabW, grabH, grabOk;
     int ready;
     int frame;
     double prevT;
@@ -351,6 +355,7 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
 }
 
 static void core_frame(RenderCore *rc, const RcView *v);
+static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h);
 static int core_init(RenderCore *rc, void *glfwWindow);
 static void core_shutdown(RenderCore *rc);
 
@@ -378,6 +383,7 @@ RenderCore *rc_vk_create(void) {
     w->api.unload_chunk = 0;
     w->api.upload_voxmesh = core_upload_voxmesh;
     w->api.unload_voxmesh = core_unload_voxmesh;
+    w->api.frame_cpu = core_frame_cpu;
     w->api.fps = core_fps;
     return &w->api;
 }
@@ -914,11 +920,14 @@ static void core_frame(RenderCore *rc, const RcView *v) {
         vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
     }
     vkCmdEndRenderPass(cb);
-    // Ридбэк кадра: VK_SHOT=путь.ppm VK_SHOT_AT=кадр (дефолт 60).
+    // Ридбэк кадра: VK_SHOT=путь.ppm VK_SHOT_AT=кадр (дефолт 60)
+    // либо забор в память для Qt-вьюпорта (frame_cpu ставит grabNext).
     const char *sv = getenv("VK_SHOT");
     int shotArmed = sv && sv[0] && c->frame ==
         (getenv("VK_SHOT_AT") && getenv("VK_SHOT_AT")[0] ? atoi(getenv("VK_SHOT_AT")) : 60);
-    if (shotArmed) {
+    int grabArmed = c->grabNext && c->grabDst;
+    int wantCopy = shotArmed || grabArmed;
+    if (wantCopy) {
         VkImageMemoryBarrier b0;
         memset(&b0, 0, sizeof b0);
         b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -951,9 +960,29 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     }
     vkEndCommandBuffer(cb);
     if (!rhi_vk_submit(&c->rhi, fi, img, cb)) return;
-    if (shotArmed) {
+    if (wantCopy) {
         vkWaitForFences(c->rhi.dev, 1, &c->rhi.fences[fi], 1, 1000000000ull);
-        // BGRA -> PPM RGB, строки снизу вверх.
+        if (grabArmed) {
+            // В память (RGBA, верх первый): своп BGRA->RGBA построчно.
+            uint32_t W = c->rhi.extent.width, H = c->rhi.extent.height;
+            c->grabOk = 0;
+            if (c->grabW == (int)W && c->grabH == (int)H) {
+                uint8_t *px = (uint8_t *)c->shotPtr;
+                for (uint32_t y = 0; y < H; y++) {
+                    uint8_t *src = px + (size_t)y * W * 4;
+                    uint8_t *dst = c->grabDst + (size_t)y * W * 4;
+                    for (uint32_t x = 0; x < W; x++) {
+                        dst[x * 4 + 0] = src[x * 4 + 2];
+                        dst[x * 4 + 1] = src[x * 4 + 1];
+                        dst[x * 4 + 2] = src[x * 4 + 0];
+                        dst[x * 4 + 3] = src[x * 4 + 3];
+                    }
+                }
+                c->grabOk = 1;
+            }
+        }
+        // BGRA -> PPM RGB, строки снизу вверх (только по VK_SHOT).
+        if (shotArmed) {
         FILE *f = fopen(sv, "wb");
         if (f) {
             uint32_t W = c->rhi.extent.width, H = c->rhi.extent.height;
@@ -970,8 +999,26 @@ static void core_frame(RenderCore *rc, const RcView *v) {
             fclose(f);
             fprintf(stderr, "vkshot: %s (%ux%u)\n", sv, W, H);
         }
+        } // shotArmed
     }
     c->frame++;
+}
+
+// CPU-забор для Qt-вьюпорта: рендер кадра + скачать в RGBA (верх первый).
+// Размер обязан совпасть со свопчейном (окно вьюпорта фиксировано).
+static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    if (!rgba || w <= 0 || h <= 0) return 0;
+    if (w != (int)c->rhi.extent.width || h != (int)c->rhi.extent.height) return 0;
+    c->grabDst = rgba;
+    c->grabW = w;
+    c->grabH = h;
+    c->grabOk = 0;
+    c->grabNext = 1;
+    core_frame(rc, v);
+    c->grabDst = 0;
+    c->grabNext = 0;
+    return c->grabOk;
 }
 
 static void core_shutdown(RenderCore *rc) {

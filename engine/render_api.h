@@ -90,6 +90,12 @@ struct RenderCore {
     // NULL = только свой экран (такие ядра в композицию не берём).
     // Цель создаёт композитор под бэкенд (GL: FBO; VK: позже).
     int (*frame_to)(RenderCore *rc, const RcView *v, RcTarget *t);
+    // Кадр сразу в CPU-буфер (встраивание в чужое окно: Qt-вьюпорт редактора).
+    // rgba: w*h*4 байт, строка 0 = ВЕРХ кадра, порядок RGBA. Ядро само рендерит
+    // и скачивает своим путём (VK: staging-буфер; WebGPU: map+poll).
+    // Возвращает 1 если залил, 0 если размер чужой/не готово/нет пути.
+    // NULL = нет CPU-пути (тогда только frame_to/frame).
+    int (*frame_cpu)(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h);
     // --- Домен VOXEL (NULL если нет RC_CAP_VOXEL) ---
     // Стриминг: app решает ЧТО (dirty из мира), ядро — КАК.
     // nb[6]: соседи (-x,+x,-y,+y,-z,+z) для швов, NULL = воздух.

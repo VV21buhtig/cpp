@@ -44,6 +44,10 @@ Viewport::~Viewport() {
         comp_target_gl_free(target);
         // presentProg/Vao переживают (дешёвые, общие для GL-сессий).
     }
+    if (cpuBuf) {
+        free(cpuBuf);
+        cpuBuf = nullptr;
+    }
     // Цель и окно переживут? Окно скрытое — отдаём движку? Нет: окно наше.
     // Упрощение скелета: окно и цель живут до конца процесса (утечка
     // пары дескрипторов на выход — честно зафиксировано, не скрыто).
@@ -90,6 +94,8 @@ bool Viewport::init(int be) {
     }
     img = QImage(1280, 720, QImage::Format_RGB888);
     img.fill(Qt::black);
+    if (!cpuBuf) cpuBuf = (uint8_t *)calloc((size_t)1280 * 720, 4); // разово
+    if (!cpuBuf) return false;
     return true;
 }
 
@@ -211,6 +217,17 @@ void Viewport::renderOnce() {
     v.resW = 1280;
     v.resH = 720;
     v.sunDir.x = 0.4f; v.sunDir.y = 0.75f; v.sunDir.z = 0.3f;
+    // Грейд DDA как в референсной сцене template/scene3d (иначе WebGPU в нулях:
+    // шейдер множит всё на exposure). GL/VK эти поля не едят.
+    v.gamma = 0.611f; v.exposure = 0.508f; v.fog = 0.387f;
+    v.shadowOn = 1.0f;
+    v.maxSteps = 100.0f;
+    v.time = (float)frame / 60.0f;
+    // Время суток как в демо (VOX_DAYT, секунды): дефолт полдень (242с,
+    // верх дуги sdf_sun), чтобы фаза WebGPU была днём как GL/VK, не сумерками.
+    v.dayT = getenv("VOX_DAYT") && getenv("VOX_DAYT")[0]
+                 ? (float)atof(getenv("VOX_DAYT"))
+                 : 242.0f;
     if (isGL && target && rc->frame_to) {
         rc->frame_to(rc, &v, target);
         // Гизмо-оверлей вторым проходом (vec, бленд): оси выбранной сущности.
@@ -280,10 +297,27 @@ void Viewport::renderOnce() {
             memcpy(dst, row, sizeof row);
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    } else if (rc->frame_cpu && cpuBuf) {
+        // VK/WebGPU: ядро рендерит и скачивает кадр в CPU (RGBA, верх первый).
+        // Синхронный сталл на забор — честная цена встраивания, как glReadPixels.
+        if (rc->frame_cpu(rc, &v, cpuBuf, 1280, 720)) {
+            for (int y = 0; y < 720; y++) {
+                uint8_t *s = cpuBuf + (size_t)y * 1280 * 4;
+                uint8_t *d = img.scanLine(y);
+                for (int x = 0; x < 1280; x++) {
+                    d[x * 3 + 0] = s[x * 4 + 0];
+                    d[x * 3 + 1] = s[x * 4 + 1];
+                    d[x * 3 + 2] = s[x * 4 + 2];
+                }
+            }
+            placeheld = 0;
+        } else {
+            img.fill(Qt::black);
+            placeheld = 1;
+        }
     } else {
-        // Не-GL: ядра рисуют в своё скрытое окно (невидимо) — держим
-        // устройство живым, а в панель пишем заглушку. frame_to для них —
-        // следующий шаг, честно зафиксировано.
+        // Нет ни frame_to, ни frame_cpu: ядро рисует в своё скрытое окно
+        // (невидимо) — держим устройство живым, в панель пишем заглушку.
         rc->frame(rc, &v);
         img.fill(Qt::black);
         placeheld = 1;
@@ -399,10 +433,10 @@ void Viewport::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.fillRect(rect(), Qt::black);
     if (placeheld) {
-        // Честная заглушка вместо чёрного экрана: бэкенд жив, вьюпорта нет.
+        // Честная заглушка вместо чёрного экрана: забор кадра не встал.
         p.setPen(Qt::yellow);
         p.drawText(rect(), Qt::AlignCenter,
-                   QString("backend %1: core runs, viewport embedding later\n(frame_to pending)").arg(backend));
+                   QString("backend %1: core runs, readback failed\n(frame_cpu=0)").arg(backend));
     } else if (!img.isNull()) {
         QSize s = img.size().scaled(size(), Qt::KeepAspectRatio);
         QPoint at((width() - s.width()) / 2, (height() - s.height()) / 2);

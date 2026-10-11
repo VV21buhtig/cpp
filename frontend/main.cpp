@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
                 bool pic = mx->vp->hasPicture();
                 printf("matrix %s: frames %d->%d %s %s\n", mx->names[mx->pi], mx->f0, f1,
                        adv ? "ADVANCE-OK" : "STUCK-FAIL",
-                       mx->pi == 0 ? (pic ? "PICTURE-OK" : "BLACK-FAIL") : "(no frame_to)");
+                       pic ? "PICTURE-OK" : "BLACK-FAIL");
                 fflush(stdout);
                 // Кадр фазы для доказательства (ED_MATRIX_SHOTDIR=/tmp/x).
                 if (getenv("ED_MATRIX_SHOTDIR") && getenv("ED_MATRIX_SHOTDIR")[0] && editor) {
