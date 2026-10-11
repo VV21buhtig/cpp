@@ -21,9 +21,14 @@ private:
     QTextEdit *out = nullptr;
 };
 
+// Перехват stderr движка в панель (один раз, до ядер).
+void console_capture_stderr(ConsolePanel *con);
+
 QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con);
 QWidget *makeInspector(QWidget *parent, Viewport *vp, ConsolePanel *con);
 QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot);
+// Дерево файлов проекта (только чтение).
+QWidget *makeSolution(QWidget *parent, const QString &project);
 // Выбор сущности извне (иерархия зовёт сама; вьюпорту/гизмо — сюда же).
 // scene.h целиком: нужен полный ScWorld (мир живёт в панелях).
 #include "scene.h"

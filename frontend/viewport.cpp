@@ -35,6 +35,14 @@ Viewport::~Viewport() {
         rc_destroy(vrc);
         vrc = nullptr;
     }
+    if (glfwWin) {
+        glfwDestroyWindow((GLFWwindow *)glfwWin);
+        glfwWin = nullptr;
+    }
+    if (target) {
+        comp_target_gl_free(target);
+        // presentProg/Vao переживают (дешёвые, общие для GL-сессий).
+    }
     // Цель и окно переживут? Окно скрытое — отдаём движку? Нет: окно наше.
     // Упрощение скелета: окно и цель живут до конца процесса (утечка
     // пары дескрипторов на выход — честно зафиксировано, не скрыто).
@@ -53,6 +61,7 @@ bool Viewport::init(int be) {
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow *win = glfwCreateWindow(1280, 720, "ed-viewport", 0, 0);
     if (!win) return false;
+    glfwWin = win;
     // Ядро по таблице «домен x бэкенд» (воксельный домен, бэкенд из хаба).
     rc = rc_create_by(1u, (unsigned)backend);
     if (!rc || !rc->init(rc, win)) return false;
@@ -87,6 +96,37 @@ void Viewport::setPlaying(bool on) {
     playing = on;
     if (on) timer->start(16);
     else timer->stop();
+}
+
+bool Viewport::switchBackend(int be) {
+    if (be == backend) return true;
+    setPlaying(false);
+    if (rc) {
+        rc->shutdown(rc);
+        rc_destroy(rc);
+        rc = nullptr;
+    }
+    if (vrc) {
+        vrc->shutdown(vrc);
+        rc_destroy(vrc);
+        vrc = nullptr;
+    }
+    if (glfwWin) {
+        glfwDestroyWindow((GLFWwindow *)glfwWin);
+        glfwWin = nullptr;
+    }
+    if (target) {
+        comp_target_gl_free(target);
+        // presentProg/Vao переживают (дешёвые, общие для GL-сессий).
+    }
+    // Мир не трогаем (воксели общие), fed-флаги сбрасываем — перезальём.
+    for (int i = 0; i < GW * GW; i++) fed[i] = 0;
+    fedLeft = GW * GW;
+    fedCur = 0;
+    havePV = 0;
+    dragAxis = -1;
+    if (!init(be)) return false;
+    return true;
 }
 
 static const VoxChunk *vfind(void *world, int cx, int cz) {    VoxChunk *w = (VoxChunk *)world;
@@ -147,12 +187,21 @@ void Viewport::renderOnce() {
     memset(&v, 0, sizeof v);
     double t0 = glfwGetTime();
     // Орбита вокруг центра мира (8,26,8), взгляд всегда в него.
+    // Орто-режимы тулбара: фиксированные камеры вместо орбиты.
     double a = frame * 0.004;
-    v.camPos.x = 8 + 90.0f * (float)cos(a);
-    v.camPos.y = 66.0f;
-    v.camPos.z = 8 + 90.0f * (float)sin(a);
+    if (viewMode == 1) { // верх
+        v.camPos.x = 8; v.camPos.y = 140.0f; v.camPos.z = 8.01f;
+    } else if (viewMode == 2) { // бок (+x)
+        v.camPos.x = 120.0f; v.camPos.y = 30.0f; v.camPos.z = 8;
+    } else if (viewMode == 3) { // фронт (+z)
+        v.camPos.x = 8; v.camPos.y = 30.0f; v.camPos.z = 120.0f;
+    } else {
+        v.camPos.x = 8 + 90.0f * (float)cos(a);
+        v.camPos.y = 66.0f;
+        v.camPos.z = 8 + 90.0f * (float)sin(a);
+    }
     {
-        float dx = 8 - v.camPos.x, dy = 26.0f - 66.0f, dz = 8 - v.camPos.z;
+        float dx = 8 - v.camPos.x, dy = 26.0f - v.camPos.y, dz = 8 - v.camPos.z;
         float dl = sqrtf(dx * dx + dy * dy + dz * dz);
         v.yaw = (float)atan2(dz, dx);
         v.pitch = (float)asin(dy / dl);
@@ -346,4 +395,13 @@ void Viewport::paintEvent(QPaintEvent *) {
     }
     p.setPen(Qt::white);
     p.drawText(8, 16, QString("fps %1").arg(fpsEma, 0, 'f', 0));
+    // Чип как в референсах: FPS + бэкенд справа сверху.
+    {
+        const char *be = backend == 1 ? "WebGPU" : (backend == 3 ? "Vulkan" : "OpenGL");
+        QString chip = QString("FPS: %1 / RHI: %2").arg(fpsEma, 0, 'f', 0).arg(be);
+        QFontMetrics fm(p.font());
+        int tw = fm.horizontalAdvance(chip) + 16;
+        p.fillRect(width() - tw - 8, 8, tw, 22, QColor(0, 0, 0, 160));
+        p.drawText(width() - tw, 24, chip);
+    }
 }

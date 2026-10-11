@@ -17,6 +17,8 @@
 #include <QSize>
 #include <QPushButton>
 #include <QFileDialog>
+#include <QTreeView>
+#include <QFileSystemModel>
 #include <QDir>
 #include "scene.h"
 #include "asset.h"
@@ -288,22 +290,34 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
         }
         char line[640];
         while (fgets(line, sizeof line, f)) {
-            // "<hex> <name> <size>"
+            // "<hex> <в-депо> <размер> [исходное-имя]": показываем читаемое.
             char *sp = strchr(line, ' ');
             if (!sp) continue;
             char *nm = sp + 1;
-            char *sp2 = strrchr(nm, ' ');
-            if (sp2) *sp2 = 0;
-            char *nl = strchr(nm, '\n');
-            if (nl) *nl = 0;
-            QString q = QString::fromUtf8(nm);
+            char *sp2 = strchr(nm, ' ');
+            if (!sp2) continue;
+            *sp2 = 0; // конец имени в депо
+            char *rest = sp2 + 1;
+            char *sz = strchr(rest, ' ');
+            char *orig = nm; // фолбэк: имя в депо
+            if (sz) {
+                *sz = 0;
+                char *on = sz + 1;
+                char *nl = strchr(on, '\n');
+                if (nl) *nl = 0;
+                if (on[0]) orig = on;
+            } else {
+                char *nl = strchr(nm, '\n');
+                if (nl) *nl = 0;
+            }
+            QString q = QString::fromUtf8(orig);
             QString flt = search->text();
             if (!flt.isEmpty() && !q.contains(flt, Qt::CaseInsensitive)) continue;
             // Миниатюра: картинки грузим, остальное — без иконки.
-            // Подпись в две строки: имя + FNV-ID (как в референсах).
-            QString full = depot + "/" + q;
+            // Подпись в две строки: читаемое имя + FNV-ID.
+            QString full = depot + "/" + QString::fromUtf8(nm);
             QImage thumb(full);
-            QString stem = q;
+            QString stem = QString::fromUtf8(nm);
             int dot = stem.lastIndexOf('.');
             if (dot > 0) stem = stem.left(dot);
             auto *it = new QListWidgetItem(q + "\n" + stem);
@@ -393,4 +407,21 @@ void scene_load(const QString &projectDir) {
     fclose(f);
     for (int i = 0; i < nn; i++)
         if (wantP[i] >= 0 && wantP[i] < nn) sc_parent(&g_world, ids[i], ids[wantP[i]]);
+}
+
+// Дерево файлов проекта (только чтение, без переименований).
+QWidget *makeSolution(QWidget *parent, const QString &project) {
+    auto *w = new QWidget(parent);
+    auto *lay = new QVBoxLayout(w);
+    lay->setContentsMargins(2, 2, 2, 2);
+    auto *view = new QTreeView(w);
+    auto *model = new QFileSystemModel(view);
+    model->setRootPath(project);
+    model->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
+    view->setModel(model);
+    view->setRootIndex(model->index(project));
+    view->setHeaderHidden(true);
+    for (int c = 1; c < model->columnCount(); c++) view->hideColumn(c);
+    lay->addWidget(view);
+    return w;
 }

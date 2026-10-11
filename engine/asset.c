@@ -67,12 +67,14 @@ AssetId asset_import(const char *root, const char *path) {
     fclose(f);
     free(buf);
     if (w != n) return 0;
-    // Индекс: дописать строку с именем В ДЕПО (исходник не важен).
+    // Индекс: дописать строку с именем В ДЕПО и исходным (читаемое для UI).
     idx_path(root, idx, sizeof idx);
     f = fopen(idx, "a");
     if (f) {
         const char *dn = strrchr(dst, '/');
-        fprintf(f, "%016llx %s %zu\n", (unsigned long long)h, dn ? dn + 1 : dst, n);
+        const char *on = strrchr(path, '/');
+        fprintf(f, "%016llx %s %zu %s\n", (unsigned long long)h, dn ? dn + 1 : dst,
+                n, on ? on + 1 : path);
         fclose(f);
     }
     return h;
@@ -91,9 +93,11 @@ int asset_path(const char *root, AssetId id, char *out, int cap) {
     int ok = 0;
     while (fgets(line, sizeof line, f)) {
         if (strncmp(line, want, 17) != 0) continue;
+        // Формат: "<hex> <в-депо> <размер> [исходное]". Имя в депо —
+        // второй токен (без пробелов: хеш.расширение).
         char *nm = line + 17;
-        char *sp = strrchr(nm, ' ');
-        if (sp) *sp = 0; // отрезать размер
+        char *sp = strchr(nm, ' ');
+        if (sp) *sp = 0;
         char *nl = strchr(nm, '\n');
         if (nl) *nl = 0;
         if (!nm[0]) continue;

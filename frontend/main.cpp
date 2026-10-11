@@ -17,6 +17,7 @@
 #include "panels.h"
 #include "viewport.h"
 #include "hub.h"
+#include "scene.h"
 
 // Окно редактора под проект (путь) и бэкенд из хаба (1/3/2).
 static QMainWindow *openEditor(const QString &project, int backend) {
@@ -55,6 +56,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     auto *actSave = bar->addAction("Save");
     auto *actNew = bar->addAction("New");
     bar->addSeparator();
+    bar->addSeparator();
     auto *gizmos = new QActionGroup(win);
     gizmos->setExclusive(true);
     auto *gT = bar->addAction("Translate");
@@ -75,7 +77,34 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     auto *vFront = bar->addAction("Front");
     auto *vOrbit = bar->addAction("Orbit");
 
-    auto *hier = new QDockWidget("Hierarchy", win);
+    // Крайняя левая панель активности (как в референсах): только API —
+    // единственный живой переключатель. Остальное позже, не врём.
+    auto *activity = new QToolBar("activity", win);
+    activity->setOrientation(Qt::Vertical);
+    win->addToolBar(Qt::LeftToolBarArea, activity);
+    activity->addWidget(new QLabel("API", win));
+    auto *apiGroup = new QActionGroup(win);
+    apiGroup->setExclusive(true);
+    auto *apiW = activity->addAction("WebGPU");
+    auto *apiG = activity->addAction("OpenGL");
+    auto *apiV = activity->addAction("Vulkan");
+    for (auto *a : {apiW, apiG, apiV}) {
+        a->setCheckable(true);
+        apiGroup->addAction(a);
+    }
+    if (backend == 1) apiW->setChecked(true);
+    else if (backend == 3) apiV->setChecked(true);
+    else apiG->setChecked(true);
+    auto apiSwitch = [vp, con](int be, const char *nm) {
+        if (!vp) return;
+        if (vp->switchBackend(be)) con->log(QString("api: %1").arg(nm));
+        else con->log(QString("api %1 FAILED (see terminal)").arg(nm));
+    };
+    QObject::connect(apiW, &QAction::triggered, [=]() { apiSwitch(1, "webgpu"); });
+    QObject::connect(apiG, &QAction::triggered, [=]() { apiSwitch(2, "opengl"); });
+    QObject::connect(apiV, &QAction::triggered, [=]() { apiSwitch(3, "vulkan"); });
+
+    auto *hier = new QDockWidget("Hierarchy & Outliner", win);
     hier->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
     scene_load(project); // проект -> мир (до построения дерева!)
@@ -94,25 +123,36 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         con->log(QString("viewport: engine ok (%1)").arg(be));
     }
 
-    auto *insp = new QDockWidget("Inspector", win);
+    // Право: вверху Solution Explorer (файлы проекта), внизу Details.
+    auto *sol = new QDockWidget("Solution Explorer", win);
+    sol->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                     QDockWidget::DockWidgetFloatable);
+    sol->setWidget(makeSolution(sol, project));
+    win->addDockWidget(Qt::RightDockWidgetArea, sol);
+    auto *insp = new QDockWidget("Details", win);
     insp->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
     insp->setWidget(makeInspector(insp, vp, con));
     win->addDockWidget(Qt::RightDockWidgetArea, insp);
 
-    auto *bottom = new QDockWidget("Bottom", win);
-    bottom->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
-                        QDockWidget::DockWidgetFloatable);
-    bottom->setTitleBarWidget(new QWidget(bottom));
-    auto *tabs = new QTabWidget(bottom);
+    // Низ-А: терминал (вкладки Console/Terminal). Низ-Б: ассеты отдельно.
+    auto *bottomL = new QDockWidget("Terminal", win);
+    bottomL->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                         QDockWidget::DockWidgetFloatable);
+    bottomL->setTitleBarWidget(new QWidget(bottomL));
+    auto *tabs = new QTabWidget(bottomL);
     tabs->setTabsClosable(true);
-    tabs->addTab(makeAssets(tabs, con, project + "/depot"), "Asset Browser");
     tabs->addTab(con, "Console");
-    auto *term = new QLabel("Terminal: use system terminal (skeleton)", bottom);
+    auto *term = new QLabel("Terminal: use system terminal (skeleton)", bottomL);
     term->setAlignment(Qt::AlignCenter);
     tabs->addTab(term, "Terminal");
-    bottom->setWidget(tabs);
-    win->addDockWidget(Qt::BottomDockWidgetArea, bottom);
+    bottomL->setWidget(tabs);
+    win->addDockWidget(Qt::BottomDockWidgetArea, bottomL);
+    auto *bottomR = new QDockWidget("Asset Browser", win);
+    bottomR->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                         QDockWidget::DockWidgetFloatable);
+    bottomR->setWidget(makeAssets(bottomR, con, project + "/depot"));
+    win->addDockWidget(Qt::BottomDockWidgetArea, bottomR);
 
     QObject::connect(actPlay, &QAction::triggered, [vp, con]() {
         if (vp) vp->setPlaying(true);
@@ -121,6 +161,22 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     QObject::connect(actStop, &QAction::triggered, [vp, con]() {
         if (vp) vp->setPlaying(false);
         con->log("stop");
+    });
+    QObject::connect(actSave, &QAction::triggered, [con, project]() {
+        scene_save(project);
+        con->log(QString("saved %1/scene.txt").arg(project));
+    });
+    QObject::connect(actNew, &QAction::triggered, [con]() {
+        struct ScWorld *w = ui_world();
+        unsigned list[1024];
+        int n = sc_list(w, list, 1024);
+        for (int i = 0; i < n; i++) sc_kill(w, list[i]);
+        sc_spawn(w, "Scene");
+        sc_spawn(w, "Camera");
+        sc_spawn(w, "Light");
+        sc_spawn(w, "Mesh");
+        ui_select(0);
+        con->log("new scene: 4 defaults");
     });
     auto setView = [vp, con](int m, const char *nm) {
         if (vp) vp->setViewMode(m);
