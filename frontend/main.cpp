@@ -69,7 +69,11 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     win->addDockWidget(Qt::LeftDockWidgetArea, hier);
 
     vp = new Viewport(win);
-    win->setCentralWidget(vp);
+    // Вкладки вьюпорта как в референсах (пока одна сцена).
+    auto *vpTabs = new QTabWidget(win);
+    vpTabs->addTab(vp, "Viewport Scene");
+    vpTabs->setTabsClosable(false);
+    win->setCentralWidget(vpTabs);
     if (!vp->init(backend)) {
         con->log("viewport: engine init FAILED (see terminal)");
     } else {
@@ -142,6 +146,21 @@ static QMainWindow *openEditor(const QString &project, int backend) {
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     app.setApplicationName("voxengine-editor");
+    // Тёмная тема как в референсах (UE/VSCode): палитра Fusion, без зависимостей.
+    app.setStyle("Fusion");
+    {
+        QPalette p;
+        p.setColor(QPalette::Window, QColor(45, 45, 48));
+        p.setColor(QPalette::WindowText, QColor(220, 220, 220));
+        p.setColor(QPalette::Base, QColor(30, 30, 30));
+        p.setColor(QPalette::AlternateBase, QColor(45, 45, 48));
+        p.setColor(QPalette::Text, QColor(220, 220, 220));
+        p.setColor(QPalette::Button, QColor(60, 60, 63));
+        p.setColor(QPalette::ButtonText, QColor(220, 220, 220));
+        p.setColor(QPalette::Highlight, QColor(0, 122, 204));
+        p.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+        app.setPalette(p);
+    }
     QMainWindow *editor = nullptr;
     HubWindow hub([&](const QString &project, int backend) {
         // Эстафета: параметры из хаба -> окно редактора.

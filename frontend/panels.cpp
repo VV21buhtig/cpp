@@ -1,6 +1,7 @@
 // Панели: дерево сцены, ползунки трансформов, склад ассетов. C++ без Q_OBJECT.
 #include "panels.h"
 #include "viewport.h"
+#include <functional>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -10,6 +11,9 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QLineEdit>
+#include <QImage>
+#include <QPixmap>
+#include <QSize>
 #include <QPushButton>
 #include <QFileDialog>
 #include <QDir>
@@ -79,6 +83,10 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     auto *tree = new QTreeWidget(w);
     tree->setHeaderLabels({"Hierarchy"});
     tree->setColumnCount(1);
+    // Поиск по именам как в референсах (Outliner/Explorer).
+    auto *find = new QLineEdit(w);
+    find->setPlaceholderText("Search...");
+    lay->addWidget(find);
     auto *root = new QTreeWidgetItem(tree, {"Scene"});
     Entity list[64];
     int n = sc_list(&g_world, list, 64);
@@ -107,6 +115,21 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     }
     root->setExpanded(true);
     lay->addWidget(tree);
+    // Фильтр: виден совпадающий или чей потомок совпал.
+    std::function<bool(QTreeWidgetItem *, const QString &)> match;
+    match = [&](QTreeWidgetItem *it, const QString &q) -> bool {
+        bool self = q.isEmpty() || it->text(0).contains(q, Qt::CaseInsensitive);
+        bool kid = false;
+        for (int k = 0; k < it->childCount(); k++)
+            kid = match(it->child(k), q) || kid;
+        bool show = self || kid;
+        it->setHidden(!show);
+        if (kid) it->setExpanded(true);
+        return show;
+    };
+    QObject::connect(find, &QLineEdit::textChanged, [=](const QString &q) {
+        for (int k = 0; k < tree->topLevelItemCount(); k++) match(tree->topLevelItem(k), q);
+    });
     QObject::connect(tree, &QTreeWidget::itemClicked, [=](QTreeWidgetItem *it, int) {
         qlonglong id = it->data(0, Qt::UserRole).toLongLong();
         if (id > 0) {
@@ -199,6 +222,11 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
     top->addWidget(imp);
     lay->addLayout(top);
     auto *list = new QListWidget(w);
+    // Сетка миниатюр как в референсах (не список).
+    list->setViewMode(QListWidget::IconMode);
+    list->setIconSize(QSize(64, 64));
+    list->setResizeMode(QListWidget::Adjust);
+    list->setMovement(QListWidget::Static);
     lay->addWidget(list);
     // Депо проекта из хаба (папка проекта + /depot). Движок читает по ID.
     QByteArray dep = depot.toUtf8();
@@ -225,7 +253,14 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
             QString q = QString::fromUtf8(nm);
             QString flt = search->text();
             if (!flt.isEmpty() && !q.contains(flt, Qt::CaseInsensitive)) continue;
-            list->addItem(q);
+            // Миниатюра: картинки грузим, остальное — без иконки.
+            QString full = depot + "/" + q;
+            QImage thumb(full);
+            auto *it = new QListWidgetItem(q);
+            if (!thumb.isNull())
+                it->setIcon(QIcon(QPixmap::fromImage(
+                    thumb.scaled(64, 64, Qt::KeepAspectRatio, Qt::FastTransformation))));
+            list->addItem(it);
         }
         fclose(f);
         if (con) con->log(QString("depot: %1 entries").arg(list->count()));
