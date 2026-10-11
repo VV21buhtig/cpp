@@ -99,3 +99,10 @@ target_include_directories(scene2d PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(scene2d PRIVATE glfw OpenGL::GL m)
 target_compile_options(scene2d PRIVATE -Wall -Wextra)
+# Композитное демо L3: воксели + векторный UI в одном кадре (общая цель).
+add_executable(comp_demo ../template/comp_demo.c gl_core.c vec_core.c corelib.c comp.c rhi_gl.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c third-party/glad/gl.c)
+target_include_directories(comp_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(comp_demo PRIVATE glfw OpenGL::GL m)
+target_compile_options(comp_demo PRIVATE -Wall -Wextra)

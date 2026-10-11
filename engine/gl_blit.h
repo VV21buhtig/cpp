@@ -71,7 +71,24 @@ static int blit_upload(BlitGL *b, const uint8_t *rgba, int w, int h) {
     return 1;
 }
 
-// Кадр: блит + бейдж (br,bg,bb) + VOX_SHOT. Возвращает fps.
+// Кадр в чужой FBO поверх (бленд src-alpha): fb уже залит в текстуру блита.
+// Без чистки (её сделал базовый проход), без swap/бейджа.
+static void blit_overlay_to(BlitGL *b, unsigned fbo, int w, int h) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, w, h);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(b->prog);
+    glActiveTexture(GL_TEXTURE0); // юнит сэмплера (воксель оставляет 1!)
+    glBindTexture(GL_TEXTURE_2D, b->tex);
+    glBindVertexArray(b->vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
 static float blit_frame(BlitGL *b, int ww, int hh, float br, float bg, float bb) {
     double now = glfwGetTime();
     float dt = (float)(now - b->prevT);
@@ -83,6 +100,7 @@ static float blit_frame(BlitGL *b, int ww, int hh, float br, float bg, float bb)
     glViewport(0, 0, ww, hh);
     glDisable(GL_DEPTH_TEST);
     glUseProgram(b->prog);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, b->tex);
     glBindVertexArray(b->vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include "render_api.h"
+#include "rtarget.h"
 #include "mat4.h"
 #include "vec.h"
 #include "vox/vox_tex.h"
@@ -104,17 +105,8 @@ static void core_unload_voxmesh(RenderCore *rc, int slot) {
     c->meshes[slot].count = 0;
 }
 
-static void core_frame(RenderCore *rc, const RcView *v) {
-    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
-    double now = glfwGetTime();
-    float dt = (float)(now - c->prevT);
-    c->prevT = now;
-    if (dt > 0.0f) {
-        float fps = 1.0f / dt;
-        c->fpsEma = c->fpsEma > 0.0f ? c->fpsEma * 0.95f + fps * 0.05f : fps;
-    }
-    int ww = v->resW > 0 ? v->resW : 1280;
-    int hh = v->resH > 0 ? v->resH : 720;
+// Общая отрисовка (экран и цель): вьюпорт+чистка+небо+меши. Без swap/бейджа.
+static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now) {
     glViewport(0, 0, ww, hh);
     glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -183,8 +175,25 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     glBindVertexArray(0);
     glUseProgram(0);
     glDisable(GL_CULL_FACE);
-    // Бейдж ядра: зелёный угол 64x32 слева внизу (VK — красный, см. vk_core).
-    // Всегда включён: ядра обязаны отличаться глазами.
+}
+
+static void core_frame(RenderCore *rc, const RcView *v) {
+    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
+    double now = glfwGetTime();
+    float dt = (float)(now - c->prevT);
+    c->prevT = now;
+    if (dt > 0.0f) {
+        float fps = 1.0f / dt;
+        c->fpsEma = c->fpsEma > 0.0f ? c->fpsEma * 0.95f + fps * 0.05f : fps;
+    }
+    int ww = v->resW > 0 ? v->resW : 1280;
+    int hh = v->resH > 0 ? v->resH : 720;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    draw_scene(c, v, ww, hh, now);
+    // Бейдж ядра: зелёный угол 64x32 слева внизу (только свой экран,
+    // в композиции бейджей нет — цель одна на всех).
+
+
     glEnable(GL_SCISSOR_TEST);
     glScissor(0, 0, 64, 32);
     glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
@@ -233,6 +242,17 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     }
     glfwSwapBuffers(c->win);
     c->frame++;
+}
+
+// Кадр в цель (композитор L3): та же сцена, без swap/бейджа/шота.
+static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
+    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
+    if (!t || t->backend != 2 || !t->fbo) return 0;
+    int ww = t->w, hh = t->h;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    draw_scene(c, v, ww, hh, glfwGetTime());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return 1;
 }
 
 static int core_init(RenderCore *rc, void *glfwWindow) {
@@ -373,6 +393,7 @@ RenderCore *rc_gl_create(void) {
     w->api.init = core_init;
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;
+    w->api.frame_to = core_frame_to;
     w->api.upload_chunk = 0; // сырые воксели ест только DDA (webgpu)
     w->api.set_origin = 0;
     w->api.unload_chunk = 0;

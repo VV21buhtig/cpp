@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <math.h>
 #include "render_api.h"
+#include "rtarget.h"
 #include "gl_blit.h"
 
 typedef struct {
@@ -117,6 +118,16 @@ static void vec_frame(RenderCore *rc, const RcView *v) {
     blit_frame(&p->blit, ww, hh, 0.0f, 1.0f, 1.0f); // бейдж циан
 }
 
+// Кадр в чужую цель поверх (бленд): текстура уже залита в feed.
+// Без чистки/swap/бейджа. Размеры fb и цели должны совпадать (демо следит).
+static int vec_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
+    VecWrap *p = (VecWrap *)rc->ctx;
+    (void)v;
+    if (!t || t->backend != 2 || !t->fbo || !p->blit.tex) return 0;
+    blit_overlay_to(&p->blit, t->fbo, t->w, t->h);
+    return 1;
+}
+
 static int vec_init(RenderCore *rc, void *glfwWindow) {
     VecWrap *p = (VecWrap *)rc->ctx;
     if (!blit_init(&p->blit, (GLFWwindow *)glfwWindow)) return 0;
@@ -148,6 +159,7 @@ RenderCore *rc_vec_create(void) {
     w->api.init = vec_init;
     w->api.shutdown = vec_shutdown;
     w->api.frame = vec_frame;
+    w->api.frame_to = vec_frame_to;
     w->api.upload_vector = vec_upload;
     w->api.fps = vec_fps;
     return &w->api;
