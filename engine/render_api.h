@@ -64,7 +64,7 @@ typedef struct {
 } RcVecShape;
 
 typedef struct RenderCore RenderCore;
-typedef struct RcTarget RcTarget; // opaque цель кадра (FBO/картинка), создаёт композитор
+typedef struct RcTarget RcTarget; // см. rtarget.h (полное определение там)
 // Бэкенд ядра (на чём рисуем). Только три: Metal нет (не на чем запускать),
 // DX12 не нужен (Vulkan удобнее и шире), DX11 хуже GL. Точка.
 #define RC_BACKEND_NONE 0
@@ -129,6 +129,9 @@ RenderCore *rc_create(const char *name);
 // Выбор по двум осям: домен (RC_CAP_*, один бит) + бэкенд (RC_BACKEND_*).
 // NULL если такой ячейки нет. Это и есть таблица «домен × бэкенд».
 RenderCore *rc_create_by(unsigned domain, unsigned backend);
+// Версия движка для проверки совместимости оболочкой ("0.1.0").
+// Редактор сверяет мажор прежде чем дёргать остальное.
+const char *eng_version(void);
 // Саморегистрация ядра (дергает конструктор ядра, не человек).
 // fn: указатель на rc_*_create. Повторная регистрация того же имени — игнор.
 void rc_register(const char *name, unsigned domain, unsigned backend,

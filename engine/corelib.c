@@ -39,6 +39,10 @@ RenderCore *rc_create_by(unsigned domain, unsigned backend) {
     return 0;
 }
 
+const char *eng_version(void) {
+    return "0.1.0";
+}
+
 void rc_destroy(RenderCore *rc) {
     if (rc) free(rc->ctx);
 }
