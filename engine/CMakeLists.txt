@@ -106,3 +106,7 @@ target_include_directories(comp_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(comp_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(comp_demo PRIVATE -Wall -Wextra)
+# Тест склада ассетов (CapCut-модель): дедуп, резолв, байты.
+add_executable(asset_test asset_test.c asset.c)
+target_include_directories(asset_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(asset_test PRIVATE -Wall -Wextra)
