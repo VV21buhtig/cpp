@@ -37,8 +37,8 @@ static int l_circle(lua_State *L) { return l_shape(L, 1); }
 static int l_line(lua_State *L) { return l_shape(L, 2); }
 
 static const char *script_path(void) {
-    static const char *paths[] = {"engine/vec.lua", "vec.lua"};
-    for (int i = 0; i < 2; i++) {
+    static const char *paths[] = {"template/vec.lua", "engine/vec.lua", "vec.lua"};
+    for (int i = 0; i < 3; i++) {
         FILE *f = fopen(paths[i], "rb");
         if (f) { fclose(f); return paths[i]; }
     }
