@@ -57,12 +57,25 @@ void ui_select(unsigned id) {
 static void ensureWorld(ConsolePanel *con) {
     if (g_worldInit) return;
     sc_init(&g_world);
-    sc_spawn(&g_world, "Scene");
-    sc_spawn(&g_world, "Camera");
-    sc_spawn(&g_world, "Light");
-    sc_spawn(&g_world, "Mesh");
+    // Богатая сцена по умолчанию (скелет не должен выглядеть пустым):
+    // дерево в два уровня, как в референсах.
+    Entity scene = sc_spawn(&g_world, "Scene");
+    Entity env = sc_spawn(&g_world, "Environment");
+    Entity actors = sc_spawn(&g_world, "Actors");
+    Entity cam = sc_spawn(&g_world, "Camera");
+    Entity light = sc_spawn(&g_world, "Light");
+    Entity mesh = sc_spawn(&g_world, "Mesh");
+    Entity cube = sc_spawn(&g_world, "Cube");
+    Entity ground = sc_spawn(&g_world, "Ground");
+    sc_parent(&g_world, env, scene);
+    sc_parent(&g_world, actors, scene);
+    sc_parent(&g_world, cam, env);
+    sc_parent(&g_world, light, env);
+    sc_parent(&g_world, mesh, actors);
+    sc_parent(&g_world, cube, actors);
+    sc_parent(&g_world, ground, actors);
     g_worldInit = 1;
-    if (con) con->log("scene: 4 entities");
+    if (con) con->log("scene: 8 entities");
 }
 
 ConsolePanel::ConsolePanel(QWidget *parent) : QWidget(parent) {
@@ -107,8 +120,9 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     auto *lay = new QVBoxLayout(w);
     lay->setContentsMargins(2, 2, 2, 2);
     auto *tree = new QTreeWidget(w);
-    tree->setHeaderLabels({"Hierarchy"});
-    tree->setColumnCount(1);
+    tree->setHeaderLabels({"Name", "Toggle"});
+    tree->setColumnCount(2);
+    tree->setColumnWidth(1, 52);
     // Поиск по именам как в референсах (Outliner/Explorer).
     auto *find = new QLineEdit(w);
     find->setPlaceholderText("Search...");
@@ -126,7 +140,7 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
         if (!strcmp(nm, "Scene")) continue;
         items[i] = new QTreeWidgetItem({nm});
         items[i]->setData(0, Qt::UserRole, (qlonglong)list[i]);
-        items[i]->setCheckState(0, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
+        items[i]->setCheckState(1, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
         ids[i] = list[i];
     }
     for (int i = 0; i < m; i++) {
@@ -178,7 +192,7 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     });
     QObject::connect(tree, &QTreeWidget::itemChanged, [=](QTreeWidgetItem *it, int) {
         qlonglong id = it->data(0, Qt::UserRole).toLongLong();
-        if (id > 0) sc_show(&g_world, (Entity)id, it->checkState(0) == Qt::Checked);
+        if (id > 0) sc_show(&g_world, (Entity)id, it->checkState(1) == Qt::Checked);
     });
     return w;
 }

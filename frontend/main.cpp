@@ -106,17 +106,25 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     auto *vFront = bar->addAction("Front");
     auto *vOrbit = bar->addAction("Orbit");
 
-    // Крайняя левая панель активности (как в референсах): только API —
-    // единственный живой переключатель. Остальное позже, не врём.
+    // Крайняя левая панель активности: компактные кнопки-буквы 40px
+    // (без картинок и эмодзи), активная — с левой синей полосой через QSS.
     auto *activity = new QToolBar("activity", win);
     activity->setOrientation(Qt::Vertical);
+    activity->setIconSize(QSize(40, 40));
+    activity->setStyleSheet(
+        "QToolBar { background: #252526; border: none; }"
+        "QToolButton { min-width: 40px; min-height: 40px; font-weight: bold; font-size: 14px; color: #cccccc; border: none; }"
+        "QToolButton:checked { color: white; border-left: 3px solid #007ACC; background: #094771; }");
     win->addToolBar(Qt::LeftToolBarArea, activity);
     activity->addWidget(new QLabel("API", win));
     auto *apiGroup = new QActionGroup(win);
     apiGroup->setExclusive(true);
-    auto *apiW = activity->addAction("WebGPU");
-    auto *apiG = activity->addAction("OpenGL");
-    auto *apiV = activity->addAction("Vulkan");
+    auto *apiW = activity->addAction("W");
+    auto *apiG = activity->addAction("G");
+    auto *apiV = activity->addAction("V");
+    apiW->setToolTip("WebGPU");
+    apiG->setToolTip("OpenGL");
+    apiV->setToolTip("Vulkan");
     for (auto *a : {apiW, apiG, apiV}) {
         a->setCheckable(true);
         apiGroup->addAction(a);
@@ -182,6 +190,8 @@ static QMainWindow *openEditor(const QString &project, int backend) {
                          QDockWidget::DockWidgetFloatable);
     bottomR->setWidget(makeAssets(bottomR, con, project + "/depot"));
     win->addDockWidget(Qt::BottomDockWidgetArea, bottomR);
+    // Пропорции как в референсах: центр максимум, низ компактно.
+    win->resizeDocks({bottomL, bottomR}, {220, 220}, Qt::Vertical);
 
     QObject::connect(actPlay, &QAction::triggered, [vp, con]() {
         if (vp) vp->setPlaying(true);
