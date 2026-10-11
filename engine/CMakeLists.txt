@@ -6,6 +6,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 find_package(glfw3 REQUIRED)
 find_package(OpenGL REQUIRED)
 find_library(VULKAN_LIB vulkan REQUIRED)
+include(FetchContent)
+FetchContent_Declare(webgpu-distribution
+  GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution.git
+  GIT_TAG dawn-7069)
+FetchContent_MakeAvailable(webgpu-distribution)
 
 # База инструмента: окно+ввод+цикл, слепая к контенту. Ядра линкует игра.
 add_executable(engine_test engine_test.c engine.c)
@@ -56,8 +61,27 @@ target_include_directories(sdf_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(sdf_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
+# WGSL-канон вшивается в заголовок при каждой правке шейдеров.
+file(GLOB SDF_WGSL_PARTS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf/*.wgsl"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky/*.wgsl")
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
+  COMMAND ${CMAKE_COMMAND} -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/shaders
+    -DDST=${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
+  DEPENDS ${SDF_WGSL_PARTS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
+  COMMENT "embed shaders (sdf+sky)")
 # Тест L4: гравитация + часы фиксированного шага, чистый CPU.
 add_executable(phys_test phys_test.c)
 target_include_directories(phys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(phys_test PRIVATE m)
 target_compile_options(phys_test PRIVATE -Wall -Wextra)
+# Живое ядро орфана 3: webgpu-DDA на RHI (воксели, статический мир).
+add_executable(vox_demo vox_demo.c webgpu_core.c corelib.c rhi_webgpu.c
+  sky_lut.c vox/vox_gen.c vox/vox_tex.c
+  ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
+target_include_directories(vox_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/gen)
+target_link_libraries(vox_demo PRIVATE glfw webgpu m)
+target_compile_options(vox_demo PRIVATE -Wall -Wextra)

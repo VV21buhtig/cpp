@@ -33,7 +33,7 @@ typedef struct {
 // Шейдеры ищутся от корня репо; запасной — рядом с движком.
 static const char *sdf_vs(void) {
     static const char *paths[] = {
-        "engine/shaders/sdf/ray.vert", "shaders/sdf/ray.vert",
+        "engine/shaders/sdf_gl/ray.vert", "shaders/sdf_gl/ray.vert",
     };
     for (int i = 0; i < 2; i++) {
         FILE *f = fopen(paths[i], "rb");
@@ -44,7 +44,7 @@ static const char *sdf_vs(void) {
 
 static const char *sdf_fs(void) {
     static const char *paths[] = {
-        "engine/shaders/sdf/ray.frag", "shaders/sdf/ray.frag",
+        "engine/shaders/sdf_gl/ray.frag", "shaders/sdf_gl/ray.frag",
     };
     for (int i = 0; i < 2; i++) {
         FILE *f = fopen(paths[i], "rb");
