@@ -39,13 +39,6 @@ target_include_directories(rhi_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
 target_link_libraries(rhi_test PRIVATE glfw ${VULKAN_LIB} m)
 target_compile_options(rhi_test PRIVATE -Wall -Wextra)
-# Живое ядро орфана: vec на RHI (первый переезд домена).
-add_executable(vec_demo ../template/vec_demo.c vec_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
-target_include_directories(vec_demo PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
-target_link_libraries(vec_demo PRIVATE glfw OpenGL::GL m)
-target_compile_options(vec_demo PRIVATE -Wall -Wextra)
 # Песочница Noita-like: pix-ядро + клеточные частицы (первая L4-физика).
 add_executable(sand_demo ../template/sand_demo.c pix_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
 target_include_directories(sand_demo PRIVATE
@@ -54,13 +47,6 @@ target_include_directories(sand_demo PRIVATE
 target_link_libraries(sand_demo PRIVATE glfw OpenGL::GL m)
 target_compile_options(sand_demo PRIVATE -Wall -Wextra)
 
-# Живое ядро орфана 2: sdf на RHI (реймарш примитивов).
-add_executable(sdf_demo ../template/sdf_demo.c sdf_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
-target_include_directories(sdf_demo PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
-target_link_libraries(sdf_demo PRIVATE glfw OpenGL::GL m)
-target_compile_options(sdf_demo PRIVATE -Wall -Wextra)
 # WGSL-канон вшивается в заголовок при каждой правке шейдеров.
 file(GLOB SDF_WGSL_PARTS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf/*.wgsl"
@@ -76,15 +62,6 @@ add_executable(phys_test phys_test.c)
 target_include_directories(phys_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(phys_test PRIVATE m)
 target_compile_options(phys_test PRIVATE -Wall -Wextra)
-# Живое ядро орфана 3: webgpu-DDA на RHI (воксели, статический мир).
-add_executable(vox_demo ../template/vox_demo.c webgpu_core.c corelib.c rhi_webgpu.c
-  sky_lut.c vox/vox_gen.c vox/vox_tex.c
-  ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h)
-target_include_directories(vox_demo PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_BINARY_DIR}/gen)
-target_link_libraries(vox_demo PRIVATE glfw webgpu m)
-target_compile_options(vox_demo PRIVATE -Wall -Wextra)
 # Lua-демо: геймплей на скриптах (vec.lua), рендер в движке.
 add_executable(lua_demo ../template/lua_demo.c vec_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
 target_include_directories(lua_demo PRIVATE
@@ -92,13 +69,6 @@ target_include_directories(lua_demo PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(lua_demo PRIVATE glfw OpenGL::GL lua m)
 target_compile_options(lua_demo PRIVATE -Wall -Wextra)
-# Живое ядро орфана 4: gl-растр на RHI (меши greedy, статике 9x9 с соседями).
-add_executable(gl_demo ../template/gl_demo.c gl_core.c corelib.c rhi_gl.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c third-party/glad/gl.c)
-target_include_directories(gl_demo PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
-target_link_libraries(gl_demo PRIVATE glfw OpenGL::GL m)
-target_compile_options(gl_demo PRIVATE -Wall -Wextra)
 # SPIR-V для vk-ядра из наших shaders/vk (glslc).
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/spv_vk)
 foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
@@ -109,19 +79,23 @@ foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
     COMMENT "glslc ${SH}")
   list(APPEND VK_SPV ${CMAKE_CURRENT_BINARY_DIR}/spv_vk/${SH}.spv)
 endforeach()
-# Живое ядро орфана 6: vk-растр на RHI (меши greedy, статика 9x9 с соседями).
-add_executable(vk_demo ../template/vk_demo.c vk_core.c corelib.c rhi_vk.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c ${VK_SPV})
-target_compile_definitions(vk_demo PRIVATE
+# Общая 3D-сцена: одна на всех (террейн + SDF-витрина + куб).
+# Линкует все 3D-ядра: выбор через --core.
+add_executable(scene3d ../template/scene3d.c gl_core.c vk_core.c webgpu_core.c sdf_core.c mesh_core.c corelib.c rhi_gl.c rhi_vk.c rhi_webgpu.c vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c sky_lut.c third-party/glad/gl.c
+  ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
+target_compile_definitions(scene3d PRIVATE
   VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
-target_include_directories(vk_demo PRIVATE
+target_include_directories(scene3d PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
-target_link_libraries(vk_demo PRIVATE glfw ${VULKAN_LIB} m)
-target_compile_options(vk_demo PRIVATE -Wall -Wextra)
-# Живое ядро орфана 5: mesh на RHI (треугольный суп, свой домен).
-add_executable(mesh_demo ../template/mesh_demo.c mesh_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
-target_include_directories(mesh_demo PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers
+  ${CMAKE_CURRENT_BINARY_DIR}/gen)
+target_link_libraries(scene3d PRIVATE glfw OpenGL::GL ${VULKAN_LIB} webgpu m)
+target_compile_options(scene3d PRIVATE -Wall -Wextra)
+# Общая 2D-сцена: фигуры для vec-ядра.
+add_executable(scene2d ../template/scene2d.c vec_core.c corelib.c rhi_gl.c third-party/glad/gl.c)
+target_include_directories(scene2d PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
-target_link_libraries(mesh_demo PRIVATE glfw OpenGL::GL m)
-target_compile_options(mesh_demo PRIVATE -Wall -Wextra)
+target_link_libraries(scene2d PRIVATE glfw OpenGL::GL m)
+target_compile_options(scene2d PRIVATE -Wall -Wextra)

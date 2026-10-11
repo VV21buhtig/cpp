@@ -1,13 +1,13 @@
-// Векторное демо движка: примитивы -> vec-ядро на RHI. --frames N,
-// VOX_SHOT работает. Первое живое ядро орфана: доказывает RHI делом.
+// Общая 2D-сцена движка: ОДНА на всех (вместо демок под каждое ядро).
+// Пока ест только vec-ядро (фигуры); pix/sand/lua остаются отдельными
+// витринами доменов, не сценами.
+// --core vec (другим тут делать нечего — честный отказ), --frames N.
 #include <GLFW/glfw3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "render_api.h"
-
-RenderCore *rc_vec_create(void);
 
 static void shape(RcVecShape *s, int kind, float a, float b, float c, float d,
                   float r, float g, float bl, float al) {
@@ -17,17 +17,29 @@ static void shape(RcVecShape *s, int kind, float a, float b, float c, float d,
 }
 
 int main(int argc, char **argv) {
+    const char *coreName = "vec";
     int maxFrames = 0;
-    for (int i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = atoi(argv[++i]);
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--core") && i + 1 < argc) coreName = argv[++i];
+        else if (!strcmp(argv[i], "--frames") && i + 1 < argc) maxFrames = atoi(argv[++i]);
+    }
     if (!glfwInit()) { fprintf(stderr, "glfwInit fail\n"); return 1; }
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow *win = glfwCreateWindow(640, 360, "vec demo", 0, 0);
+    RenderCore *rc = rc_create(coreName);
+    if (!rc) { fprintf(stderr, "no core '%s'\n", coreName); return 1; }
+    if (!(rc->caps & RC_CAP_VECTOR) || !rc->upload_vector) {
+        fprintf(stderr, "core '%s' has no vector input\n", rc->name);
+        return 1;
+    }
+    if (rc->backend == RC_BACKEND_GL) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    } else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
+    GLFWwindow *win = glfwCreateWindow(640, 360, "scene2d", 0, 0);
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
-    RenderCore *rc = rc_vec_create();
-    if (!rc || !rc->init(rc, win)) { fprintf(stderr, "vec init fail\n"); return 1; }
+    if (!rc->init(rc, win)) { fprintf(stderr, "core init fail\n"); return 1; }
     printf("core: %s caps=0x%x be=%u\n", rc->name, rc->caps, rc->backend);
     int frame = 0;
     while (!glfwWindowShouldClose(win)) {
