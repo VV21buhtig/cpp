@@ -78,5 +78,9 @@ private:
     float pvM[16] = {0};
     float pcamX = 0, pcamY = 0, pcamZ = 0, pfov = 1.6f;
     int havePV = 0;
+    // Экранные концы осей гизмо (пиксели 1280x720) + их валидность.
+    float sAx[3][4] = {{{0}}};
+    int sOk[3] = {0};
+    int sHave = 0;
 };
 #endif

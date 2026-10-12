@@ -84,8 +84,9 @@ bool Viewport::initDomain(unsigned dom, int be) {
         return false;
     }
     struct RenderCore *newVrc = nullptr;
-    // Vec-ядро для гизмо-оверлея делит окно/контекст (воксель под GL).
-    if (dom == RC_CAP_VOXEL && be == 2) {
+    // Vec-ядро для гизмо-оверлея делит окно/контекст (любой GL-домен:
+    // оверлей рисует поверх готовой цели, домен ему без разницы).
+    if (be == 2) {
         newVrc = rc_create_by(RC_CAP_VECTOR, 2u);
         if (newVrc && !newVrc->init(newVrc, win)) {
             rc_destroy(newVrc);
@@ -402,38 +403,62 @@ void Viewport::renderOnce() {
     v.dayT = getenv("VOX_DAYT") && getenv("VOX_DAYT")[0]
                  ? (float)atof(getenv("VOX_DAYT"))
                  : 242.0f;
+    // PV-кадр для пикинга/таскания — ВСЕМ путям (раньше только воксель-GL,
+    // на VK/WebGPU/SDF/вектор/меш мышь была мертва). Чистая математика, без GL.
+    {
+        Vec3 f2, r2, u2;
+        cam_basis(v.yaw, v.pitch, &f2, &r2, &u2);
+        Mat4 pr = m4persp(2.0f * atanf(0.5f / (v.fov > 0.2f ? v.fov : 1.6f)), 1280.0f / 720.0f,
+                          0.1f, 600.0f);
+        Mat4 vw = m4look(v.camPos.x, v.camPos.y, v.camPos.z, v.camPos.x + f2.x,
+                         v.camPos.y + f2.y, v.camPos.z + f2.z);
+        Mat4 pv = m4mul(&pr, &vw);
+        memcpy(pvM, pv.m, sizeof pvM);
+        pcamX = v.camPos.x;
+        pcamY = v.camPos.y;
+        pcamZ = v.camPos.z;
+        pfov = v.fov;
+        havePV = 1;
+        // Экранные концы осей выбранной (для QPainter-осей не-GL путей).
+        sHave = 0;
+        unsigned sel = ui_selected();
+        if (sel) {
+            ScTransform et = sc_get(ui_world(), sel);
+            float L = 4.0f;
+            for (int ax = 0; ax < 3; ax++) {
+                float ex = et.pos.x + (ax == 0 ? L : 0);
+                float ey = et.pos.y + (ax == 1 ? L : 0);
+                float ez = et.pos.z + (ax == 2 ? L : 0);
+                float ax0, ay0, ax1, ay1;
+                sOk[ax] = 0;
+                if (!project_pt(pv.m, et.pos.x, et.pos.y, et.pos.z, &ax0, &ay0)) continue;
+                if (!project_pt(pv.m, ex, ey, ez, &ax1, &ay1)) continue;
+                sAx[ax][0] = ax0;
+                sAx[ax][1] = ay0;
+                sAx[ax][2] = ax1;
+                sAx[ax][3] = ay1;
+                sOk[ax] = 1;
+                sHave = 1;
+            }
+        }
+    }
     if (isGL && target && rc->frame_to) {
         rc->frame_to(rc, &v, target);
         // Гизмо-оверлей вторым проходом (vec, бленд): оси выбранной сущности.
+        // Концы осей уже посчитаны выше (sAx) — тут только заливка в цель.
         if (vrc && vrc->frame_to) {
             unsigned sel = ui_selected();
             RcVecShape gs[4];
             int ng = 0;
-            if (sel) {
-                ScTransform et = sc_get(ui_world(), sel);
-                // PV из той же камеры что сцена.
-                Vec3 f2, r2, u2;
-                cam_basis(v.yaw, v.pitch, &f2, &r2, &u2);
-                Mat4 pr = m4persp(2.0f * atanf(0.5f / (v.fov > 0.2f ? v.fov : 1.6f)),
-                                  1280.0f / 720.0f, 0.1f, 600.0f);
-                Mat4 vw = m4look(v.camPos.x, v.camPos.y, v.camPos.z,
-                                 v.camPos.x + f2.x, v.camPos.y + f2.y, v.camPos.z + f2.z);
-                Mat4 pv = m4mul(&pr, &vw);
-                memcpy(pvM, pv.m, sizeof pvM);
-                pcamX = v.camPos.x; pcamY = v.camPos.y; pcamZ = v.camPos.z;
-                pfov = v.fov;
-                havePV = 1;
-                float L = 4.0f;
+            if (sel && sHave) {
                 float cols[3][4] = {{1, 0.2f, 0.2f, 1}, {0.2f, 1, 0.2f, 1}, {0.2f, 0.4f, 1, 1}};
                 for (int ax = 0; ax < 3; ax++) {
-                    float ex = et.pos.x + (ax == 0 ? L : 0);
-                    float ey = et.pos.y + (ax == 1 ? L : 0);
-                    float ez = et.pos.z + (ax == 2 ? L : 0);
-                    float ax0, ay0, ax1, ay1;
-                    if (!project_pt(pv.m, et.pos.x, et.pos.y, et.pos.z, &ax0, &ay0)) continue;
-                    if (!project_pt(pv.m, ex, ey, ez, &ax1, &ay1)) continue;
+                    if (!sOk[ax]) continue;
                     gs[ng].kind = 2;
-                    gs[ng].a = ax0; gs[ng].b = ay0; gs[ng].c = ax1; gs[ng].d = ay1;
+                    gs[ng].a = sAx[ax][0];
+                    gs[ng].b = sAx[ax][1];
+                    gs[ng].c = sAx[ax][2];
+                    gs[ng].d = sAx[ax][3];
                     gs[ng].rgba[0] = cols[ax][0];
                     gs[ng].rgba[1] = cols[ax][1];
                     gs[ng].rgba[2] = cols[ax][2];
@@ -643,6 +668,19 @@ void Viewport::paintEvent(QPaintEvent *) {
         QSize s = img.size().scaled(size(), Qt::KeepAspectRatio);
         QPoint at((width() - s.width()) / 2, (height() - s.height()) / 2);
         p.drawImage(QRect(at, s), img);
+        // Оси гизмо поверх: у GL их рисует vec-оверлей в цели, у VK/WebGPU
+        // цели нет — те же концы (sAx) доводим QPainter'ом. Масштаб как у кадра.
+        if (!vrc && sHave && havePV) {
+            double kx = (double)s.width() / 1280.0, ky = (double)s.height() / 720.0;
+            QColor cols[3] = {QColor(255, 51, 51), QColor(51, 255, 51), QColor(51, 102, 255)};
+            for (int ax = 0; ax < 3; ax++) {
+                if (!sOk[ax]) continue;
+                QColor cc = (dragAxis == ax) ? QColor(255, 255, 0) : cols[ax];
+                p.setPen(QPen(cc, 2));
+                p.drawLine(at.x() + (int)(sAx[ax][0] * kx), at.y() + (int)(sAx[ax][1] * ky),
+                           at.x() + (int)(sAx[ax][2] * kx), at.y() + (int)(sAx[ax][3] * ky));
+            }
+        }
     }
     p.setPen(Qt::white);
     p.drawText(8, 16, QString("fps %1").arg(fpsEma, 0, 'f', 0));
