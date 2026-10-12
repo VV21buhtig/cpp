@@ -19,8 +19,11 @@
 #include <QSize>
 #include <QPushButton>
 #include <QFileDialog>
+#include <QFileSystemWatcher>
 #include <QTreeView>
 #include <QFileSystemModel>
+#include <QSortFilterProxyModel>
+#include <QMessageBox>
 #include <QDir>
 #include "scene.h"
 #include "asset.h"
@@ -421,6 +424,7 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
             int dot = stem.lastIndexOf('.');
             if (dot > 0) stem = stem.left(dot);
             auto *it = new QListWidgetItem(q + "\n" + stem);
+            it->setData(Qt::UserRole, QString::fromUtf8(nm)); // имя в депо
             if (!thumb.isNull())
                 it->setIcon(QIcon(QPixmap::fromImage(
                     thumb.scaled(64, 64, Qt::KeepAspectRatio, Qt::FastTransformation))));
@@ -440,6 +444,54 @@ QWidget *makeAssets(QWidget *parent, ConsolePanel *con, const QString &depot) { 
         }
         refresh();
     });
+    // Удаление ассета: файл + строка индекса (движок remove не умеет —
+    // индекс его, правим тут тем же форматом). С подтверждением.
+    list->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(list, &QListWidget::customContextMenuRequested, [=](const QPoint &at) {
+        QListWidgetItem *it = list->itemAt(at);
+        if (!it) return;
+        list->setCurrentItem(it);
+        QMenu m(list);
+        m.addAction("Delete asset", [=]() {
+            QString stored = it->data(Qt::UserRole).toString();
+            if (stored.isEmpty()) return;
+            auto yn = QMessageBox::question(
+                list, "Delete asset", QString("Удалить %1 из депо?").arg(stored));
+            if (yn != QMessageBox::Yes) return;
+            QFile::remove(depot + "/" + stored);
+            // Переписать индекс без его строк (совпадение по 2-му полю).
+            QString idxPath = depot + "/index.txt";
+            FILE *f = fopen(idxPath.toUtf8().constData(), "rb");
+            QStringList keep;
+            if (f) {
+                char line[640];
+                while (fgets(line, sizeof line, f)) {
+                    char *sp = strchr(line, ' ');
+                    if (!sp) continue;
+                    char *nm = sp + 1;
+                    char *sp2 = strchr(nm, ' ');
+                    if (sp2) *sp2 = 0;
+                    if (strcmp(nm, stored.toUtf8().constData())) {
+                        if (sp2) *sp2 = ' ';
+                        keep << QString::fromUtf8(line);
+                    }
+                }
+                fclose(f);
+            }
+            FILE *o = fopen(idxPath.toUtf8().constData(), "w");
+            if (o) {
+                for (const QString &ln : keep) fputs(ln.toUtf8().constData(), o);
+                fclose(o);
+            }
+            if (con) con->log(QString("asset deleted: %1").arg(stored));
+            refresh();
+        });
+        m.exec(list->mapToGlobal(at));
+    });
+    // Депо на диске поменяли мимо нас (импорт из хаба, руки) — обновить.
+    auto *watch = new QFileSystemWatcher(w);
+    watch->addPath(depot);
+    QObject::connect(watch, &QFileSystemWatcher::directoryChanged, [=]() { refresh(); });
     refresh();
     return w;
 }
@@ -514,13 +566,66 @@ QWidget *makeSolution(QWidget *parent, const QString &project) {
     auto *w = new QWidget(parent);
     auto *lay = new QVBoxLayout(w);
     lay->setContentsMargins(2, 2, 2, 2);
+    // Поиск по файлам (прокси-фильтр поверх файловой модели).
+    auto *find = new QLineEdit(w);
+    find->setPlaceholderText("Search...");
+    lay->addWidget(find);
     auto *view = new QTreeView(w);
     auto *model = new QFileSystemModel(view);
     model->setRootPath(project);
     model->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot);
-    view->setModel(model);
-    view->setRootIndex(model->index(project));
+    auto *proxy = new QSortFilterProxyModel(view);
+    proxy->setSourceModel(model);
+    proxy->setFilterKeyColumn(0);
+    proxy->setRecursiveFilteringEnabled(true);
+    proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    view->setModel(proxy);
+    view->setRootIndex(proxy->mapFromSource(model->index(project)));
     view->setHeaderHidden(true);
+    // Файловая модель сама следит за диском (QFileSystemModel + watcher),
+    // поиск — живым фильтром. Операции — через модель (всё настоящее).
+    QObject::connect(find, &QLineEdit::textChanged,
+                     [=](const QString &q) { proxy->setFilterWildcard("*" + q + "*"); });
+    view->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(view, &QTreeView::customContextMenuRequested, [=](const QPoint &at) {
+        QModelIndex cur = view->indexAt(at);
+        QModelIndex src = proxy->mapToSource(cur);
+        QString dir = project;
+        if (src.isValid()) {
+            QFileInfo fi = model->fileInfo(src);
+            dir = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
+            view->setCurrentIndex(cur);
+        }
+        QMenu m(view);
+        m.addAction("New Folder...", [=]() {
+            bool ok = false;
+            QString nm =
+                QInputDialog::getText(view, "New Folder", "Name:", QLineEdit::Normal, "", &ok);
+            if (!ok || nm.trimmed().isEmpty()) return;
+            model->mkdir(model->index(dir), nm.trimmed());
+        });
+        m.addAction("New File...", [=]() {
+            bool ok = false;
+            QString nm =
+                QInputDialog::getText(view, "New File", "Name:", QLineEdit::Normal, "", &ok);
+            if (!ok || nm.trimmed().isEmpty()) return;
+            QFile f(dir + "/" + nm.trimmed());
+            if (f.open(QIODevice::WriteOnly)) f.close();
+        });
+        if (src.isValid()) {
+            m.addAction("Rename", [=]() { view->edit(cur); });
+            m.addAction("Delete", [=]() {
+                QModelIndex s2 = proxy->mapToSource(view->currentIndex());
+                if (!s2.isValid()) return;
+                QFileInfo fi = model->fileInfo(s2);
+                auto yn = QMessageBox::question(view, "Delete",
+                                                QString("Удалить %1?").arg(fi.fileName()));
+                if (yn != QMessageBox::Yes) return;
+                model->remove(s2);
+            });
+        }
+        m.exec(view->mapToGlobal(at));
+    });
     for (int c = 1; c < model->columnCount(); c++) view->hideColumn(c);
     lay->addWidget(view);
     return w;
