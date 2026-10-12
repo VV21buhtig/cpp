@@ -294,6 +294,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         sc_spawn(w, "Light");
         sc_spawn(w, "Mesh");
         ui_select(0);
+        ui_hierarchy_refresh(); // дерево тоже новое, а не старое
         con->log("new scene: 4 defaults");
     });
     auto setView = [vp, con](int m, const char *nm) {

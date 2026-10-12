@@ -8,6 +8,8 @@
 #include <QFormLayout>
 #include <QTreeWidget>
 #include <QDoubleSpinBox>
+#include <QMenu>
+#include <QInputDialog>
 #include <QSlider>
 #include <QLabel>
 #include <QListWidget>
@@ -26,6 +28,11 @@
 static ScWorld g_world;
 static int g_worldInit = 0;
 static Entity g_selected = 0;
+static std::function<void()> g_hierRefresh;
+
+void ui_hierarchy_refresh(void) {
+    if (g_hierRefresh) g_hierRefresh();
+}
 static QDoubleSpinBox *g_spins[9] = {0};
 
 unsigned ui_selected(void) { return g_selected; }
@@ -127,46 +134,12 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
     auto *find = new QLineEdit(w);
     find->setPlaceholderText("Search...");
     lay->addWidget(find);
-    auto *root = new QTreeWidgetItem(tree, {"Scene"});
-    Entity list[64];
-    int n = sc_list(&g_world, list, 64);
-    // Двухуровневое вложение: сначала записи, потом развеска по родителям.
-    // Сущность "Scene" прячем (её место занимает UI-корень).
-    QTreeWidgetItem *items[64] = {0};
-    Entity ids[64] = {0};
-    int m = n > 64 ? 64 : n;
-    for (int i = 0; i < m; i++) {
-        const char *nm = sc_name(&g_world, list[i]);
-        if (!strcmp(nm, "Scene")) continue;
-        items[i] = new QTreeWidgetItem({nm});
-        items[i]->setData(0, Qt::UserRole, (qlonglong)list[i]);
-        items[i]->setCheckState(1, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
-        ids[i] = list[i];
-    }
-    for (int i = 0; i < m; i++) {
-        if (!items[i]) continue;
-        Entity par = sc_parent_of(&g_world, ids[i]);
-        QTreeWidgetItem *dst = root;
-        if (par && strcmp(sc_name(&g_world, par), "Scene")) {
-            for (int k = 0; k < m; k++)
-                if (ids[k] == par && items[k]) { dst = items[k]; break; }
-        }
-        dst->addChild(items[i]);
-    }
-    root->setExpanded(true);
     lay->addWidget(tree);
     // Футер как в референсах: "N actors (1 selected)".
     auto *foot = new QLabel(w);
     lay->addWidget(foot);
-    auto footRefresh = [=]() {
-        int alive = 0;
-        for (int i = 0; i < m; i++)
-            if (items[i]) alive++;
-        unsigned sel = ui_selected();
-        foot->setText(sel ? QString("%1 actors (1 selected)").arg(alive)
-                          : QString("%1 actors").arg(alive));
-    };
-    footRefresh();
+    // Перестройка из движка (дерево — вид, правда — в ScWorld).
+    // Двухуровневое вложение; сущность "Scene" прячем (её место — UI-корень).
     // Фильтр: виден совпадающий или чей потомок совпал.
     std::function<bool(QTreeWidgetItem *, const QString &)> match;
     match = [&](QTreeWidgetItem *it, const QString &q) -> bool {
@@ -179,6 +152,54 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
         if (kid) it->setExpanded(true);
         return show;
     };
+    std::function<void()> rebuild = [=]() {
+        tree->clear();
+        auto *root = new QTreeWidgetItem(tree, {"Scene"});
+        Entity list[64];
+        int n = sc_list(&g_world, list, 64);
+        struct Row { QTreeWidgetItem *it; Entity id; };
+        Row rows[64];
+        int m = 0;
+        for (int i = 0; i < n && m < 64; i++) {
+            const char *nm = sc_name(&g_world, list[i]);
+            if (!strcmp(nm, "Scene")) continue;
+            auto *it = new QTreeWidgetItem({nm});
+            it->setData(0, Qt::UserRole, (qlonglong)list[i]);
+            it->setCheckState(1, sc_visible(&g_world, list[i]) ? Qt::Checked : Qt::Unchecked);
+            rows[m].it = it;
+            rows[m].id = list[i];
+            m++;
+        }
+        for (int i = 0; i < m; i++) {
+            Entity par = sc_parent_of(&g_world, rows[i].id);
+            QTreeWidgetItem *dst = root;
+            if (par && strcmp(sc_name(&g_world, par), "Scene")) {
+                for (int k = 0; k < m; k++)
+                    if (rows[k].id == par && rows[k].it) { dst = rows[k].it; break; }
+            }
+            dst->addChild(rows[i].it);
+        }
+        root->setExpanded(true);
+        // Подсветить выбранного, если жив.
+        if (g_selected && sc_alive(&g_world, g_selected)) {
+            for (int i = 0; i < m; i++) {
+                if (rows[i].id == g_selected) {
+                    tree->setCurrentItem(rows[i].it);
+                    break;
+                }
+            }
+        }
+        int alive = m;
+        unsigned sel = ui_selected();
+        foot->setText(sel ? QString("%1 actors (1 selected)").arg(alive)
+                          : QString("%1 actors").arg(alive));
+        // Фильтр заново (текст поиска живёт).
+        QString q = find->text();
+        if (!q.isEmpty())
+            for (int k = 0; k < tree->topLevelItemCount(); k++) match(tree->topLevelItem(k), q);
+    };
+    g_hierRefresh = rebuild;
+
     QObject::connect(find, &QLineEdit::textChanged, [=](const QString &q) {
         for (int k = 0; k < tree->topLevelItemCount(); k++) match(tree->topLevelItem(k), q);
     });
@@ -187,15 +208,80 @@ QWidget *makeHierarchy(QWidget *parent, ConsolePanel *con) {
         if (id > 0) {
             ui_select((unsigned)id);
             if (con) con->log(QString("select: %1").arg(sc_name(&g_world, g_selected)));
-            footRefresh();
         }
     });
     QObject::connect(tree, &QTreeWidget::itemChanged, [=](QTreeWidgetItem *it, int) {
         qlonglong id = it->data(0, Qt::UserRole).toLongLong();
         if (id > 0) sc_show(&g_world, (Entity)id, it->checkState(1) == Qt::Checked);
     });
+    // Операции: добавить/дублировать/переименовать/удалить. Всё через движок.
+    auto curId = [=]() -> Entity {
+        QTreeWidgetItem *it = tree->currentItem();
+        if (!it) return 0;
+        qlonglong id = it->data(0, Qt::UserRole).toLongLong();
+        return (id > 0 && sc_alive(&g_world, (Entity)id)) ? (Entity)id : 0;
+    };
+    auto afterOp = [=](const char *what, Entity keep) {
+        if (keep && sc_alive(&g_world, keep)) ui_select(keep);
+        else ui_select(0);
+        rebuild();
+        if (con) con->log(QString::fromUtf8(what));
+    };
+    tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(tree, &QTreeWidget::customContextMenuRequested, [=](const QPoint &at) {
+        QTreeWidgetItem *it = tree->itemAt(at);
+        if (it) tree->setCurrentItem(it);
+        Entity id = curId();
+        QMenu m(tree);
+        m.addAction("Add Entity", [=]() {
+            Entity e = sc_spawn(&g_world, "Entity");
+            if (e && id) sc_parent(&g_world, e, id);
+            afterOp("add: Entity", e);
+        });
+        if (id) {
+            m.addAction("Duplicate", [=]() {
+                Entity cur = curId();
+                if (!cur) return;
+                char nm[64];
+                snprintf(nm, sizeof nm, "%s-copy", sc_name(&g_world, cur));
+                Entity e = sc_spawn(&g_world, nm);
+                if (e) {
+                    ScTransform t = sc_get(&g_world, cur);
+                    sc_set(&g_world, e, &t);
+                    sc_show(&g_world, e, sc_visible(&g_world, cur));
+                    Entity par = sc_parent_of(&g_world, cur);
+                    if (par) sc_parent(&g_world, e, par);
+                }
+                afterOp("duplicate", e);
+            });
+            m.addAction("Rename...", [=]() {
+                Entity cur = curId();
+                if (!cur) return;
+                bool ok = false;
+                QString nn = QInputDialog::getText(tree, "Rename", "Name (без пробелов):",
+                                                   QLineEdit::Normal, sc_name(&g_world, cur), &ok);
+                if (!ok) return;
+                nn = nn.trimmed();
+                if (nn.isEmpty() || nn.contains(' ')) {
+                    if (con) con->log("rename: пусто/пробел — отказ");
+                    return;
+                }
+                sc_rename(&g_world, cur, nn.toUtf8().constData());
+                afterOp("rename", cur);
+            });
+            m.addAction("Delete", [=]() {
+                Entity cur = curId();
+                if (!cur) return;
+                sc_kill(&g_world, cur);
+                afterOp("delete", 0);
+            });
+        }
+        m.exec(tree->mapToGlobal(at));
+    });
+    rebuild();
     return w;
 }
+
 
 static QDoubleSpinBox *mkSpin(double v, double lo, double hi) {
     auto *s = new QDoubleSpinBox();

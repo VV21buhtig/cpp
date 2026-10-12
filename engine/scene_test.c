@@ -56,6 +56,13 @@ int main(void) {
     // Мёртвые: тишина, не падение.
     sc_set(&w, root, &t);
     sc_show(&w, 99999, 1);
+    // Переименование: копия, пустое и мёртвые — игнор.
+    sc_rename(&w, cam, "MainCamera");
+    if (strcmp(sc_name(&w, cam), "MainCamera") != 0) { printf("SCENE FAIL: rename\n"); bad = 1; }
+    sc_rename(&w, cam, "");
+    if (strcmp(sc_name(&w, cam), "MainCamera") != 0) { printf("SCENE FAIL: rename-empty\n"); bad = 1; }
+    sc_rename(&w, 99999, "Ghost");
+    if (strcmp(sc_name(&w, 99999), "") != 0) { printf("SCENE FAIL: rename-dead\n"); bad = 1; }
     printf(bad ? "SCENE FAIL\n" : "SCENE OK\n");
     return bad;
 }

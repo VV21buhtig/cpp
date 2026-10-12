@@ -46,9 +46,10 @@ ScTransform sc_get(const ScWorld *w, Entity e);
 void sc_set(ScWorld *w, Entity e, const ScTransform *t);
 int sc_visible(const ScWorld *w, Entity e);
 void sc_show(ScWorld *w, Entity e, int on);
-// Жива ли. Имя ("" если нет).
+// Жива ли. Имя ("" если нет). Переименование (копия, обрезается).
 int sc_alive(const ScWorld *w, Entity e);
 const char *sc_name(const ScWorld *w, Entity e);
+void sc_rename(ScWorld *w, Entity e, const char *name);
 // Список живых (порядок создания). Возвращает число (<= cap).
 int sc_list(const ScWorld *w, Entity *out, int cap);
 

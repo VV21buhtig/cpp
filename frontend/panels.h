@@ -35,6 +35,8 @@ QWidget *makeSolution(QWidget *parent, const QString &project);
 void ui_select(unsigned id);
 unsigned ui_selected(void);
 struct ScWorld *ui_world(void);
+// Перестроить дерево иерархии из движка (после New/удалений).
+void ui_hierarchy_refresh(void);
 // Проект: scene.txt туда-обратно (имена/родители/трансформы/видимость).
 // Формат строк: e <имя> <parentIdx|-1> <vis> <px py pz rx ry rz sx sy sz>
 void scene_save(const QString &projectDir);

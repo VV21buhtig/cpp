@@ -110,6 +110,15 @@ const char *sc_name(const ScWorld *w, Entity e) {
     return w->name[i];
 }
 
+void sc_rename(ScWorld *w, Entity e, const char *name) {
+    if (!w) return;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
+    if (!name || !name[0]) return; // пустое не ставим
+    strncpy(w->name[i], name, SC_NAME - 1);
+    w->name[i][SC_NAME - 1] = 0;
+}
+
 int sc_list(const ScWorld *w, Entity *out, int cap) {
     if (!w || !out || cap <= 0) return 0;
     int n = 0;
