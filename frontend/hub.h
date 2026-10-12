@@ -16,6 +16,9 @@ public:
     using OpenFn = std::function<void(const QString &project, int backend)>;
     explicit HubWindow(OpenFn onOpen, QWidget *parent = nullptr);
     void refresh();
+    // fixs-02: настоящее создание (валидация, файлы, шаблон, реестр).
+    // Возвращает путь или пусто; ошибка — в err (если не NULL).
+    QString createProject(const QString &name, const QString &tpl, int backend, QString *err);
     // Нормальный вход: подселить проект в реестр хаба (читает name/backend
     // из project.txt). Дубли по пути игнорит. Для ED_HUB_ADD.
     void registerProject(const QString &path);

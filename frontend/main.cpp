@@ -371,6 +371,19 @@ int main(int argc, char **argv) {
     // только для безголовых прогонов (матрица/скриншоты), не для людей.
     if (getenv("ED_HUB_ADD") && getenv("ED_HUB_ADD")[0])
         hub.registerProject(QString::fromUtf8(getenv("ED_HUB_ADD")));
+    // Тест создания: ED_HUB_CREATE="имя|шаблон|api" -> тот же путь что кнопка.
+    if (getenv("ED_HUB_CREATE") && getenv("ED_HUB_CREATE")[0]) {
+        QStringList parts = QString::fromUtf8(getenv("ED_HUB_CREATE")).split('|');
+        QString err;
+        QString dir = hub.createProject(parts.value(0), parts.value(1),
+                                        parts.size() > 2 ? parts[2].toInt() : 2, &err);
+        if (dir.isEmpty()) {
+            printf("hubcreate FAIL: %s\n", err.toUtf8().constData());
+        } else {
+            printf("hubcreate OK: %s\n", dir.toUtf8().constData());
+        }
+        fflush(stdout);
+    }
     // Автооткрытие для тестов: ED_PROJECT=путь ED_BACKEND=1/3/2.
     if (getenv("ED_PROJECT") && getenv("ED_PROJECT")[0]) {
         QString pr = QString::fromUtf8(getenv("ED_PROJECT"));

@@ -19,7 +19,10 @@
 #include <QDateTime>
 #include <QMenu>
 #include <QShortcut>
+#include <QMessageBox>
+#include <QFile>
 #include <cstring>
+#include "../engine/asset.h" // asset_import для стартового депо
 
 // Индекс комбо -> значение бэкенда (0 WebGPU, 1 Vulkan, 2 OpenGL в списке).
 static int hubBackendValue(int idx) {
@@ -131,6 +134,24 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     searchEdit->setPlaceholderText("Search...");
     searchEdit->setMaximumWidth(160);
     top->addWidget(searchEdit);
+    // Refresh: перечитать реестр, выкинуть мёртвые пути (project.txt пропал).
+    auto *btnRefresh = new QPushButton("Refresh", main);
+    btnRefresh->setFlat(true);
+    top->addWidget(btnRefresh);
+    QObject::connect(btnRefresh, &QPushButton::clicked, [=]() {
+        loadRegistry();
+        for (int i = paths.size() - 1; i >= 0; i--) {
+            FILE *f = fopen((paths[i] + "/project.txt").toUtf8().constData(), "rb");
+            if (f) fclose(f);
+            else {
+                names.removeAt(i);
+                paths.removeAt(i);
+                backends.removeAt(i);
+            }
+        }
+        saveRegistry();
+        refresh();
+    });
     auto *btnGear = new QPushButton("Settings", main);
     auto *btnProf = new QPushButton("Profile", main);
     for (auto *b : {btnGear, btnProf}) {
@@ -173,25 +194,6 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
         tplBox->setCurrentIndex(0);
         nameEdit->setFocus();
     });
-    QObject::connect(btnCreate, &QPushButton::clicked, [=]() {
-        QString nm = nameEdit->text().trimmed();
-        if (nm.isEmpty()) return;
-        QString dir = QDir::homePath() + "/voxprojects/" + nm;
-        QDir().mkpath(dir + "/depot");
-        FILE *f = fopen((dir + "/project.txt").toUtf8().constData(), "w");
-        if (f) {
-            fprintf(f, "name=%s\ntemplate=%s\nbackend=%d\nversion=0.1.0\n", nm.toUtf8().constData(),
-                    tplBox->currentText().toUtf8().constData(),
-                    hubBackendValue(apiBox->currentIndex()));
-            fclose(f);
-        }
-        names << nm;
-        paths << dir;
-        backends << hubBackendValue(apiBox->currentIndex());
-        saveRegistry();
-        refresh();
-        nameEdit->clear();
-    });
     auto doOpen = [=]() {
         QListWidgetItem *it = grid->currentItem();
         if (!it) return;
@@ -199,6 +201,27 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
         if (r < 0 || r >= paths.size()) return;
         if (onOpen) onOpen(paths[r], backends[r]);
     };
+    QObject::connect(btnCreate, &QPushButton::clicked, [=]() {
+        // Создать по-настоящему + открыть. Ошибка — боксом, не молча.
+        QString err;
+        QString dir = createProject(nameEdit->text(), tplBox->currentText(),
+                                    hubBackendValue(apiBox->currentIndex()), &err);
+        nameEdit->clear();
+        if (dir.isEmpty()) {
+            QMessageBox::warning(grid, "New Project", err.isEmpty() ? "отказ" : err);
+            return;
+        }
+        // Открыть созданное: найти карточку и даблклик программно.
+        for (int i = 0; i < grid->count(); i++) {
+            QListWidgetItem *it = grid->item(i);
+            if (it && it->data(Qt::UserRole).toInt() >= 0 &&
+                paths[it->data(Qt::UserRole).toInt()] == dir) {
+                grid->setCurrentItem(it);
+                break;
+            }
+        }
+        doOpen();
+    });
     QObject::connect(grid, &QListWidget::itemDoubleClicked, [=]() { doOpen(); });
     // Удаление из хаба: Del или правая кнопка. Только из реестра,
     // файлы проекта НЕ трогаем (удалять данные молча — нельзя).
@@ -268,6 +291,66 @@ static QString projValue(const QString &path, const char *key) {
     }
     fclose(f);
     return v;
+}
+
+// fixs-02: настоящее создание проекта: валидация -> файлы -> шаблон ->
+// реестр. Ошибка текстом в err, путь в возврате (пусто = отказ).
+QString HubWindow::createProject(const QString &rawName, const QString &tpl, int backend,
+                                 QString *err) {
+    QString nm = rawName.trimmed();
+    if (err) err->clear();
+    auto fail = [&](const char *m) -> QString {
+        if (err) *err = QString::fromUtf8(m);
+        return QString();
+    };
+    if (nm.isEmpty()) return fail("пустое имя");
+    if (nm.size() > 64) return fail("имя длиннее 64");
+    for (QChar c : nm) {
+        if (c == '/' || c == '\\' || c.isSpace()) return fail("имя: без / \\ и пробелов");
+        if (c.unicode() < 32) return fail("имя: без управляющих");
+    }
+    if (nm == "." || nm == "..") return fail("плохое имя");
+    if (backend < 1 || backend > 3) backend = 2;
+    QString dir = QDir::homePath() + "/voxprojects/" + nm;
+    if (QFile::exists(dir + "/project.txt")) return fail("уже есть");
+    if (!QDir().mkpath(dir + "/depot")) return fail("каталог не создать");
+    FILE *f = fopen((dir + "/project.txt").toUtf8().constData(), "w");
+    if (!f) return fail("project.txt не записать");
+    fprintf(f, "name=%s\ntemplate=%s\nbackend=%d\nversion=0.1.0\n", nm.toUtf8().constData(),
+            tpl.toUtf8().constData(), backend);
+    fclose(f);
+    // Сцена по шаблону (формат scene.txt: e ИМЯ РДИТ ВИД XYZ XYZ XYZ).
+    FILE *sf = fopen((dir + "/scene.txt").toUtf8().constData(), "w");
+    if (sf) {
+        fprintf(sf, "e Scene -1 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
+        fprintf(sf, "e Camera 0 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
+        if (tpl != "Empty") {
+            fprintf(sf, "e Light 0 1 10.0000 20.0000 10.0000 0.0000 0.0000 0.0000 1.0000 1.0000 "
+                        "1.0000\n");
+            fprintf(sf, "e Mesh 0 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
+        }
+        fclose(sf);
+    }
+    // Вокселю — стартовые тайлы в депо (через движок: FNV+дедуп+индекс).
+    if (tpl == "Voxel Terrain") {
+        asset_import((dir + "/depot").toUtf8().constData(), "engine/assets/tiles/grass_top.png");
+        asset_import((dir + "/depot").toUtf8().constData(), "engine/assets/tiles/dirt.png");
+    }
+    // В реестр (старый висяк по тому же пути — заменить).
+    for (int i = 0; i < paths.size(); i++) {
+        if (paths[i] == dir) {
+            names.removeAt(i);
+            paths.removeAt(i);
+            backends.removeAt(i);
+            break;
+        }
+    }
+    names << nm;
+    paths << dir;
+    backends << backend;
+    saveRegistry();
+    refresh();
+    return dir;
 }
 
 void HubWindow::registerProject(const QString &path) {
