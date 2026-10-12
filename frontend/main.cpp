@@ -272,14 +272,22 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     // Пропорции как в референсах: центр максимум, низ компактно.
     win->resizeDocks({bottomL, bottomR}, {220, 220}, Qt::Vertical);
 
-    QObject::connect(actPlay, &QAction::triggered, [vp, con]() {
+    QObject::connect(actPlay, &QAction::triggered, [vp, con, vpTabs, actPlay, actStop]() {
+        // Вкладку могли закрыть крестиком — вернуть, иначе играем в пустоту.
+        if (vpTabs && vp && vpTabs->count() == 0) vpTabs->addTab(vp, "Viewport Scene");
         if (vp) vp->setPlaying(true);
+        actPlay->setEnabled(false);
+        actStop->setEnabled(true);
         con->log("play");
     });
-    QObject::connect(actStop, &QAction::triggered, [vp, con]() {
+    QObject::connect(actStop, &QAction::triggered, [vp, con, actPlay, actStop]() {
         if (vp) vp->setPlaying(false);
+        actPlay->setEnabled(true);
+        actStop->setEnabled(false);
         con->log("stop");
     });
+    actPlay->setEnabled(true);
+    actStop->setEnabled(false); // стартуем на паузе: кадр уже показан (frameNow)
     QObject::connect(actSave, &QAction::triggered, [con, project]() {
         scene_save(project);
         con->log(QString("saved %1/scene.txt").arg(project));
@@ -316,7 +324,7 @@ static QMainWindow *openEditor(const QString &project, int backend) {
         con->log(QString("view mode %1").arg(getenv("ED_VIEW")));
     }
     if (getenv("ED_PLAY") && getenv("ED_PLAY")[0]) {
-        vp->setPlaying(true);
+        actPlay->trigger(); // через кнопку: тот же путь что у человека
         con->log("autoplay");
     }
     // Тест выбора: ED_SELECT=имя -> выбрать сущность после загрузки.
