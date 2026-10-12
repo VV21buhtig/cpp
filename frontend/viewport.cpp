@@ -62,11 +62,10 @@ bool Viewport::init(int be) {
 }
 
 bool Viewport::initDomain(unsigned dom, int be) {
-    backend = be;
-    domain = dom;
-    sdfFed = vecFed = meshFed = 0;
+    // Транзакция: члены коммитим только при успехе. Иначе после FAILED
+    // врали бы чип, кнопки и тайтл (бэкенд новый, ядро старое).
     if (!glfwInit()) return false;
-    if (backend == 2) { // GL: контекст 4.5
+    if (be == 2) { // GL: контекст 4.5
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -76,36 +75,73 @@ bool Viewport::initDomain(unsigned dom, int be) {
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow *win = glfwCreateWindow(1280, 720, "ed-viewport", 0, 0);
     if (!win) return false;
-    glfwWin = win;
     // Ядро по таблице «домен x бэкенд» (домен из шаблона, бэкенд из хаба).
     // Нет ячейки (напр. SDF под Vulkan) — честный false, редактор скажет.
-    rc = rc_create_by(domain, (unsigned)backend);
-    if (!rc || !rc->init(rc, win)) return false;
-    // Vec-ядро для гизмо-оверлея делит окно/контекст (воксель под GL).
-    if (domain == RC_CAP_VOXEL && backend == 2) {
-        vrc = rc_create_by(RC_CAP_VECTOR, 2u);
-        if (vrc && !vrc->init(vrc, win)) { vrc = nullptr; }
+    struct RenderCore *newRc = rc_create_by(dom, (unsigned)be);
+    if (!newRc || !newRc->init(newRc, win)) {
+        if (newRc) rc_destroy(newRc);
+        glfwDestroyWindow(win);
+        return false;
     }
-    // Воксельный мир — только воксельному домену.
-    if (domain == RC_CAP_VOXEL) {
-    world = calloc(GW * GW, sizeof(VoxChunk));
-    if (!world) return false;
-    for (int cz = 0; cz < GW; cz++)
-        for (int cx = 0; cx < GW; cx++) {
-            VoxChunk *c = &((VoxChunk *)world)[cz * GW + cx];
-            c->cx = cx - GW / 2;
-            c->cz = cz - GW / 2;
-            vox_gen(c, 1337);
+    struct RenderCore *newVrc = nullptr;
+    // Vec-ядро для гизмо-оверлея делит окно/контекст (воксель под GL).
+    if (dom == RC_CAP_VOXEL && be == 2) {
+        newVrc = rc_create_by(RC_CAP_VECTOR, 2u);
+        if (newVrc && !newVrc->init(newVrc, win)) {
+            rc_destroy(newVrc);
+            newVrc = nullptr;
         }
     }
-    target = (RcTarget *)calloc(1, sizeof(RcTarget));
+    void *newWorld = nullptr;
+    // Воксельный мир — только воксельному домену.
+    if (dom == RC_CAP_VOXEL) {
+        newWorld = calloc(GW * GW, sizeof(VoxChunk));
+        if (!newWorld) {
+            newRc->shutdown(newRc);
+            rc_destroy(newRc);
+            if (newVrc) {
+                newVrc->shutdown(newVrc);
+                rc_destroy(newVrc);
+            }
+            glfwDestroyWindow(win);
+            return false;
+        }
+        for (int cz = 0; cz < GW; cz++)
+            for (int cx = 0; cx < GW; cx++) {
+                VoxChunk *c = &((VoxChunk *)newWorld)[cz * GW + cx];
+                c->cx = cx - GW / 2;
+                c->cz = cz - GW / 2;
+                vox_gen(c, 1337);
+            }
+    }
+    RcTarget *newTarget = (RcTarget *)calloc(1, sizeof(RcTarget));
     // Цель и показ — только под GL (frame_to есть только там).
-    if (backend == 2) {
-        if (!target || !comp_target_gl_new(target, 1280, 720)) return false;
+    if (be == 2) {
+        if (!newTarget || !comp_target_gl_new(newTarget, 1280, 720)) {
+            free(newTarget);
+            free(newWorld);
+            newRc->shutdown(newRc);
+            rc_destroy(newRc);
+            if (newVrc) {
+                newVrc->shutdown(newVrc);
+                rc_destroy(newVrc);
+            }
+            glfwDestroyWindow(win);
+            return false;
+        }
         presentProg = rhi_gl_prog("engine/shaders/blit/blit.vert",
                                   "engine/shaders/blit/blit.frag");
         presentVao = rhi_gl_empty_vao();
     }
+    // Успех: коммит. Старое окно/ядра уже снесены вызывателем.
+    glfwWin = win;
+    rc = newRc;
+    vrc = newVrc;
+    world = newWorld;
+    target = newTarget;
+    backend = be;
+    domain = dom;
+    sdfFed = vecFed = meshFed = 0;
     img = QImage(1280, 720, QImage::Format_RGB888);
     img.fill(Qt::black);
     if (!cpuBuf) cpuBuf = (uint8_t *)calloc((size_t)1280 * 720, 4); // разово
@@ -188,7 +224,10 @@ static float seg_dist(float px, float py, float ax, float ay, float bx, float by
 }
 
 void Viewport::renderOnce() {
-    if (!rc) return;
+    if (!rc) {
+        placeheld = 1; // ядро снесли (FAILED-пересадка): честная заглушка
+        return;
+    }
     int isGL = (backend == 2);
     // Догрузка мира по 12 чанков за тик — только вокселю.
     // DDA (webgpu) ест сырьё, растр (gl/vk) — через фидер движка.
@@ -289,6 +328,30 @@ void Viewport::renderOnce() {
         m.verts = cube;
         m.nverts = 36;
         if (rc->upload_mesh(rc, &m)) meshFed = 1;
+    }
+    // Пиксель: живой тест-паттерн каждый кадр (полосы + бегущая строка).
+    // cpuBuf тут свободен (frame_cpu у пикселя не используется).
+    if (domain == RC_CAP_PIXEL && rc->upload_pixels && cpuBuf) {
+        static const uint8_t bars[8][3] = {{255, 255, 255}, {255, 255, 0}, {0, 255, 255},
+                                           {0, 255, 0}, {255, 0, 255}, {255, 0, 0},
+                                           {0, 0, 255}, {0, 0, 0}};
+        int ly = (frame * 4) % 720;
+        for (int y = 0; y < 720; y++) {
+            uint8_t *row = cpuBuf + (size_t)y * 1280 * 4;
+            for (int x = 0; x < 1280; x++) {
+                const uint8_t *c = bars[(x / 160) % 8];
+                row[x * 4 + 0] = c[0];
+                row[x * 4 + 1] = c[1];
+                row[x * 4 + 2] = c[2];
+                row[x * 4 + 3] = 255;
+                if (y >= ly && y < ly + 6) {
+                    row[x * 4 + 0] = 255;
+                    row[x * 4 + 1] = 255;
+                    row[x * 4 + 2] = 255;
+                }
+            }
+        }
+        rc->upload_pixels(rc, cpuBuf, 1280, 720);
     }
     RcView v;
     memset(&v, 0, sizeof v);

@@ -145,7 +145,8 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     nameEdit = new QLineEdit(main);
     nameEdit->setPlaceholderText("Project name...");
     tplBox = new QComboBox(main);
-    tplBox->addItems({"Empty", "Voxel Terrain", "SDF Primitives", "Vector Shapes", "Mesh Soup"});
+    tplBox->addItems(
+        {"Empty", "Voxel Terrain", "SDF Primitives", "Vector Shapes", "Pixel Canvas", "Mesh Soup"});
     auto *btnCreate = new QPushButton("Create", main);
     form->addWidget(new QLabel("Name:", main));
     form->addWidget(nameEdit);

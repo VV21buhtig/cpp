@@ -30,3 +30,4 @@ QTreeView::item, QListView::item { padding: 3px 4px; }
 QTreeView::branch:has-children:!has-siblings:closed,
 QTreeView::branch:closed:has-children:has-siblings { border-image: none; }
 QToolBar QToolButton:checked { background: #094771; color: white; }
+QLineEdit:focus { border: 1px solid #007ACC; }

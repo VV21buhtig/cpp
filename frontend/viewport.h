@@ -55,7 +55,7 @@ private:
     int backend = 2; // выбранный в хабе (1 webgpu, 3 vk, 2 gl)
     unsigned domain = 1; // домен из шаблона (1 воксель, 2 sdf, 4 вектор, 16 меш)
     int gizmoMode = 0; // 0 двигать, 1 крутить, 2 тянуть (тулбар)
-    int sdfFed = 0, vecFed = 0, meshFed = 0; // разовые заливки не-вокселя
+    int sdfFed = 0, vecFed = 0, meshFed = 0; // разовые заливки
     QTimer *timer = nullptr;
     bool playing = false;
     int frame = 0;

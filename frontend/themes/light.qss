@@ -28,3 +28,4 @@ QStatusBar::item { border: none; }
 QSplitter::handle { background: #CCCCCC; }
 QTreeView::item, QListView::item { padding: 3px 4px; }
 QToolBar QToolButton:checked { background: #C4C4C4; color: black; }
+QLineEdit:focus { border: 1px solid #007ACC; }

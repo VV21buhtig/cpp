@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "render_api.h"
+#include "rtarget.h"
 #include <stdint.h>
 #include "gl_blit.h"
 
@@ -44,6 +45,16 @@ static void pix_frame(RenderCore *rc, const RcView *v) {
     blit_frame(&p->blit, ww, hh, 1.0f, 1.0f, 0.0f); // бейдж жёлтый
 }
 
+// Кадр в цель композитора (Qt-вьюпорт): залитая текстура поверх.
+// Без swap/бейджа. Нужен хотя бы один upload_pixels до (has).
+static int pix_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
+    PixWrap *p = (PixWrap *)rc->ctx;
+    (void)v;
+    if (!t || t->backend != 2 || !t->fbo || !p->has) return 0;
+    blit_overlay_to(&p->blit, t->fbo, t->w, t->h);
+    return 1;
+}
+
 static int pix_init(RenderCore *rc, void *glfwWindow) {
     PixWrap *p = (PixWrap *)rc->ctx;
     // НЕ memset'им всё: caps/name/указатели уже стоят из rc_pix_create.
@@ -78,6 +89,7 @@ RenderCore *rc_pix_create(void) {
     w->api.init = pix_init;
     w->api.shutdown = pix_shutdown;
     w->api.frame = pix_frame;
+    w->api.frame_to = pix_frame_to;
     w->api.upload_pixels = pix_upload;
     w->api.fps = pix_fps;
     return &w->api;

@@ -62,6 +62,7 @@ static unsigned domainForTemplate(const QString &project) {
     fclose(f);
     if (tpl == "SDF Primitives") return 2u;
     if (tpl == "Vector Shapes") return 4u;
+    if (tpl == "Pixel Canvas") return 8u;
     if (tpl == "Mesh Soup") return 16u;
     return 1u; // Empty, Voxel Terrain и всё остальное
 }
@@ -181,7 +182,8 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     });
     unsigned dom = domainForTemplate(project);
     if (!vp->initDomain(dom, backend)) {
-        const char *dn = dom == 2 ? "SDF" : (dom == 4 ? "Vector" : (dom == 16 ? "Mesh" : "Voxel"));
+        const char *dn = dom == 2 ? "SDF"
+                         : (dom == 4 ? "Vector" : (dom == 8 ? "Pixel" : (dom == 16 ? "Mesh" : "Voxel")));
         con->log(QString("viewport: NO CORE for %1 on backend %2 (see terminal)").arg(dn).arg(backend));
     } else {
         con->log(QString("viewport: engine ok (%1)").arg(be));
@@ -189,14 +191,20 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     }
     // Переключатель API: vp уже живой (захват по значению — рабочий).
     // Промах — вернуть чек на текущий бэкенд, не врать подсветкой.
-    auto apiSwitch = [vp, con, apiW, apiG, apiV](int be, const char *nm) {
+    // Успех — обновить тайтл (раньше навсегда оставался стартовый).
+    auto apiSwitch = [vp, con, apiW, apiG, apiV, win, project](int be, const char *nm) {
         if (!vp) return;
         if (vp->switchBackend(be)) {
             con->log(QString("api: %1").arg(nm));
             printf("api: %s\n", nm);
             fflush(stdout);
+            win->setWindowTitle(QString("Engine Editor - %1 [%2]")
+                                    .arg(project)
+                                    .arg(be == 1 ? "WebGPU" : (be == 3 ? "Vulkan" : "OpenGL")));
         } else {
             con->log(QString("api %1 FAILED (see terminal)").arg(nm));
+            printf("api %s FAILED\n", nm);
+            fflush(stdout);
             int cur = vp->api();
             if (cur == 1) apiW->setChecked(true);
             else if (cur == 3) apiV->setChecked(true);
