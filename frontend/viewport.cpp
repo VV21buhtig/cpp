@@ -65,7 +65,10 @@ bool Viewport::initDomain(unsigned dom, int be) {
     // Транзакция: члены коммитим только при успехе. Иначе после FAILED
     // врали бы чип, кнопки и тайтл (бэкенд новый, ядро старое).
     if (!glfwInit()) return false;
+    // Хинты липкие между окнами: CLIENT_API сбрасываем явно, иначе после
+    // NO_API-окна (VK/WebGPU) следующее GL-окно родится без контекста.
     if (be == 2) { // GL: контекст 4.5
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);

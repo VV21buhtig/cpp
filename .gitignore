@@ -1,2 +1,3 @@
 build/
 run/
+electron/node_modules/
