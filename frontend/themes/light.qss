@@ -29,3 +29,24 @@ QSplitter::handle { background: #CCCCCC; }
 QTreeView::item, QListView::item { padding: 3px 4px; }
 QToolBar QToolButton:checked { background: #C4C4C4; color: black; }
 QLineEdit:focus { border: 1px solid #007ACC; }
+/* Панель API и сайдбар хаба (раньше инлайн-стили, теперь тема). */
+QToolBar#activity { background: #F3F3F3; border: none; }
+#activity QToolButton { min-width: 40px; min-height: 40px; font-weight: bold; font-size: 14px; color: #333333; border: none; }
+#activity QToolButton:checked { color: black; border-left: 3px solid #007ACC; background: #C4C4C4; }
+QWidget#hubSide { background: #F3F3F3; }
+#hubSide QLabel[nav="head"] { color: #777777; padding: 8px 8px 2px 8px; }
+#hubSide QPushButton { text-align: left; padding: 8px; color: #333333; background: transparent; border: none; }
+#hubSide QPushButton[nav="active"] { background: #007ACC; color: white; }
+#hubSide QPushButton:disabled { color: #AAAAAA; background: transparent; }
+QPushButton#hubNew { background: #00b3b3; color: white; padding: 6px 14px; }
+/* Недопокрытое: подсказки, списки комбо, скроллы, ветви, разделители. */
+QToolTip { background: #F3F3F3; color: #000000; border: 1px solid #CCCCCC; }
+QComboBox QAbstractItemView { background: #FFFFFF; color: #000000; selection-background-color: #007ACC; selection-color: white; }
+QPushButton:disabled { color: #999999; }
+QScrollBar:horizontal { background: #F3F3F3; height: 12px; }
+QScrollBar::handle:horizontal { background: #CCCCCC; min-width: 20px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QMenu::separator { height: 1px; background: #CCCCCC; }
+QTabBar::close-button { image: none; }
+QTreeView::branch { background: transparent; }

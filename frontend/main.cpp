@@ -106,9 +106,12 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     Viewport *vp = nullptr;
     auto *actPlay = bar->addAction("Play");
     auto *actStop = bar->addAction("Stop");
+    actPlay->setShortcut(QKeySequence("F5")); // как в VS: пуск / стоп
+    actStop->setShortcut(QKeySequence("Shift+F5"));
     bar->addSeparator();
     auto *actSave = bar->addAction("Save");
     auto *actNew = bar->addAction("New");
+    actSave->setShortcut(QKeySequence("Ctrl+S"));
     bar->addSeparator();
     bar->addSeparator();
     auto *gizmos = new QActionGroup(win);
@@ -131,15 +134,12 @@ static QMainWindow *openEditor(const QString &project, int backend) {
     auto *vOrbit = bar->addAction("Orbit");
 
     // Крайняя левая панель активности: компактные кнопки-буквы 40px
-    // (без картинок и эмодзи), активная — с левой синей полосой через QSS.
+    // (без картинок и эмодзи). Цвета — из темы (#activity), не инлайн.
     auto *activity = new QToolBar("activity", win);
+    activity->setObjectName("activity");
     activity->setOrientation(Qt::Vertical);
     activity->setMovable(false); // панель API не утащить мышью
     activity->setIconSize(QSize(40, 40));
-    activity->setStyleSheet(
-        "QToolBar { background: #252526; border: none; }"
-        "QToolButton { min-width: 40px; min-height: 40px; font-weight: bold; font-size: 14px; color: #cccccc; border: none; }"
-        "QToolButton:checked { color: white; border-left: 3px solid #007ACC; background: #094771; }");
     win->addToolBar(Qt::LeftToolBarArea, activity);
     activity->addWidget(new QLabel("API", win));
     auto *apiGroup = new QActionGroup(win);
@@ -316,6 +316,14 @@ static QMainWindow *openEditor(const QString &project, int backend) {
 
     win->statusBar()->showMessage(
         QString("engine: libengine.so | %1 | %2").arg(be).arg(project));
+    // Раскладка панелей: помним между запусками (QSettings, одна на всех).
+    {
+        QSettings s("voxengine", "editor");
+        if (s.contains("geom")) {
+            win->restoreGeometry(s.value("geom").toByteArray());
+            win->restoreState(s.value("dock").toByteArray());
+        }
+    }
     win->show();
     con->log("editor skeleton ready");
     // Тест видов: ED_VIEW=0..3 (орбита/верх/бок/фронт).
@@ -479,5 +487,12 @@ int main(int argc, char **argv) {
             app.quit();
         });
     }
-    return app.exec();
+    int rc = app.exec();
+    // Раскладку последнего редактора — в настройки (читаем при открытии).
+    if (editor) {
+        QSettings s("voxengine", "editor");
+        s.setValue("geom", editor->saveGeometry());
+        s.setValue("dock", editor->saveState());
+    }
+    return rc;
 }

@@ -81,24 +81,21 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     auto *lay = new QHBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
-    // Лево: фиксированный сайдбар.
+    // Лево: фиксированный сайдбар. Цвета — из темы (#hubSide), не инлайн.
     auto *side = new QWidget(this);
+    side->setObjectName("hubSide");
     side->setFixedWidth(180);
-    side->setStyleSheet("background: #252526;");
     auto *sl = new QVBoxLayout(side);
     auto mkHead = [=](const char *t) -> void {
         auto *l = new QLabel(t, side);
-        l->setStyleSheet("color: #888888; padding: 8px 8px 2px 8px;");
+        l->setProperty("nav", "head");
         sl->addWidget(l);
     };
     auto mkItem = [=](const char *t, bool active) -> QPushButton * {
         auto *b = new QPushButton(t, side);
         b->setFlat(true);
-        // Явный селектор на базе: без него Qt роняет весь лист.
-        QString base = active
-                           ? "QPushButton { text-align: left; padding: 8px; background: #094771; color: white; }"
-                           : "QPushButton { text-align: left; padding: 8px; color: #cccccc; }";
-        b->setStyleSheet(base + "QPushButton:disabled { color: #5a5a5a; background: transparent; }");
+        // Состояние — свойством (рисует тема), не инлайн-листом.
+        b->setProperty("nav", active ? "active" : "item");
         sl->addWidget(b);
         return b;
     };
@@ -122,7 +119,7 @@ HubWindow::HubWindow(OpenFn onOpen, QWidget *parent)
     auto *ml = new QVBoxLayout(main);
     auto *top = new QHBoxLayout();
     auto *btnNew = new QPushButton("+ New Project", main);
-    btnNew->setStyleSheet("background: #00b3b3; color: white; padding: 6px 14px;");
+    btnNew->setObjectName("hubNew");
     top->addWidget(btnNew);
     top->addWidget(new QLabel("Render API:", main));
     apiBox = new QComboBox(main);
