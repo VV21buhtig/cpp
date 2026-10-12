@@ -23,6 +23,7 @@
 #include <QFile>
 #include <cstring>
 #include "../engine/asset.h" // asset_import для стартового депо
+#include "../engine/project.h" // создание файлов — бекенд, хаб витрина
 
 // Индекс комбо -> значение бэкенда (0 WebGPU, 1 Vulkan, 2 OpenGL в списке).
 static int hubBackendValue(int idx) {
@@ -290,44 +291,21 @@ static QString projValue(const QString &path, const char *key) {
     return v;
 }
 
-// fixs-02: настоящее создание проекта: валидация -> файлы -> шаблон ->
-// реестр. Ошибка текстом в err, путь в возврате (пусто = отказ).
+// fixs-02: настоящее создание проекта: валидация, файлы, шаблон, реестр.
+// Файлы — через C-бекенд (eng_project_create): хаб только витрина.
 QString HubWindow::createProject(const QString &rawName, const QString &tpl, int backend,
                                  QString *err) {
-    QString nm = rawName.trimmed();
     if (err) err->clear();
-    auto fail = [&](const char *m) -> QString {
-        if (err) *err = QString::fromUtf8(m);
+    QString root = QDir::homePath() + "/voxprojects";
+    char ebuf[128] = {0};
+    int ok = eng_project_create(root.toUtf8().constData(), rawName.trimmed().toUtf8().constData(),
+                                tpl.toUtf8().constData(), backend, ebuf, sizeof ebuf);
+    if (!ok) {
+        if (err) *err = QString::fromUtf8(ebuf[0] ? ebuf : "отказ");
         return QString();
-    };
-    if (nm.isEmpty()) return fail("пустое имя");
-    if (nm.size() > 64) return fail("имя длиннее 64");
-    for (QChar c : nm) {
-        if (c == '/' || c == '\\' || c.isSpace()) return fail("имя: без / \\ и пробелов");
-        if (c.unicode() < 32) return fail("имя: без управляющих");
     }
-    if (nm == "." || nm == "..") return fail("плохое имя");
-    if (backend < 1 || backend > 3) backend = 2;
-    QString dir = QDir::homePath() + "/voxprojects/" + nm;
-    if (QFile::exists(dir + "/project.txt")) return fail("уже есть");
-    if (!QDir().mkpath(dir + "/depot")) return fail("каталог не создать");
-    FILE *f = fopen((dir + "/project.txt").toUtf8().constData(), "w");
-    if (!f) return fail("project.txt не записать");
-    fprintf(f, "name=%s\ntemplate=%s\nbackend=%d\nversion=0.1.0\n", nm.toUtf8().constData(),
-            tpl.toUtf8().constData(), backend);
-    fclose(f);
-    // Сцена по шаблону (формат scene.txt: e ИМЯ РДИТ ВИД XYZ XYZ XYZ).
-    FILE *sf = fopen((dir + "/scene.txt").toUtf8().constData(), "w");
-    if (sf) {
-        fprintf(sf, "e Scene -1 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
-        fprintf(sf, "e Camera 0 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
-        if (tpl != "Empty") {
-            fprintf(sf, "e Light 0 1 10.0000 20.0000 10.0000 0.0000 0.0000 0.0000 1.0000 1.0000 "
-                        "1.0000\n");
-            fprintf(sf, "e Mesh 0 1 0.0000 0.0000 0.0000 0.0000 0.0000 0.0000 1.0000 1.0000 1.0000\n");
-        }
-        fclose(sf);
-    }
+    QString nm = rawName.trimmed();
+    QString dir = root + "/" + nm;
     // Вокселю — стартовые тайлы в депо (через движок: FNV+дедуп+индекс).
     if (tpl == "Voxel Terrain") {
         asset_import((dir + "/depot").toUtf8().constData(), "engine/assets/tiles/grass_top.png");
@@ -342,6 +320,7 @@ QString HubWindow::createProject(const QString &rawName, const QString &tpl, int
             break;
         }
     }
+    if (backend < 1 || backend > 3) backend = 2;
     names << nm;
     paths << dir;
     backends << backend;

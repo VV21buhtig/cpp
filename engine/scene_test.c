@@ -1,8 +1,11 @@
 // Тест сцены: иерархия, трансформы, видимость, убийство, переполнение.
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
+#include <sys/stat.h>
 #include "scene.h"
+#include "project.h"
 
 int main(void) {
     int bad = 0;
@@ -63,6 +66,54 @@ int main(void) {
     if (strcmp(sc_name(&w, cam), "MainCamera") != 0) { printf("SCENE FAIL: rename-empty\n"); bad = 1; }
     sc_rename(&w, 99999, "Ghost");
     if (strcmp(sc_name(&w, 99999), "") != 0) { printf("SCENE FAIL: rename-dead\n"); bad = 1; }
+    // Проект в бекенде: create + load + roundtrip + JSON (будущий Electron ест это).
+    {
+        mkdir("/tmp/opencode", 0755);
+        mkdir("/tmp/opencode/tproj", 0755);
+        remove("/tmp/opencode/tproj/project.txt"); // повторный прогон — не дубликат
+        char err[128] = {0};
+        if (!eng_project_create("/tmp/opencode", "tproj", "Voxel Terrain", 2, err, sizeof err)) {
+            printf("SCENE FAIL: project %s\n", err);
+            bad = 1;
+        } else {
+            ScWorld a;
+            sc_init(&a);
+            if (!eng_scene_load(&a, "/tmp/opencode/tproj")) {
+                printf("SCENE FAIL: load\n");
+                bad = 1;
+            } else {
+                Entity l[16];
+                int n = sc_list(&a, l, 16);
+                if (n != 4) { printf("SCENE FAIL: count %d\n", n); bad = 1; }
+                char *js = eng_scene_json(&a);
+                if (!js || !strstr(js, "Camera") || !strstr(js, "Light")) {
+                    printf("SCENE FAIL: json\n");
+                    bad = 1;
+                }
+                free(js);
+                // Roundtrip побайтово: save->load->save совпадает.
+                mkdir("/tmp/opencode/tproj2", 0755);
+                ScWorld b;
+                sc_init(&b);
+                eng_scene_load(&b, "/tmp/opencode/tproj");
+                eng_scene_save(&b, "/tmp/opencode/tproj2");
+                FILE *f1 = fopen("/tmp/opencode/tproj/scene.txt", "rb");
+                FILE *f2 = fopen("/tmp/opencode/tproj2/scene.txt", "rb");
+                int same = (f1 && f2);
+                if (same) {
+                    int c1, c2;
+                    do {
+                        c1 = fgetc(f1);
+                        c2 = fgetc(f2);
+                        if (c1 != c2) { same = 0; break; }
+                    } while (c1 != EOF);
+                }
+                if (f1) fclose(f1);
+                if (f2) fclose(f2);
+                if (!same) { printf("SCENE FAIL: roundtrip\n"); bad = 1; }
+            }
+        }
+    }
     printf(bad ? "SCENE FAIL\n" : "SCENE OK\n");
     return bad;
 }
