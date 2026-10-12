@@ -138,6 +138,11 @@ target_link_libraries(scene_test PRIVATE engine_shared m)
 target_compile_options(scene_test PRIVATE -Wall -Wextra)
 # Headless-тест вьювера: окно+ядро+кадр в CPU (то, что ест Electron).
 add_executable(view_test view_test.c)
+# Пруф единой глубины: сфера спереди в обоих порядках проходов.
+add_executable(depth_test depth_test.c)
+target_include_directories(depth_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(depth_test PRIVATE engine_shared m)
+target_compile_options(depth_test PRIVATE -Wall -Wextra)
 target_include_directories(view_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(view_test PRIVATE engine_shared m)
 target_compile_options(view_test PRIVATE -Wall -Wextra)

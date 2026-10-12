@@ -13,6 +13,7 @@ layout(std140, binding = 0) uniform Scene {
     vec4 prims[192]; // 64 x (a=p0+r, b=p1+mat, c=kind+0)
 };
 uniform int nPrim;
+uniform int uLate; // 1 = поздний проход: небо отбросить (не закрасить ранние)
 out vec4 FragColor;
 
 float sdPrim(vec3 p, int i) {
@@ -125,6 +126,17 @@ void main() {
         float fd = length(p - ro);
         float ff = clamp(fd / 260.0, 0.0, 1.0);
         col = mix(lit, vec3(0.30, 0.36, 0.46), ff);
+    }
+    // Единая глубина (Unified Depth): хит пишет NDC-глубину той же проекции
+    // что меши (m4persp near=0.1 far=600: A=(f+n)/(f-n), B=2fn/(f-n)),
+    // небо — дальнюю (1.0). Поздний проход небо отбрасывает.
+    if (mat < -0.5) {
+        if (uLate != 0) discard;
+        gl_FragDepth = 1.0;
+    } else {
+        float vz = max(t * dot(rd, camFwd.xyz), 1e-4);
+        float ndc = (600.1 / 599.9) + (120.0 / 599.9) / -vz;
+        gl_FragDepth = clamp(ndc * 0.5 + 0.5, 0.0, 1.0);
     }
     col = pow(col, vec3(1.0 / 1.2));
     FragColor = vec4(col, 1.0);

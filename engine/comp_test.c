@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "comp.h"
+#include "rtarget.h"
 
 static int order[16];
 static int norder = 0;
@@ -23,7 +24,8 @@ static RenderCore mkcore(unsigned caps, unsigned be, int hasTarget) {
 
 int main(void) {
     int bad = 0;
-    RcTarget *t = (RcTarget *)0x1234; // заглушка цели
+    static RcTarget fake; // нулевая цель (флаг noClear композитор дёргает по-настоящему)
+    RcTarget *t = &fake;
     // 1. Порядок 3 проходов x2 кадра.
     {
         RenderCore a = mkcore(1, RC_BACKEND_GL, 1);
@@ -38,6 +40,7 @@ int main(void) {
             printf("COMP FAIL: order (got %d)\n", norder);
             bad = 1;
         }
+        if (t->noClear != 0) { printf("COMP FAIL: noclear-stuck\n"); bad = 1; }
     }
     // 2. Смешанные бэкенды — отказ.
     {

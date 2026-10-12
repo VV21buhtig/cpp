@@ -71,7 +71,8 @@ static int mesh_upload(RenderCore *rc, const RcMesh *m) {
 }
 
 // Рисунок без swap (цель — окно или FBO композитора).
-static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh) {
+// first=0 (поздний проход): без чисток — только глубинный тест.
+static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh, int first) {
     Vec3 f, r, u;
     cam_basis(v->yaw, v->pitch, &f, &r, &u);
     Mat4 proj = m4persp(2.0f * atanf(0.5f / (v->fov > 0.2f ? v->fov : 1.6f)),
@@ -80,8 +81,12 @@ static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh) {
                        v->camPos.x + f.x, v->camPos.y + f.y, v->camPos.z + f.z);
     Mat4 pv = m4mul(&proj, &view);
     glViewport(0, 0, ww, hh);
-    glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (first) {
+        glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS); // единая глубина: у всех 3D-проходов LESS (SDF: LEQUAL)
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
@@ -112,7 +117,7 @@ static void mesh_frame(RenderCore *rc, const RcView *v) {
     }
     int ww = v->resW > 0 ? v->resW : 1280;
     int hh = v->resH > 0 ? v->resH : 720;
-    mesh_draw(c, v, ww, hh);
+    mesh_draw(c, v, ww, hh, 1);
     {
         const char *sp = getenv("VOX_SHOT");
         if (sp && sp[0]) {
@@ -144,7 +149,7 @@ static int mesh_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
     if (!t || t->backend != 2 || !t->fbo) return 0;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    mesh_draw(c, v, t->w, t->h);
+    mesh_draw(c, v, t->w, t->h, !t->noClear);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }

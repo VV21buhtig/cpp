@@ -18,6 +18,7 @@ typedef struct {
     unsigned vao;
     unsigned ubo;
     int u_nPrim;
+    int u_late;
     RcSdfObj objs[SDF_MAX];
     int nObjs;
     int ready;
@@ -68,7 +69,10 @@ static int sdf_upload_sdf(RenderCore *rc, const RcSdfObj *objs, int n) {
 }
 
 // Рисунок без swap (цель — окно или FBO композитора).
-static void sdf_draw(SDFCore *c, const RcView *v, int ww, int hh) {
+// late=0 (первый/одиночный): небо рисуем; late=1: небо отброшено (uLate).
+// Тест ВСЕГДА вкл: записи глубины без включённого теста нет (факт драйвера).
+// Функция LEQUAL: небо (1.0) проходит по очищенным 1.0, хиты — как обычно.
+static void sdf_draw(SDFCore *c, const RcView *v, int ww, int hh, int late) {
     Vec3 f, r, u;
     cam_basis(v->yaw, v->pitch, &f, &r, &u);
     float dayF = v->sunDir.y > 1.0f ? 1.0f : (v->sunDir.y < -1.0f ? -1.0f : v->sunDir.y);
@@ -93,10 +97,13 @@ static void sdf_draw(SDFCore *c, const RcView *v, int ww, int hh) {
         cc[0] = (float)c->objs[i].kind; cc[1] = cc[2] = cc[3] = 0;
     }
     glViewport(0, 0, ww, hh);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glUseProgram(c->prog);
     glBindBuffer(GL_UNIFORM_BUFFER, c->ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof ub, ub);
     glUniform1i(c->u_nPrim, c->nObjs);
+    glUniform1i(c->u_late, late);
     glBindVertexArray(c->vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
@@ -120,7 +127,10 @@ static void sdf_frame(RenderCore *rc, const RcView *v) {
     }
     int ww = v->resW > 0 ? v->resW : 1280;
     int hh = v->resH > 0 ? v->resH : 720;
-    sdf_draw(c, v, ww, hh);
+    // Своё окно: тест включён всегда — глубину чистим (фулскрин цвет закроет).
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    sdf_draw(c, v, ww, hh, 0);
     // Скриншот из буфера (тот же протокол VOX_SHOT).
     {
         const char *sp = getenv("VOX_SHOT");
@@ -149,11 +159,13 @@ static void sdf_frame(RenderCore *rc, const RcView *v) {
 }
 
 // Кадр в цель композитора (Qt-вьюпорт): тот же рисунок, без swap/шота.
+// Первый проход чистит глубину (dbo пережил прошлый кадр), поздние — нет.
 static int sdf_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     SDFCore *c = &((SDFCoreWrap *)rc->ctx)->core;
     if (!t || t->backend != 2 || !t->fbo) return 0;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    sdf_draw(c, v, t->w, t->h);
+    if (!t->noClear) glClear(GL_DEPTH_BUFFER_BIT);
+    sdf_draw(c, v, t->w, t->h, t->noClear ? 1 : 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }
@@ -173,6 +185,7 @@ static int sdf_init(RenderCore *rc, void *glfwWindow) {
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, c->ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
     c->u_nPrim = glGetUniformLocation(c->prog, "nPrim");
+    c->u_late = glGetUniformLocation(c->prog, "uLate");
     c->prevT = glfwGetTime();
     c->ready = 1;
     printf("sdf core OK: raymarch on RHI, %d prims max\n", SDF_MAX);

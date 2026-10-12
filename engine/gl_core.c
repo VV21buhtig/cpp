@@ -106,10 +106,13 @@ static void core_unload_voxmesh(RenderCore *rc, int slot) {
 }
 
 // Общая отрисовка (экран и цель): вьюпорт+чистка+небо+меши. Без swap/бейджа.
-static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now) {
+// first=0 (поздний проход): без чисток и без неба — только меши в глубину.
+static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now, int first) {
     glViewport(0, 0, ww, hh);
-    glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (first) {
+        glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
 
     // Небо их шейдером: invVP из нашей mat4 + палитра дня.
     Vec3 f, r, u;
@@ -122,6 +125,8 @@ static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now) {
     Mat4 inv = m4inv(&pv);
     float dayF = v->sunDir.y > 1.0f ? 1.0f : (v->sunDir.y < -1.0f ? -1.0f : v->sunDir.y);
     float nightF = dayF < 0.02f ? (dayF < -0.12f ? 1.0f : (0.02f - dayF) / 0.14f) : 0.0f;
+    if (first) {
+    // Небо только первому: поздний закрасил бы ранние домены.
     // Глубина небу не нужна, мешам — да.
     glDisable(GL_DEPTH_TEST);
     glUseProgram(c->skyProg);
@@ -135,10 +140,12 @@ static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now) {
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
     glUseProgram(0);
+    } // first (небо)
 
     // Меши их lighting-шейдером. Вершины chunk-local, model = смещение чанка.
     // Тени выкл (shadowOn=0), лампы/фонарь выкл (нули) — честный минимум дня.
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS); // единая глубина (SDF пишет LEQUAL-совместимую)
     if (!(getenv("VOX_NOCULL") && getenv("VOX_NOCULL")[0])) {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
@@ -189,7 +196,7 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     int ww = v->resW > 0 ? v->resW : 1280;
     int hh = v->resH > 0 ? v->resH : 720;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    draw_scene(c, v, ww, hh, now);
+    draw_scene(c, v, ww, hh, now, 1);
     // Бейдж ядра: зелёный угол 64x32 слева внизу (только свой экран,
     // в композиции бейджей нет — цель одна на всех).
 
@@ -250,7 +257,7 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     if (!t || t->backend != 2 || !t->fbo) return 0;
     int ww = t->w, hh = t->h;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    draw_scene(c, v, ww, hh, glfwGetTime());
+    draw_scene(c, v, ww, hh, glfwGetTime(), !t->noClear);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }

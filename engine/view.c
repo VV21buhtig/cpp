@@ -332,6 +332,7 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     vw_view(vw, &v);
     int ok = 0;
     if (vw->backend == 2 && vw->hasTarget && vw->rc->frame_to) {
+        vw->target.noClear = 0; // одиночка: каждый кадр с чисток
         if (vw->rc->frame_to(vw->rc, &v, &vw->target)) {
             // Цель -> RGBA верх первый (верх GL снизу: строки флипаем).
             if (vw->w * 3 > vw_rowN) {
