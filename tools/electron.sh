@@ -9,6 +9,7 @@ cmake --build "$ROOT/engine/build" --target engine_shared
 if [ ! -x "$ROOT/electron/node_modules/.bin/electron" ]; then
     (cd "$ROOT/electron" && npm install --no-audit --no-fund)
 fi
+(cd "$ROOT/electron" && npm run build)
 if [ -z "$DISPLAY" ]; then
     echo "no DISPLAY: пробую xvfb-run" >&2
     # shellcheck disable=SC2093

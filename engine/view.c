@@ -28,6 +28,7 @@ struct EngView {
     int backend;
     int frame;
     int w, h; // текущий размер кадра (динамика через resize)
+    uint8_t *stage; // RGBA-стейджинг чтения (w*h*4, realloc на resize)
     // воксель: мир + подача
     VoxChunk *world;
     int fed[VW_GW * VW_GW];
@@ -110,6 +111,10 @@ static int vw_boot(EngView *vw, int w, int h) {
     }
     vw->w = w;
     vw->h = h;
+    // Стейджинг чтения RGBA (одно чтение + memcpy-флип, не 720 синхронов).
+    free(vw->stage);
+    vw->stage = (uint8_t *)malloc((size_t)w * h * 4);
+    if (!vw->stage) return 0;
     return 1;
 }
 EngView *eng_view_open(unsigned domain, unsigned backend) {
@@ -317,10 +322,6 @@ static void vw_view(EngView *vw, RcView *v) {
     v->dayT = 242.0f; // полдень (верх дуги sdf_sun)
 }
 
-// Строка чтения GL (только на resize: realloc, не в цикле).
-static uint8_t *vw_row = 0;
-static int vw_rowN = 0;
-
 int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     if (!vw || !vw->rc || !rgba || w != vw->w || h != vw->h) return 0;
     if (vw->domain == RC_CAP_VOXEL) vw_feed_voxel(vw);
@@ -334,25 +335,14 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     if (vw->backend == 2 && vw->hasTarget && vw->rc->frame_to) {
         vw->target.noClear = 0; // одиночка: каждый кадр с чисток
         if (vw->rc->frame_to(vw->rc, &v, &vw->target)) {
-            // Цель -> RGBA верх первый (верх GL снизу: строки флипаем).
-            if (vw->w * 3 > vw_rowN) {
-                free(vw_row);
-                vw_row = (uint8_t *)malloc((size_t)vw->w * 3);
-                vw_rowN = vw_row ? vw->w * 3 : 0;
-            }
-            if (!vw_row) return 0;
+            // Цель -> RGBA верх первый: ОДНО чтение + memcpy-флип строк
+            // (было 720 синхронных чтений + попиксельный свизл = ~100мс).
             glBindFramebuffer(GL_FRAMEBUFFER, vw->target.fbo);
-            for (int y = 0; y < vw->h; y++) {
-                glReadPixels(0, y, vw->w, 1, GL_RGB, GL_UNSIGNED_BYTE, vw_row);
-                uint8_t *dst = rgba + (size_t)(vw->h - 1 - y) * vw->w * 4;
-                uint8_t *row = vw_row;
-                for (int x = 0; x < vw->w; x++) {
-                    dst[x * 4 + 0] = row[x * 3 + 0];
-                    dst[x * 4 + 1] = row[x * 3 + 1];
-                    dst[x * 4 + 2] = row[x * 3 + 2];
-                    dst[x * 4 + 3] = 255;
-                }
-            }
+            glReadPixels(0, 0, vw->w, vw->h, GL_RGBA, GL_UNSIGNED_BYTE, vw->stage);
+            for (int y = 0; y < vw->h; y++)
+                memcpy(rgba + (size_t)y * vw->w * 4,
+                       vw->stage + (size_t)(vw->h - 1 - y) * vw->w * 4,
+                       (size_t)vw->w * 4);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             ok = 1;
         }
@@ -426,5 +416,6 @@ void eng_view_close(EngView *vw) {
     if (vw->win) glfwDestroyWindow((GLFWwindow *)vw->win);
     free(vw->world);
     free(vw->json);
+    free(vw->stage);
     free(vw);
 }
