@@ -93,6 +93,39 @@ static void core_reconf(VoxCore *c, int w, int h) {
     c->cfg.height = (uint32_t)h;
 }
 
+// Заливка пикселей в tile-текстуру (swizzle под pitch 256 + queue write).
+// Без тинтов (как было): webgpu-шейдер тинтует сам.
+static void wgpu_tile_pixels(VoxCore *c, const uint8_t *px) {
+    static uint8_t staging[256 * VOX_TILE * VOX_LAYERS];
+    for (int l = 0; l < VOX_LAYERS; l++)
+        for (int y = 0; y < VOX_TILE; y++)
+            memcpy(&staging[((size_t)l * VOX_TILE + (size_t)y) * 256],
+                   &px[((size_t)l * VOX_TILE + (size_t)y) * VOX_TILE * 4], VOX_TILE * 4);
+    WGPUTexelCopyTextureInfo dst;
+    memset(&dst, 0, sizeof dst);
+    dst.texture = c->tileTex;
+    dst.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyBufferLayout layout;
+    memset(&layout, 0, sizeof layout);
+    layout.bytesPerRow = 256;
+    layout.rowsPerImage = VOX_TILE;
+    WGPUExtent3D extent;
+    memset(&extent, 0, sizeof extent);
+    extent.width = VOX_TILE;
+    extent.height = VOX_TILE;
+    extent.depthOrArrayLayers = VOX_LAYERS;
+    wgpuQueueWriteTexture(c->rhi.queue, &dst, staging, sizeof staging, &layout, &extent);
+}
+
+// Атлас из API (фидер). Тинтов нет (шейдерные, как было).
+static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int layers) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    if (!rgba || tile != VOX_TILE || layers != VOX_LAYERS) return 0;
+    if (!c->tileTex) return 0;
+    wgpu_tile_pixels(c, rgba);
+    return 1;
+}
+
 static void core_build_all(VoxCore *c, const RcView *v) {
     // Вызывается один раз, когда device готов. Значения юниформов придут с кадрами.
     // Поверхность — через RHI (там же COPY_SRC под VOX_SHOT, Mailbox).
@@ -173,22 +206,9 @@ static void core_build_all(VoxCore *c, const RcView *v) {
         printf("voxels OK: stream %dx%dx%d (%dx%d chunks)\n",
             VOX_STEX, VOX_SY, VOX_STEX, VOX_STREAM_CH, VOX_STREAM_CH);
     }
-    // Атлас тайлов.
+    // Атлас тайлов: объекты тут, пиксели — через upload_tiles (фидер).
+    // До первой заливки — белая заглушка (валидный сэмплер).
     {
-        // Тайлы ищутся от корня репо; запасной — рядом с движком.
-        static uint8_t tiles[VOX_TEXELS * 4];
-        const char *tdir = "engine/assets/tiles";
-        {
-            FILE *probe = fopen("engine/assets/tiles/grass_top.png", "rb");
-            if (!probe) tdir = "assets/tiles";
-            else fclose(probe);
-        }
-        if (!vox_tex_load(tdir, tiles)) {
-            memset(tiles, 0x80, sizeof tiles);
-            printf("tiles: fallback gray\n");
-        } else {
-            printf("tiles OK: %d layers\n", VOX_LAYERS);
-        }
         WGPUTextureDescriptor td;
         memset(&td, 0, sizeof td);
         td.size.width = VOX_TILE;
@@ -218,25 +238,9 @@ static void core_build_all(VoxCore *c, const RcView *v) {
         sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
         sd.maxAnisotropy = 1;
         c->tileSmp = wgpuDeviceCreateSampler(c->rhi.device, &sd);
-        static uint8_t staging[256 * VOX_TILE * VOX_LAYERS];
-        for (int l = 0; l < VOX_LAYERS; l++)
-            for (int y = 0; y < VOX_TILE; y++)
-                memcpy(&staging[((size_t)l * VOX_TILE + (size_t)y) * 256],
-                       &tiles[((size_t)l * VOX_TILE + (size_t)y) * VOX_TILE * 4], VOX_TILE * 4);
-        WGPUTexelCopyTextureInfo dst;
-        memset(&dst, 0, sizeof dst);
-        dst.texture = c->tileTex;
-        dst.aspect = WGPUTextureAspect_All;
-        WGPUTexelCopyBufferLayout layout;
-        memset(&layout, 0, sizeof layout);
-        layout.bytesPerRow = 256;
-        layout.rowsPerImage = VOX_TILE;
-        WGPUExtent3D extent;
-        memset(&extent, 0, sizeof extent);
-        extent.width = VOX_TILE;
-        extent.height = VOX_TILE;
-        extent.depthOrArrayLayers = VOX_LAYERS;
-        wgpuQueueWriteTexture(c->rhi.queue, &dst, staging, sizeof staging, &layout, &extent);
+        static uint8_t white16[(size_t)VOX_TILE * VOX_TILE * VOX_LAYERS * 4];
+        memset(white16, 0xFF, sizeof white16);
+        wgpu_tile_pixels(c, white16);
     }
     sky_luts_init(&c->sky, c->rhi.device, c->rhi.queue);
     {
@@ -636,6 +640,7 @@ RenderCore *rc_webgpu_create(void) {
     w->api.upload_chunk = core_upload_chunk;
     w->api.set_origin = core_set_origin;
     w->api.unload_chunk = core_unload_chunk;
+    w->api.upload_tiles = core_upload_tiles;
     w->api.frame_cpu = core_frame_cpu;
     w->api.fps = core_fps;
     return &w->api;

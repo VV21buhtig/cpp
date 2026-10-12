@@ -67,6 +67,7 @@ typedef struct {
     VkDeviceMemory tileMem;
     VkImageView tileView;
     VkSampler tileSmp;
+    int tileReady; // атлас залит (иначе белая заглушка из init)
     VkImage specImg;
     VkDeviceMemory specMem;
     VkImageView specView;
@@ -356,6 +357,7 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
 
 static void core_frame(RenderCore *rc, const RcView *v);
 static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h);
+static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int layers);
 static int core_init(RenderCore *rc, void *glfwWindow);
 static void core_shutdown(RenderCore *rc);
 
@@ -383,12 +385,85 @@ RenderCore *rc_vk_create(void) {
     w->api.unload_chunk = 0;
     w->api.upload_voxmesh = core_upload_voxmesh;
     w->api.unload_voxmesh = core_unload_voxmesh;
+    w->api.upload_tiles = core_upload_tiles;
     w->api.frame_cpu = core_frame_cpu;
     w->api.fps = core_fps;
     return &w->api;
 }
 
 // --- init, часть 2: UBO/сеты/текстуры/пайплайны/синх (вызывается из core_init) ---
+// Заливка пикселей в tile-картинку (стейджинг + барьеры).
+// Первая — из UNDEFINED, повторные — из SHADER_READ (флаг tileReady).
+static int vk_tile_pixels(VKCore *c, const uint8_t *px) {
+    VkBuffer stg = VK_NULL_HANDLE;
+    VkDeviceMemory stgM = VK_NULL_HANDLE;
+    void *sp = 0;
+    if (!vk_hbuf(c, (VkDeviceSize)VOX_TILE * VOX_TILE * VOX_LAYERS * 4,
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &stg, &stgM, &sp)) return 0;
+    memcpy(sp, px, (size_t)VOX_TILE * VOX_TILE * VOX_LAYERS * 4);
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (!vk_once(c, &cb)) goto fail;
+    VkImageMemoryBarrier b0;
+    memset(&b0, 0, sizeof b0);
+    b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b0.oldLayout = c->tileReady ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_UNDEFINED;
+    b0.srcAccessMask = c->tileReady ? VK_ACCESS_SHADER_READ_BIT : 0;
+    b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b0.image = c->tileImg;
+    b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b0.subresourceRange.levelCount = 1;
+    b0.subresourceRange.layerCount = VOX_LAYERS;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
+    VkBufferImageCopy cp;
+    memset(&cp, 0, sizeof cp);
+    cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    cp.imageSubresource.layerCount = VOX_LAYERS;
+    cp.imageExtent.width = VOX_TILE;
+    cp.imageExtent.height = VOX_TILE;
+    cp.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, stg, c->tileImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    VkImageMemoryBarrier b1 = b0;
+    b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
+    if (!vk_once_end(c, cb)) goto fail;
+    vkDestroyBuffer(c->rhi.dev, stg, 0);
+    vkFreeMemory(c->rhi.dev, stgM, 0);
+    c->tileReady = 1;
+    return 1;
+fail:
+    if (stg) vkDestroyBuffer(c->rhi.dev, stg, 0);
+    if (stgM) vkFreeMemory(c->rhi.dev, stgM, 0);
+    return 0;
+}
+
+// Атлас из API (фидер): пиксели + тинты материала (те же что в GL-ядре).
+// Тинты — константы воксельного материала ядра, не контент.
+static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int layers) {
+    VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
+    if (!rgba || tile != VOX_TILE || layers != VOX_LAYERS) return 0;
+    if (!c->tileImg) return 0;
+    static uint8_t tiles[VOX_TEXELS * 4]; // заливка редкая, не цикл кадра
+    memcpy(tiles, rgba, sizeof tiles);
+    for (int i = 0; i < VOX_TILE * VOX_TILE; i++) {
+        uint8_t *t0 = &tiles[i * 4];
+        t0[0] = (uint8_t)(t0[0] * 145 / 255);
+        t0[1] = (uint8_t)(t0[1] * 189 / 255);
+        t0[2] = (uint8_t)(t0[2] * 89 / 255);
+        uint8_t *t6 = &tiles[(6 * VOX_TILE * VOX_TILE + i) * 4];
+        t6[0] = (uint8_t)(t6[0] * 119 / 255);
+        t6[1] = (uint8_t)(t6[1] * 171 / 255);
+        t6[2] = (uint8_t)(t6[2] * 47 / 255);
+    }
+    return vk_tile_pixels(c, tiles);
+}
+
 static int core_init2(RenderCore *rc) {
     VKCore *c = &((VKCoreWrap *)rc->ctx)->core;
     // UBO на кадр в полёте + пул/сеты.
@@ -419,28 +494,9 @@ static int core_init2(RenderCore *rc) {
     }
     // Пул команд/синхронизация — из RHI (rhi_vk_init уже всё поднял).
     // Атлас 16x16x9 + тинты (те же что в GL-ядре) и белый спек.
-        static uint8_t tiles[VOX_TEXELS * 4];
-        // Тайлы ищутся от корня репо; запасной — рядом с движком.
-        const char *tdir = "engine/assets/tiles";
-        {
-            FILE *probe = fopen("engine/assets/tiles/grass_top.png", "rb");
-            if (!probe) tdir = "assets/tiles";
-            else fclose(probe);
-        }
-        if (!vox_tex_load(tdir, tiles)) {
-        memset(tiles, 0x80, sizeof tiles);
-        printf("tiles: fallback gray\n");
-    }
-    for (int i = 0; i < VOX_TILE * VOX_TILE; i++) {
-        uint8_t *t0 = &tiles[i * 4];
-        t0[0] = (uint8_t)(t0[0] * 145 / 255);
-        t0[1] = (uint8_t)(t0[1] * 189 / 255);
-        t0[2] = (uint8_t)(t0[2] * 89 / 255);
-        uint8_t *t6 = &tiles[(6 * VOX_TILE * VOX_TILE + i) * 4];
-        t6[0] = (uint8_t)(t6[0] * 119 / 255);
-        t6[1] = (uint8_t)(t6[1] * 171 / 255);
-        t6[2] = (uint8_t)(t6[2] * 47 / 255);
-    }
+        // Белая заглушка: настоящие пиксели прилетят через upload_tiles.
+        static uint8_t white16[(size_t)VOX_TILE * VOX_TILE * VOX_LAYERS * 4];
+        memset(white16, 0xFF, sizeof white16);
     // Картинка + стейджинг (разово, на ините).
     {
         VkImageCreateInfo ici;
@@ -468,43 +524,7 @@ static int core_init2(RenderCore *rc) {
         mai.memoryTypeIndex = mi;
         VKCHK(vkAllocateMemory(c->rhi.dev, &mai, 0, &c->tileMem));
         VKCHK(vkBindImageMemory(c->rhi.dev, c->tileImg, c->tileMem, 0));
-        VkBuffer stg = VK_NULL_HANDLE;
-        VkDeviceMemory stgM = VK_NULL_HANDLE;
-        void *sp = 0;
-        if (!vk_hbuf(c, sizeof tiles, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &stg, &stgM, &sp)) return 0;
-        memcpy(sp, tiles, sizeof tiles);
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        if (!vk_once(c, &cb)) return 0;
-        VkImageMemoryBarrier b0;
-        memset(&b0, 0, sizeof b0);
-        b0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b0.image = c->tileImg;
-        b0.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        b0.subresourceRange.levelCount = 1;
-        b0.subresourceRange.layerCount = VOX_LAYERS;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b0);
-        VkBufferImageCopy cp;
-        memset(&cp, 0, sizeof cp);
-        cp.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        cp.imageSubresource.layerCount = VOX_LAYERS;
-        cp.imageExtent.width = VOX_TILE;
-        cp.imageExtent.height = VOX_TILE;
-        cp.imageExtent.depth = 1;
-        vkCmdCopyBufferToImage(cb, stg, c->tileImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
-        VkImageMemoryBarrier b1 = b0;
-        b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &b1);
-        if (!vk_once_end(c, cb)) return 0;
-        vkDestroyBuffer(c->rhi.dev, stg, 0);
-        vkFreeMemory(c->rhi.dev, stgM, 0);
+        if (!vk_tile_pixels(c, white16)) return 0;
         VkImageViewCreateInfo vi;
         memset(&vi, 0, sizeof vi);
         vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

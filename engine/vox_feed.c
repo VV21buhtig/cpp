@@ -1,7 +1,9 @@
 // Воксельный фидер: мешинг + слоты + модели. C11, static-состояние.
+#include <stdio.h>
 #include <string.h>
 #include "vox_feed.h"
 #include "vox/vox_mesh.h"
+#include "vox/vox_tex.h"
 #include "mat4.h"
 
 typedef struct {
@@ -53,4 +55,21 @@ void vox_feed_drop(RenderCore *rc, int cx, int cz) {
             slots[i].used = 0;
             return;
         }
+}
+
+int vox_tiles_feed(RenderCore *rc, const char *dir) {
+    if (!rc || !rc->upload_tiles) return 0;
+    static uint8_t tiles[VOX_TEXELS * 4]; // заливка редкая, не цикл кадра
+    // Пути ищутся от корня репо; запасной — рядом с движком.
+    if (!dir) {
+        FILE *probe = fopen("engine/assets/tiles/grass_top.png", "rb");
+        if (probe) {
+            fclose(probe);
+            dir = "engine/assets/tiles";
+        } else {
+            dir = "assets/tiles";
+        }
+    }
+    if (!vox_tex_load(dir, tiles)) return 0;
+    return rc->upload_tiles(rc, tiles, VOX_TILE, VOX_LAYERS);
 }

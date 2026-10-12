@@ -255,6 +255,29 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     return 1;
 }
 
+// Атлас из API (фидер): пиксели + тинты материала (трава #91BD59, листва #77AB2F).
+// Тинты — константы воксельного материала ядра, не контент.
+static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int layers) {
+    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
+    if (!rgba || tile != VOX_TILE || layers != VOX_LAYERS || !c->tileTex) return 0;
+    static uint8_t tiles[VOX_TEXELS * 4]; // заливка редкая, не цикл кадра
+    memcpy(tiles, rgba, sizeof tiles);
+    for (int i = 0; i < VOX_TILE * VOX_TILE; i++) {
+        uint8_t *t0 = &tiles[i * 4]; // grass_top
+        t0[0] = (uint8_t)(t0[0] * 145 / 255);
+        t0[1] = (uint8_t)(t0[1] * 189 / 255);
+        t0[2] = (uint8_t)(t0[2] * 89 / 255);
+        uint8_t *t6 = &tiles[(6 * VOX_TILE * VOX_TILE + i) * 4]; // leaves
+        t6[0] = (uint8_t)(t6[0] * 119 / 255);
+        t6[1] = (uint8_t)(t6[1] * 171 / 255);
+        t6[2] = (uint8_t)(t6[2] * 47 / 255);
+    }
+    glBindTexture(GL_TEXTURE_2D_ARRAY, c->tileTex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, VOX_TILE, VOX_TILE, VOX_LAYERS,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, tiles);
+    return 1;
+}
+
 static int core_init(RenderCore *rc, void *glfwWindow) {
     GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
     memset(c, 0, sizeof *c);
@@ -266,39 +289,18 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
     glGenVertexArrays(1, &c->skyVAO);
     c->lightProg = rhi_gl_prog(GL_SHADER_DIR "/lighting.vs", GL_SHADER_DIR "/lighting.fs");
     if (!c->lightProg) return 0;
-    // Атлас 16x16x9 + их тинты (трава #91BD59, листва #77AB2F).
+    // Атлас — не наш: пиксели прилетают через upload_tiles (фидер).
+    // Тут только белая заглушка 1x1x1 (валидный сэмплер до первой заливки).
     {
-        static uint8_t tiles[VOX_TEXELS * 4];
-        // Тайлы ищутся от корня репо; запасной — рядом с движком.
-        const char *tdir = "engine/assets/tiles";
-        {
-            FILE *probe = fopen("engine/assets/tiles/grass_top.png", "rb");
-            if (!probe) tdir = "assets/tiles";
-            else fclose(probe);
-        }
-        if (!vox_tex_load(tdir, tiles)) {
-            memset(tiles, 0x80, sizeof tiles);
-            printf("tiles: fallback gray\n");
-        }
-        for (int i = 0; i < VOX_TILE * VOX_TILE; i++) {
-            uint8_t *t0 = &tiles[i * 4]; // grass_top
-            t0[0] = (uint8_t)(t0[0] * 145 / 255);
-            t0[1] = (uint8_t)(t0[1] * 189 / 255);
-            t0[2] = (uint8_t)(t0[2] * 89 / 255);
-            uint8_t *t6 = &tiles[(6 * VOX_TILE * VOX_TILE + i) * 4]; // leaves
-            t6[0] = (uint8_t)(t6[0] * 119 / 255);
-            t6[1] = (uint8_t)(t6[1] * 171 / 255);
-            t6[2] = (uint8_t)(t6[2] * 47 / 255);
-        }
+        unsigned char white[4] = {255, 255, 255, 255};
         glGenTextures(1, &c->tileTex);
         glBindTexture(GL_TEXTURE_2D_ARRAY, c->tileTex);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, VOX_TILE, VOX_TILE, VOX_LAYERS,
-                     0, GL_RGBA, GL_UNSIGNED_BYTE, tiles);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 1, 1, 1,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, white);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        unsigned char white[4] = {255, 255, 255, 255};
         glGenTextures(1, &c->specTex);
         glBindTexture(GL_TEXTURE_2D, c->specTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
@@ -399,6 +401,7 @@ RenderCore *rc_gl_create(void) {
     w->api.unload_chunk = 0;
     w->api.upload_voxmesh = core_upload_voxmesh;
     w->api.unload_voxmesh = core_unload_voxmesh;
+    w->api.upload_tiles = core_upload_tiles;
     w->api.fps = core_fps;
     return &w->api;
 }

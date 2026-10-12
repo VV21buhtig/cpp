@@ -74,6 +74,7 @@ static int vw_boot(EngView *vw, int w, int h) {
         vw->win = 0;
         return 0;
     }
+    vox_tiles_feed(vw->rc, 0); // атлас — фидер, не ядро
     if (domain == RC_CAP_VOXEL) {
         vw->world = (VoxChunk *)calloc((size_t)VW_GW * VW_GW, sizeof(VoxChunk));
         if (!vw->world) {

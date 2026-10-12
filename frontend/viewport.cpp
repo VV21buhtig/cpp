@@ -86,6 +86,7 @@ bool Viewport::initDomain(unsigned dom, int be) {
         glfwDestroyWindow(win);
         return false;
     }
+    vox_tiles_feed(newRc, 0); // атлас — фидер, не ядро
     struct RenderCore *newVrc = nullptr;
     // Vec-ядро для гизмо-оверлея делит окно/контекст (любой GL-домен:
     // оверлей рисует поверх готовой цели, домен ему без разницы).

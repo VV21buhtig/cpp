@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
     // ОБА ядра на одном окне/контексте: vec делит контекст gl (make current).
     if (!vec->init(vec, win)) { fprintf(stderr, "vec init fail\n"); return 1; }
     printf("comp: %s + %s\n", gl->name, vec->name);
+    vox_tiles_feed(gl, 0); // атлас — фидер, не ядро
     for (int cz = 0; cz < GW; cz++)
         for (int cx = 0; cx < GW; cx++) {
             world[cx][cz].cx = cx - GW / 2;

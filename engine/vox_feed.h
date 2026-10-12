@@ -20,6 +20,11 @@ extern "C" {
 int vox_feed_one(RenderCore *rc, const VoxChunk *chunk, const VoxChunk *nb[6]);
 // Снести меш чанка из ядра (стал не нужен). Молчит если не было.
 void vox_feed_drop(RenderCore *rc, int cx, int cz);
+// Атлас тайлов ядру (пиксели снаружи, объект внутри).
+// dir с png 16x16 (NULL = поискать стандартные: engine/assets/tiles,
+// запасной assets/tiles). 1 залил, 0 нет
+// (нет API/файлов — ядро рисует белой заглушкой, не падает).
+int vox_tiles_feed(RenderCore *rc, const char *dir);
 
 #ifdef __cplusplus
 }

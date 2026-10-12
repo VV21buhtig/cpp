@@ -86,6 +86,7 @@ int main(int argc, char **argv) {
     if (!win) { fprintf(stderr, "window fail\n"); glfwTerminate(); return 1; }
     if (!rc->init(rc, win)) { fprintf(stderr, "core init fail\n"); return 1; }
     printf("core: %s caps=0x%x be=%u\n", rc->name, rc->caps, rc->backend);
+    vox_tiles_feed(rc, 0); // атлас — фидер, не ядро (нет API/файлов — белая заглушка)
     // Воксели: статика 9x9.
     for (int cz = 0; cz < GW; cz++)
         for (int cx = 0; cx < GW; cx++) {

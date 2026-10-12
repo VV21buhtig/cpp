@@ -111,6 +111,11 @@ struct RenderCore {
     int (*upload_voxmesh)(RenderCore *rc, int slot, const float *v12,
                           int nverts, const float *model16);
     void (*unload_voxmesh)(RenderCore *rc, int slot);
+    // Тайловый атлас вокселей (RGBA, tile x tile x layers; наш: 16x16x9).
+    // Текстура материала домена: пиксели снаружи (фидер), объект на ядре.
+    // Тинты травы/листвы — константы материала ядра (см. ядра).
+    // Без вызова — белая заглушка (не падение). NULL у ядер без атласа.
+    int (*upload_tiles)(RenderCore *rc, const uint8_t *rgba, int tile, int layers);
     // SDF-объём (VOXEL-домен, NULL если ядро не ест): печёный R8 16x64x16,
     // байт = clamp(d/12,-1,1)*0.5+0.5. Тороид на ядре, швы решает app.
     int (*upload_sdf_chunk)(RenderCore *rc, int cx, int cz, const uint8_t *sdf16);
