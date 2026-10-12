@@ -75,6 +75,45 @@ int main(void) {
         printf("VIEW FAIL: bad-size-ok\n");
         bad = 1;
     }
+    // Динамика: 960x540 и 1920x1080 рисуют (центр яркий), назад — тоже.
+    // 0x0 и 9999x9999 — clamp, не отказ.
+    if (!eng_view_resize(vw, 960, 540)) {
+        printf("VIEW FAIL: resize-960\n");
+        bad = 1;
+    } else {
+        static uint8_t px2[(size_t)960 * 540 * 4];
+        int ok = 0;
+        for (int i = 0; i < 8 && !ok; i++)
+            ok = eng_view_frame(vw, px2, 960, 540);
+        if (!ok) {
+            printf("VIEW FAIL: frame-960\n");
+            bad = 1;
+        } else {
+            long sum = 0;
+            int n = 0;
+            for (int y = 220; y < 320; y += 2)
+                for (int x = 430; x < 530; x += 2) {
+                    const uint8_t *p = px2 + ((size_t)y * 960 + x) * 4;
+                    sum += p[0] + p[1] + p[2];
+                    n++;
+                }
+            if (n == 0 || sum / n <= 36) {
+                printf("VIEW FAIL: black-960\n");
+                bad = 1;
+            }
+        }
+    }
+    if (!eng_view_resize(vw, 0, 0) || !eng_view_resize(vw, 9999, 9999)) {
+        printf("VIEW FAIL: clamp\n");
+        bad = 1;
+    }
+    if (!eng_view_resize(vw, 1280, 720)) {
+        printf("VIEW FAIL: resize-back\n");
+        bad = 1;
+    } else if (!eng_view_frame(vw, px, 1280, 720)) {
+        printf("VIEW FAIL: frame-back\n");
+        bad = 1;
+    }
     eng_view_close(vw);
     printf(bad ? "VIEW FAIL\n" : "VIEW OK\n");
     return bad;

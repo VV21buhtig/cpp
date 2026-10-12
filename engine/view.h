@@ -13,6 +13,9 @@ extern "C" {
 
 #define VW_W 1280
 #define VW_H 720
+// Динамика (eng_viewport_resize): 64..2048, остальное — clamp.
+#define VW_MIN 64
+#define VW_MAX 2048
 
 typedef struct EngView EngView;
 
@@ -28,6 +31,11 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h);
 const char *eng_view_scene(EngView *vw);
 // Кадров отрисовано (кадр растёт только при рендере — для вердиктов).
 int eng_view_frames(const EngView *vw);
+// Динамика как в UE5/Unity: новый размер кадра. Пересоздаёт цель (GL)
+// или всё окно+свопчейн (VK/WebGPU — экстент там от окна). Подача мира
+// дотягивается за пару кадров (как при смене бэкенда). 1 ок, 0 отказ.
+// Диапазон VW_MIN..VW_MAX, остальное — clamp (не отказ).
+int eng_view_resize(EngView *vw, int w, int h);
 void eng_view_close(EngView *vw);
 
 #ifdef __cplusplus

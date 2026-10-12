@@ -19,6 +19,7 @@ const eng_view_frame = lib.func('eng_view_frame', 'int', ['void *', 'uint8_t *',
 const eng_view_scene = lib.func('eng_view_scene', 'str', ['void *']);
 const eng_view_frames = lib.func('eng_view_frames', 'int', ['void *']);
 const eng_view_close = lib.func('eng_view_close', 'void', ['void *']);
+const eng_view_resize = lib.func('eng_view_resize', 'int', ['void *', 'int', 'int']);
 
 const DOMAINS = { voxel: 1, sdf: 2, vector: 4, pixel: 8, mesh: 16 };
 const BACKENDS = { webgpu: 1, gl: 2, vk: 3 };
@@ -27,7 +28,8 @@ let view = null;
 let domain = DOMAINS.voxel;
 let backend = BACKENDS.gl;
 let playing = false;
-let frameBuf = Buffer.alloc(FW * FH * 4);
+let vw = FW, vh = FH; // текущий размер кадра (динамика через resize)
+let frameBuf = Buffer.alloc(vw * vh * 4);
 
 function boot() {
   if (view) eng_view_close(view);
@@ -53,11 +55,11 @@ app.whenReady().then(() => {
   console.log('boot:', boot() ? 'OK' : 'FAIL');
   // Кадр тикает тут (main), renderer только показывает последний.
   setInterval(() => {
-    if (view && playing) eng_view_frame(view, frameBuf, FW, FH);
+    if (view && playing) eng_view_frame(view, frameBuf, vw, vh);
   }, 33);
   ipcMain.handle('scene', () => (view ? eng_view_scene(view) : '{"entities":[]}'));
   ipcMain.handle('frame', () => {
-    if (view && !playing) eng_view_frame(view, frameBuf, FW, FH);
+    if (view && !playing) eng_view_frame(view, frameBuf, vw, vh);
     return frameBuf;
   });
   ipcMain.handle('frames', () => (view ? eng_view_frames(view) : 0));
@@ -67,6 +69,19 @@ app.whenReady().then(() => {
     if (BACKENDS[b]) backend = BACKENDS[b];
     const ok = boot();
     return ok;
+  });
+  // Динамика вьюпорта: ResizeObserver сцены -> бекенд -> новый буфер.
+  // Возвращает [w, h] после clamp (VW_MIN..VW_MAX) — renderer ставит в canvas.
+  ipcMain.handle('resize', (_e, w, h) => {
+    if (!view) return [vw, vh];
+    w = Math.round(w);
+    h = Math.round(h);
+    if (w === vw && h === vh) return [vw, vh];
+    if (eng_view_resize(view, w, h) !== 1) return [vw, vh];
+    vw = Math.min(2048, Math.max(64, w));
+    vh = Math.min(2048, Math.max(64, h));
+    frameBuf = Buffer.alloc(vw * vh * 4);
+    return [vw, vh];
   });
   ipcMain.handle('ping', () => ({ domain, backend, playing }));
   createWindow();

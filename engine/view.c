@@ -27,6 +27,7 @@ struct EngView {
     unsigned domain;
     int backend;
     int frame;
+    int w, h; // текущий размер кадра (динамика через resize)
     // воксель: мир + подача
     VoxChunk *world;
     int fed[VW_GW * VW_GW];
@@ -47,15 +48,10 @@ static const VoxChunk *vw_find(EngView *vw, int cx, int cz) {
     return 0;
 }
 
-EngView *eng_view_open(unsigned domain, unsigned backend) {
-    EngView *vw = (EngView *)calloc(1, sizeof *vw);
-    if (!vw) return 0;
-    vw->domain = domain;
-    vw->backend = (int)backend;
-    if (!glfwInit()) {
-        free(vw);
-        return 0;
-    }
+// Подъём окна+ядра+мира под размер (вызывается из open и resize).
+static int vw_boot(EngView *vw, int w, int h) {
+    unsigned domain = vw->domain;
+    int backend = vw->backend;
     if (backend == 2) {
         // CLIENT_API сбрасываем явно: хинты липкие, после NO_API-окна
         // следующее GL-окно родилось бы без контекста (та же ловушка была в Qt).
@@ -67,23 +63,25 @@ EngView *eng_view_open(unsigned domain, unsigned backend) {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     }
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    GLFWwindow *win = glfwCreateWindow(VW_W, VW_H, "eng-view", 0, 0);
-    if (!win) {
-        free(vw);
-        return 0;
-    }
+    GLFWwindow *win = glfwCreateWindow(w, h, "eng-view", 0, 0);
+    if (!win) return 0;
     vw->win = win;
-    vw->rc = rc_create_by(domain, backend);
+    vw->rc = rc_create_by(domain, (unsigned)backend);
     if (!vw->rc || !vw->rc->init(vw->rc, win)) {
         if (vw->rc) rc_destroy(vw->rc);
+        vw->rc = 0;
         glfwDestroyWindow(win);
-        free(vw);
+        vw->win = 0;
         return 0;
     }
     if (domain == RC_CAP_VOXEL) {
         vw->world = (VoxChunk *)calloc((size_t)VW_GW * VW_GW, sizeof(VoxChunk));
         if (!vw->world) {
-            eng_view_close(vw);
+            vw->rc->shutdown(vw->rc);
+            rc_destroy(vw->rc);
+            vw->rc = 0;
+            glfwDestroyWindow(win);
+            vw->win = 0;
             return 0;
         }
         for (int cz = 0; cz < VW_GW; cz++)
@@ -97,11 +95,34 @@ EngView *eng_view_open(unsigned domain, unsigned backend) {
     }
     if (backend == 2) {
         memset(&vw->target, 0, sizeof vw->target);
-        if (!comp_target_gl_new(&vw->target, VW_W, VW_H)) {
-            eng_view_close(vw);
+        if (!comp_target_gl_new(&vw->target, w, h)) {
+            free(vw->world);
+            vw->world = 0;
+            vw->rc->shutdown(vw->rc);
+            rc_destroy(vw->rc);
+            vw->rc = 0;
+            glfwDestroyWindow(win);
+            vw->win = 0;
             return 0;
         }
         vw->hasTarget = 1;
+    }
+    vw->w = w;
+    vw->h = h;
+    return 1;
+}
+EngView *eng_view_open(unsigned domain, unsigned backend) {
+    EngView *vw = (EngView *)calloc(1, sizeof *vw);
+    if (!vw) return 0;
+    vw->domain = domain;
+    vw->backend = (int)backend;
+    if (!glfwInit()) {
+        free(vw);
+        return 0;
+    }
+    if (!vw_boot(vw, VW_W, VW_H)) {
+        free(vw);
+        return 0;
     }
     // Демо-сцена (та же что в Qt-скелете): Scene/Hero/Sword.
     sc_init(&vw->scene);
@@ -235,11 +256,11 @@ static void vw_feed_pix(EngView *vw, uint8_t *rgba) {
     static const uint8_t bars[8][3] = {{255, 255, 255}, {255, 255, 0}, {0, 255, 255},
                                        {0, 255, 0}, {255, 0, 255}, {255, 0, 0},
                                        {0, 0, 255}, {0, 0, 0}};
-    int ly = (vw->frame * 4) % VW_H;
-    for (int y = 0; y < VW_H; y++) {
-        uint8_t *row = rgba + (size_t)y * VW_W * 4;
-        for (int x = 0; x < VW_W; x++) {
-            const uint8_t *c = bars[(x / 160) % 8];
+    int ly = (vw->frame * 4) % vw->h;
+    for (int y = 0; y < vw->h; y++) {
+        uint8_t *row = rgba + (size_t)y * vw->w * 4;
+        for (int x = 0; x < vw->w; x++) {
+            const uint8_t *c = bars[(x / (vw->w / 8)) % 8];
             row[x * 4 + 0] = c[0];
             row[x * 4 + 1] = c[1];
             row[x * 4 + 2] = c[2];
@@ -251,7 +272,7 @@ static void vw_feed_pix(EngView *vw, uint8_t *rgba) {
             }
         }
     }
-    vw->rc->upload_pixels(vw->rc, rgba, VW_W, VW_H);
+    vw->rc->upload_pixels(vw->rc, rgba, vw->w, vw->h);
 }
 
 // Камера: орбита + цели по доменам (из viewport.cpp).
@@ -280,8 +301,8 @@ static void vw_view(EngView *vw, RcView *v) {
         v->pitch = (float)asin(dy / dl);
     }
     v->fov = 1.6f;
-    v->resW = VW_W;
-    v->resH = VW_H;
+    v->resW = vw->w;
+    v->resH = vw->h;
     v->sunDir.x = 0.4f;
     v->sunDir.y = 0.75f;
     v->sunDir.z = 0.3f;
@@ -295,8 +316,12 @@ static void vw_view(EngView *vw, RcView *v) {
     v->dayT = 242.0f; // полдень (верх дуги sdf_sun)
 }
 
+// Строка чтения GL (только на resize: realloc, не в цикле).
+static uint8_t *vw_row = 0;
+static int vw_rowN = 0;
+
 int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
-    if (!vw || !vw->rc || !rgba || w != VW_W || h != VW_H) return 0;
+    if (!vw || !vw->rc || !rgba || w != vw->w || h != vw->h) return 0;
     if (vw->domain == RC_CAP_VOXEL) vw_feed_voxel(vw);
     else if (vw->domain == RC_CAP_SDF) vw_feed_sdf(vw);
     else if (vw->domain == RC_CAP_VECTOR) vw_feed_vec(vw);
@@ -308,12 +333,18 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     if (vw->backend == 2 && vw->hasTarget && vw->rc->frame_to) {
         if (vw->rc->frame_to(vw->rc, &v, &vw->target)) {
             // Цель -> RGBA верх первый (верх GL снизу: строки флипаем).
+            if (vw->w * 3 > vw_rowN) {
+                free(vw_row);
+                vw_row = (uint8_t *)malloc((size_t)vw->w * 3);
+                vw_rowN = vw_row ? vw->w * 3 : 0;
+            }
+            if (!vw_row) return 0;
             glBindFramebuffer(GL_FRAMEBUFFER, vw->target.fbo);
-            static uint8_t row[VW_W * 3];
-            for (int y = 0; y < VW_H; y++) {
-                glReadPixels(0, y, VW_W, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
-                uint8_t *dst = rgba + (size_t)(VW_H - 1 - y) * VW_W * 4;
-                for (int x = 0; x < VW_W; x++) {
+            for (int y = 0; y < vw->h; y++) {
+                glReadPixels(0, y, vw->w, 1, GL_RGB, GL_UNSIGNED_BYTE, vw_row);
+                uint8_t *dst = rgba + (size_t)(vw->h - 1 - y) * vw->w * 4;
+                uint8_t *row = vw_row;
+                for (int x = 0; x < vw->w; x++) {
                     dst[x * 4 + 0] = row[x * 3 + 0];
                     dst[x * 4 + 1] = row[x * 3 + 1];
                     dst[x * 4 + 2] = row[x * 3 + 2];
@@ -324,7 +355,7 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
             ok = 1;
         }
     } else if (vw->rc->frame_cpu) {
-        ok = vw->rc->frame_cpu(vw->rc, &v, rgba, VW_W, VW_H);
+        ok = vw->rc->frame_cpu(vw->rc, &v, rgba, vw->w, vw->h);
     } else {
         vw->rc->frame(vw->rc, &v);
     }
@@ -353,6 +384,34 @@ const char *eng_view_scene(EngView *vw) {
 
 int eng_view_frames(const EngView *vw) {
     return vw ? vw->frame : 0;
+}
+
+int eng_view_resize(EngView *vw, int w, int h) {
+    if (!vw || !vw->rc) return 0;
+    if (w < VW_MIN) w = VW_MIN;
+    if (h < VW_MIN) h = VW_MIN;
+    if (w > VW_MAX) w = VW_MAX;
+    if (h > VW_MAX) h = VW_MAX;
+    if (w == vw->w && h == vw->h) return 1;
+    // Снос внутренностей (сцена, JSON и счётчик кадров живут дальше).
+    vw->rc->shutdown(vw->rc);
+    rc_destroy(vw->rc);
+    vw->rc = 0;
+    if (vw->hasTarget) {
+        comp_target_gl_free(&vw->target);
+        vw->hasTarget = 0;
+    }
+    if (vw->win) {
+        glfwDestroyWindow((GLFWwindow *)vw->win);
+        vw->win = 0;
+    }
+    free(vw->world);
+    vw->world = 0;
+    memset(vw->fed, 0, sizeof vw->fed);
+    vw->fedLeft = VW_GW * VW_GW;
+    vw->fedCur = 0;
+    vw->sdfFed = vw->vecFed = vw->meshFed = 0;
+    return vw_boot(vw, w, h);
 }
 
 void eng_view_close(EngView *vw) {

@@ -30,8 +30,11 @@ async function refreshTree() {
 async function loop() {
   const buf = await window.eng.frame();
   // Buffer -> ImageData (RGBA, верх первый — как отдаёт бекенд).
+  // Размер canvas ставит resize-хендлер ниже; putImageData 1-в-1.
+  const want = cv.width * cv.height * 4;
+  if (buf.byteLength !== want) return; // кадр в пути после ресайза — пропуск
   const u8 = new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
-  ctx.putImageData(new ImageData(u8, 1280, 720), 0, 0);
+  ctx.putImageData(new ImageData(u8, cv.width, cv.height), 0, 0);
   nFrames++;
   const now = performance.now();
   if (now - lastT > 1000) {
@@ -57,6 +60,36 @@ async function reswitch() {
 }
 domSel.onchange = reswitch;
 beSel.onchange = reswitch;
+
+// Динамика: панель потянули — шлём размер в бекенд, canvas под ответ.
+// Троттлим (не чаще раза в 300мс): ресайз окна/swapchain — тяжёлый.
+let rzT = 0, rzQueued = null;
+async function doResize(w, h) {
+  const [bw, bh] = await window.eng.resize(w, h);
+  cv.width = bw;
+  cv.height = bh;
+  stat.textContent = `viewport: ${bw}x${bh}`;
+}
+new ResizeObserver(() => {
+  const r = document.getElementById('stage').getBoundingClientRect();
+  const w = Math.floor(r.width), h = Math.floor(r.height);
+  if (w < 64 || h < 64 || (w === cv.width && h === cv.height)) return;
+  const now = performance.now();
+  if (now - rzT > 300) {
+    rzT = now;
+    doResize(w, h);
+  } else {
+    rzQueued = [w, h];
+    setTimeout(() => {
+      if (rzQueued) {
+        const [qw, qh] = rzQueued;
+        rzQueued = null;
+        rzT = performance.now();
+        doResize(qw, qh);
+      }
+    }, 320);
+  }
+}).observe(document.getElementById('stage'));
 
 refreshTree();
 loop();

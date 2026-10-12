@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('eng', {
   frames: () => ipcRenderer.invoke('frames'),
   play: (on) => ipcRenderer.invoke('play', on),
   switch: (domain, backend) => ipcRenderer.invoke('switch', domain, backend),
+  resize: (w, h) => ipcRenderer.invoke('resize', w, h),
   ping: () => ipcRenderer.invoke('ping'),
 });
