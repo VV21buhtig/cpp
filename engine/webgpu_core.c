@@ -11,6 +11,7 @@
 #include <time.h>
 #include <math.h>
 #include "render_api.h"
+#include "rtarget.h"
 #include "rhi_webgpu.h"
 #include "sdf_ubo.h"
 #include "sky_lut.h"
@@ -29,7 +30,11 @@ typedef struct {
     WGPUSurfaceConfiguration cfg;
     WGPUShaderModule mod;
     WGPUBuffer ubo[FRAMES_IN_FLIGHT];
-    WGPURenderPipeline pipeline;
+    WGPURenderPipeline pipeline; // без глубины (своп: глубины нет)
+    WGPURenderPipeline pipeDepth; // дубль под цель с глубиной (тест Always, не пишет)
+    WGPUBindGroupLayout dbgl; // лейаут pipeDepth (группы только свои)
+    WGPUBindGroup dbind[FRAMES_IN_FLIGHT];
+    WGPUBindGroup skyBindDepth; // небесная группа под второй лейаут
     WGPUBindGroup bind[FRAMES_IN_FLIGHT];
     WGPUBindGroupLayout bgl;
     WGPUBuffer tagsBuf;
@@ -48,10 +53,11 @@ typedef struct {
     int slotCZ[VOX_STREAM_CH][VOX_STREAM_CH];
     unsigned char slotOk[VOX_STREAM_CH][VOX_STREAM_CH];
     float streamOX, streamOZ;
-    // CPU-забор для Qt-вьюпорта (frame_cpu): скачать кадр в grabDst (RGBA).
-    int grabNext;
-    uint8_t *grabDst;
-    int grabW, grabH, grabOk;
+    // Живые offscreen-цели (создаёт ядро, смерть — в shutdown).
+    void *liveT[4];
+    int liveN;
+    // Scratch-цель frame_cpu (натив в nobj[0], трекается в liveT).
+    RcTarget scratch;
     int ready;
     int frame;
     double prevT;
@@ -159,6 +165,17 @@ static void core_build_all(VoxCore *c, const RcView *v) {
     pipe.multisample.mask = 0xFFFFFFFFu;
     c->pipeline = wgpuDeviceCreateRenderPipeline(c->rhi.device, &pipe);
     c->bgl = wgpuRenderPipelineGetBindGroupLayout(c->pipeline, 0);
+    // Дубль под offscreen-цель с глубиной: тот же шейдер, тест Always
+    // (DDA глубину не пишет — в WGSL нет gl_FragDepth; WG-mesh придёт позже).
+    {
+        WGPUDepthStencilState ds;
+        memset(&ds, 0, sizeof ds);
+        ds.format = WGPUTextureFormat_Depth32Float;
+        ds.depthWriteEnabled = WGPUOptionalBool_False;
+        ds.depthCompare = WGPUCompareFunction_Always;
+        pipe.depthStencil = &ds;
+        c->pipeDepth = wgpuDeviceCreateRenderPipeline(c->rhi.device, &pipe);
+    }
 
     c->tagsBuf = ubo_buf(c->rhi.device, sizeof c->tags);
     for (int i = 0; i < 484; i++) c->tags[i] = INT32_MAX;
@@ -180,6 +197,24 @@ static void core_build_all(VoxCore *c, const RcView *v) {
         bgdef.entryCount = 5;
         bgdef.entries = be;
         c->bind[i] = wgpuDeviceCreateBindGroup(c->rhi.device, &bgdef);
+    }
+    // Бинд-группы под второй лейаут pipeDepth (те же буферы: чужой лейаут
+    // с теми же handles не катит — exclusive pipelines).
+    c->dbgl = wgpuRenderPipelineGetBindGroupLayout(c->pipeDepth, 0);
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        WGPUBindGroupEntry be[5];
+        memset(be, 0, sizeof be);
+        be[0].binding = 0; be[0].buffer = c->ubo[i]; be[0].size = 64;
+        be[1].binding = 1; be[1].buffer = c->tagsBuf; be[1].size = sizeof c->tags;
+        be[2].binding = 2; be[2].buffer = c->gradeBuf; be[2].size = 16;
+        be[3].binding = 3; be[3].buffer = c->viewBuf; be[3].size = 16;
+        be[4].binding = 4; be[4].buffer = c->frustumBuf; be[4].size = 64;
+        WGPUBindGroupDescriptor bgdef;
+        memset(&bgdef, 0, sizeof bgdef);
+        bgdef.layout = c->dbgl;
+        bgdef.entryCount = 5;
+        bgdef.entries = be;
+        c->dbind[i] = wgpuDeviceCreateBindGroup(c->rhi.device, &bgdef);
     }
 
     // Тороидальная 3D-текстура вокселей.
@@ -259,6 +294,25 @@ static void core_build_all(VoxCore *c, const RcView *v) {
         d.entryCount = 6;
         d.entries = e;
         c->skyBind = wgpuDeviceCreateBindGroup(c->rhi.device, &d);
+        wgpuBindGroupLayoutRelease(l);
+    }
+    // Небесная группа под второй лейаут (те же вьюхи).
+    {
+        WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(c->pipeDepth, 1);
+        WGPUBindGroupEntry e[6];
+        memset(e, 0, sizeof e);
+        e[0].binding = 0; e[0].textureView = c->sky.sunView;
+        e[1].binding = 1; e[1].textureView = c->sky.moonView;
+        e[2].binding = 2; e[2].sampler = c->sky.smp;
+        e[3].binding = 3; e[3].textureView = c->voxView;
+        e[4].binding = 4; e[4].textureView = c->tileView;
+        e[5].binding = 5; e[5].sampler = c->tileSmp;
+        WGPUBindGroupDescriptor d;
+        memset(&d, 0, sizeof d);
+        d.layout = l;
+        d.entryCount = 6;
+        d.entries = e;
+        c->skyBindDepth = wgpuDeviceCreateBindGroup(c->rhi.device, &d);
         wgpuBindGroupLayoutRelease(l);
     }
     c->ready = 1;
@@ -452,6 +506,185 @@ static void wgpu_shot(VoxCore *c, WGPUTexture tex, uint32_t w, uint32_t h, const
     wgpu_grab(c, tex, w, h, path, 0);
 }
 
+// Рендер DDA в вид (своп или таргет): юниформы + проход + сабмит.
+// Без present/шота. first=0: чисток нет (LOAD), небо красит всё равно
+// (отдельного неба нет — miss-цвет внутри марша; поздние WG-проходы
+// придут с mesh-ядром, тогда и uLate).
+// dview NULL = без глубины (сегодняшний своп-путь 1-в-1).
+static int wg_render(VoxCore *c, const RcView *v, WGPUTextureView view, WGPUTextureView dview,
+                     int W, int H, int first) {
+    Vec3 f, r, u_;
+    cam_basis(v->yaw, v->pitch, &f, &r, &u_);
+    Vec3 sunDir = sdf_sun(v->dayT);
+    Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
+    sky_luts_update(&c->sky, sunDir, moonDir, v->camPos.y);
+
+    SdfUBO u;
+    memset(&u, 0, sizeof u);
+    u.camPos = v->camPos; u.time = v->time;
+    u.camTarget = v3_add(v->camPos, f); u.resX = (float)W;
+    u.sunDir = sunDir; u.maxSteps = v->maxSteps;
+    u.resY = (float)H; u.mode = (float)v->viewMode;
+    u.pad[0] = c->streamOX; u.pad[1] = c->streamOZ;
+    int fi = c->frame % FRAMES_IN_FLIGHT;
+    wgpuQueueWriteBuffer(c->rhi.queue, c->ubo[fi], 0, &u, sizeof u);
+    {
+        // Грейд — честные поля вида. Меню-оверлей и фрустум-дебаг из RcView
+        // вычищены (были мёртвыми: все всегда слали нули): меню выкл (-1),
+        // фрустум выкл (0) с нулевой матрицей — шейдер их не рисует.
+        float g[4] = {v->gamma, v->exposure, v->fog, -1.0f};
+        wgpuQueueWriteBuffer(c->rhi.queue, c->gradeBuf, 0, g, sizeof g);
+        float vw[4] = {v->fov, v->shadowOn, 0.0f, 0};
+        wgpuQueueWriteBuffer(c->rhi.queue, c->viewBuf, 0, vw, sizeof vw);
+        float fr[16] = {0};
+        wgpuQueueWriteBuffer(c->rhi.queue, c->frustumBuf, 0, fr, sizeof fr);
+    }
+
+    WGPUCommandEncoderDescriptor edef;
+    memset(&edef, 0, sizeof edef);
+    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(c->rhi.device, &edef);
+    WGPURenderPassColorAttachment ca;
+    memset(&ca, 0, sizeof ca);
+    ca.view = view;
+    ca.loadOp = first ? WGPULoadOp_Clear : WGPULoadOp_Load;
+    ca.storeOp = WGPUStoreOp_Store;
+    ca.clearValue = (WGPUColor){0.02, 0.03, 0.06, 1.0};
+    WGPURenderPassDescriptor rp;
+    memset(&rp, 0, sizeof rp);
+    rp.colorAttachmentCount = 1;
+    rp.colorAttachments = &ca;
+    WGPURenderPassDepthStencilAttachment da;
+    memset(&da, 0, sizeof da);
+    if (dview) {
+        // Глубина цели: чистим первым, храним всегда (цепочка проходов).
+        da.view = dview;
+        da.depthLoadOp = first ? WGPULoadOp_Clear : WGPULoadOp_Load;
+        da.depthStoreOp = WGPUStoreOp_Store;
+        da.depthClearValue = 1.0f;
+        da.stencilLoadOp = WGPULoadOp_Undefined;
+        da.stencilStoreOp = WGPUStoreOp_Undefined;
+        rp.depthStencilAttachment = &da;
+    }
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
+    wgpuRenderPassEncoderSetPipeline(pass, dview ? c->pipeDepth : c->pipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, dview ? c->dbind[fi] : c->bind[fi], 0, 0);
+    wgpuRenderPassEncoderSetBindGroup(pass, 1, dview ? c->skyBindDepth : c->skyBind, 0, 0);
+    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+    WGPUCommandBufferDescriptor cbdef;
+    memset(&cbdef, 0, sizeof cbdef);
+    WGPUCommandBuffer cbuf = wgpuCommandEncoderFinish(enc, &cbdef);
+    wgpuQueueSubmit(c->rhi.queue, 1, &cbuf);
+    wgpuCommandBufferRelease(cbuf);
+    wgpuCommandEncoderRelease(enc);
+
+    return 1;
+}
+
+// Нативная offscreen-цель WebGPU (лежит в RcTarget.nobj[0], владеет ядро).
+// Цвет c->fmt + RENDER_ATTACHMENT|COPY_SRC|TEXTURE_BINDING; глубина —
+// честный Depth32Float (пишет/тестит её будущий WG-mesh; DDA-марш глубину
+// не выдаёт — в WGSL нет gl_FragDepth. Цель готова, интероп — следующим).
+typedef struct {
+    int w, h;
+    WGPUTexture tex;
+    WGPUTextureView view;
+    WGPUTexture dtex;
+    WGPUTextureView dview;
+} WGTarget;
+
+static void wg_target_free(VoxCore *c, WGTarget *t) {
+    (void)c;
+    if (!t) return;
+    if (t->view) wgpuTextureViewRelease(t->view);
+    if (t->tex) wgpuTextureRelease(t->tex);
+    if (t->dview) wgpuTextureViewRelease(t->dview);
+    if (t->dtex) wgpuTextureRelease(t->dtex);
+    free(t);
+}
+
+static WGTarget *wg_target_ensure(VoxCore *c, RcTarget *t) {
+    if (!t || t->backend != RC_BACKEND_WEBGPU || t->w <= 0 || t->h <= 0) return 0;
+    WGTarget *tg = (WGTarget *)t->nobj[0];
+    if (tg && tg->w == t->w && tg->h == t->h) return tg;
+    if (tg) {
+        wg_target_free(c, tg);
+        for (int i = 0; i < c->liveN; i++)
+            if (c->liveT[i] == tg) {
+                c->liveT[i] = c->liveT[--c->liveN];
+                break;
+            }
+        t->nobj[0] = 0;
+    }
+    tg = (WGTarget *)calloc(1, sizeof *tg);
+    if (!tg) return 0;
+    tg->w = t->w;
+    tg->h = t->h;
+    {
+        WGPUTextureDescriptor td;
+        memset(&td, 0, sizeof td);
+        td.size.width = (uint32_t)t->w;
+        td.size.height = (uint32_t)t->h;
+        td.size.depthOrArrayLayers = 1;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = c->fmt;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc |
+                   WGPUTextureUsage_TextureBinding;
+        tg->tex = wgpuDeviceCreateTexture(c->rhi.device, &td);
+        if (!tg->tex) {
+            wg_target_free(c, tg);
+            return 0;
+        }
+        WGPUTextureViewDescriptor vd;
+        memset(&vd, 0, sizeof vd);
+        vd.format = c->fmt;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.mipLevelCount = 1;
+        vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_All;
+        tg->view = wgpuTextureCreateView(tg->tex, &vd);
+        if (!tg->view) {
+            wg_target_free(c, tg);
+            return 0;
+        }
+    }
+    {
+        WGPUTextureDescriptor td;
+        memset(&td, 0, sizeof td);
+        td.size.width = (uint32_t)t->w;
+        td.size.height = (uint32_t)t->h;
+        td.size.depthOrArrayLayers = 1;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = WGPUTextureFormat_Depth32Float;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        tg->dtex = wgpuDeviceCreateTexture(c->rhi.device, &td);
+        if (!tg->dtex) {
+            wg_target_free(c, tg);
+            return 0;
+        }
+        WGPUTextureViewDescriptor vd;
+        memset(&vd, 0, sizeof vd);
+        vd.format = WGPUTextureFormat_Depth32Float;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.mipLevelCount = 1;
+        vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_DepthOnly;
+        tg->dview = wgpuTextureCreateView(tg->dtex, &vd);
+        if (!tg->dview) {
+            wg_target_free(c, tg);
+            return 0;
+        }
+    }
+    t->nobj[0] = tg;
+    if (c->liveN < 4) c->liveT[c->liveN++] = tg;
+    return tg;
+}
+
 static void core_frame(RenderCore *rc, const RcView *v) {
     VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
     // Устройство готово из init (RHI ждёт сам); пайплайны — лениво под размер.
@@ -474,33 +707,6 @@ static void core_frame(RenderCore *rc, const RcView *v) {
         c->fpsEma = c->fpsEma > 0.0f ? c->fpsEma * 0.95f + fps * 0.05f : fps;
     }
 
-    Vec3 f, r, u_;
-    cam_basis(v->yaw, v->pitch, &f, &r, &u_);
-    Vec3 sunDir = sdf_sun(v->dayT);
-    Vec3 moonDir = v3(-sunDir.x, -sunDir.y, -sunDir.z);
-    sky_luts_update(&c->sky, sunDir, moonDir, v->camPos.y);
-
-    SdfUBO u;
-    memset(&u, 0, sizeof u);
-    u.camPos = v->camPos; u.time = v->time;
-    u.camTarget = v3_add(v->camPos, f); u.resX = (float)ww;
-    u.sunDir = sunDir; u.maxSteps = v->maxSteps;
-    u.resY = (float)hh; u.mode = (float)v->viewMode;
-    u.pad[0] = c->streamOX; u.pad[1] = c->streamOZ;
-    int fi = c->frame % FRAMES_IN_FLIGHT;
-    wgpuQueueWriteBuffer(c->rhi.queue, c->ubo[fi], 0, &u, sizeof u);
-    {
-        // Грейд — честные поля вида. Меню-оверлей и фрустум-дебаг из RcView
-        // вычищены (были мёртвыми: все всегда слали нули): меню выкл (-1),
-        // фрустум выкл (0) с нулевой матрицей — шейдер их не рисует.
-        float g[4] = {v->gamma, v->exposure, v->fog, -1.0f};
-        wgpuQueueWriteBuffer(c->rhi.queue, c->gradeBuf, 0, g, sizeof g);
-        float vw[4] = {v->fov, v->shadowOn, 0.0f, 0};
-        wgpuQueueWriteBuffer(c->rhi.queue, c->viewBuf, 0, vw, sizeof vw);
-        float fr[16] = {0};
-        wgpuQueueWriteBuffer(c->rhi.queue, c->frustumBuf, 0, fr, sizeof fr);
-    }
-
     WGPUSurfaceTexture st;
     memset(&st, 0, sizeof st);
     wgpuSurfaceGetCurrentTexture(c->rhi.surface, &st);
@@ -517,33 +723,8 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     vdef.arrayLayerCount = 1;
     vdef.aspect = WGPUTextureAspect_All;
     WGPUTextureView view = wgpuTextureCreateView(st.texture, &vdef);
-
-    WGPUCommandEncoderDescriptor edef;
-    memset(&edef, 0, sizeof edef);
-    WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(c->rhi.device, &edef);
-    WGPURenderPassColorAttachment ca;
-    memset(&ca, 0, sizeof ca);
-    ca.view = view;
-    ca.loadOp = WGPULoadOp_Clear;
-    ca.storeOp = WGPUStoreOp_Store;
-    ca.clearValue = (WGPUColor){0.02, 0.03, 0.06, 1.0};
-    WGPURenderPassDescriptor rp;
-    memset(&rp, 0, sizeof rp);
-    rp.colorAttachmentCount = 1;
-    rp.colorAttachments = &ca;
-    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(enc, &rp);
-    wgpuRenderPassEncoderSetPipeline(pass, c->pipeline);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, c->bind[fi], 0, 0);
-    wgpuRenderPassEncoderSetBindGroup(pass, 1, c->skyBind, 0, 0);
-    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
-    wgpuRenderPassEncoderEnd(pass);
-    wgpuRenderPassEncoderRelease(pass);
-    WGPUCommandBufferDescriptor cbdef;
-    memset(&cbdef, 0, sizeof cbdef);
-    WGPUCommandBuffer cbuf = wgpuCommandEncoderFinish(enc, &cbdef);
-    wgpuQueueSubmit(c->rhi.queue, 1, &cbuf);
+    wg_render(c, v, view, NULL, ww, hh, 1);
     // VOX_SHOT: копия поверхности в хост (COPY_SRC выставлен в configure).
-    // Qt-забор (frame_cpu) — тем же путём, но в память, до present.
     {
         const char *sp = getenv("VOX_SHOT");
         if (sp && sp[0]) {
@@ -551,36 +732,57 @@ static void core_frame(RenderCore *rc, const RcView *v) {
             int at = sa && sa[0] ? atoi(sa) : 60;
             if (c->frame == at) wgpu_shot(c, st.texture, (uint32_t)ww, (uint32_t)hh, sp);
         }
-        if (c->grabNext && c->grabDst && ww == c->grabW && hh == c->grabH)
-            c->grabOk = wgpu_grab(c, st.texture, (uint32_t)ww, (uint32_t)hh, 0, c->grabDst);
     }
     wgpuSurfacePresent(c->rhi.surface);
 
-    wgpuCommandBufferRelease(cbuf);
-    wgpuCommandEncoderRelease(enc);
     wgpuTextureViewRelease(view);
     wgpuTextureRelease(st.texture);
     c->frame++;
 }
 
-// CPU-забор для Qt-вьюпорта: рендер кадра + скачать в RGBA (верх первый).
-// WebGPU сам подгоняет поверхность под res кадра, так что размер берём
-// из вида (несоответствие заказу — честный 0, без записи мимо буфера).
+// Кадр в нативную цель (композитор): тот же рендер, без present.
+// Глубина цели чистится/хранится (про запас под WG-mesh), DDA её
+// не пишет (в WGSL нет gl_FragDepth) — честно зафиксировано.
+static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    RcView vv = *v;
+    if (!c->ready) {
+        // Ленивый билд и тут (иначе первый кадр через цель — отказ).
+        if (!vv.resW) vv.resW = 1280;
+        if (!vv.resH) vv.resH = 720;
+        core_build_all(c, &vv);
+        if (!c->ready) return 0;
+    }
+    WGTarget *tg = wg_target_ensure(c, t);
+    if (!tg) return 0;
+    vv.resW = tg->w;
+    vv.resH = tg->h;
+    return wg_render(c, &vv, tg->view, tg->dview, tg->w, tg->h, !t->noClear);
+}
+
+// Скачать нативную цель в CPU (RGBA, верх первый). Сразу после рендера.
+static int core_download(RenderCore *rc, RcTarget *t, uint8_t *rgba, int w, int h) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    if (!t || t->backend != RC_BACKEND_WEBGPU || !rgba || w <= 0 || h <= 0) return 0;
+    WGTarget *tg = (WGTarget *)t->nobj[0];
+    if (!tg || tg->w != w || tg->h != h) return 0;
+    return wgpu_grab(c, tg->tex, (uint32_t)w, (uint32_t)h, 0, rgba);
+}
+
+// CPU-забор: scratch-цель заказа + frame_to + download (всё честно).
+// Размер любой вменяемый: цель пересоздаётся (своп не трогаем).
 static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h) {
     VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
-    if (!rgba || w <= 0 || h <= 0) return 0;
-    int ww = v->resW > 0 ? v->resW : 1280;
-    int hh = v->resH > 0 ? v->resH : 720;
-    if (w != ww || h != hh) return 0;
-    c->grabDst = rgba;
-    c->grabW = w;
-    c->grabH = h;
-    c->grabOk = 0;
-    c->grabNext = 1;
-    core_frame(rc, v);
-    c->grabDst = 0;
-    c->grabNext = 0;
-    return c->grabOk;
+    if (!rgba || w < 64 || h < 64 || w > 2048 || h > 2048) return 0;
+    c->scratch.backend = RC_BACKEND_WEBGPU;
+    c->scratch.w = w;
+    c->scratch.h = h;
+    c->scratch.noClear = 0;
+    RcView vv = *v;
+    vv.resW = w;
+    vv.resH = h;
+    if (!core_frame_to(rc, &vv, &c->scratch)) return 0;
+    return core_download(rc, &c->scratch, rgba, w, h);
 }
 
 static int core_init(RenderCore *rc, void *glfwWindow) {
@@ -601,11 +803,32 @@ static void core_shutdown(RenderCore *rc) {
         for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
             wgpuBindGroupRelease(c->bind[i]);
             wgpuBufferRelease(c->ubo[i]);
+            if (c->dbind[i]) wgpuBindGroupRelease(c->dbind[i]);
+            c->dbind[i] = 0;
         }
+        if (c->skyBindDepth) wgpuBindGroupRelease(c->skyBindDepth);
+        c->skyBindDepth = 0;
         wgpuBindGroupLayoutRelease(c->bgl);
+        if (c->dbgl) wgpuBindGroupLayoutRelease(c->dbgl);
+        c->dbgl = 0;
         wgpuRenderPipelineRelease(c->pipeline);
+        if (c->pipeDepth) wgpuRenderPipelineRelease(c->pipeDepth);
+        c->pipeDepth = 0;
         wgpuShaderModuleRelease(c->mod);
         c->ready = 0;
+    }
+    // Живые offscreen-цели (создавало ядро; RHI ещё жив — порядок важен).
+    for (int i = 0; i < c->liveN; i++) {
+        WGTarget *tg = (WGTarget *)c->liveT[i];
+        if (tg) {
+            if (c->scratch.nobj[0] == tg) c->scratch.nobj[0] = 0;
+            wg_target_free(c, tg);
+        }
+    }
+    c->liveN = 0;
+    if (c->scratch.nobj[0]) {
+        wg_target_free(c, (WGTarget *)c->scratch.nobj[0]);
+        c->scratch.nobj[0] = 0;
     }
     rhi_webgpu_shutdown(&c->rhi);
 }
@@ -634,6 +857,8 @@ RenderCore *rc_webgpu_create(void) {
     w->api.unload_chunk = core_unload_chunk;
     w->api.upload_tiles = core_upload_tiles;
     w->api.frame_cpu = core_frame_cpu;
+    w->api.frame_to = core_frame_to; // нативный offscreen-таргет (композитор)
+    w->api.download = core_download;
     w->api.fps = core_fps;
     return &w->api;
 }

@@ -18,7 +18,34 @@ static int brightness(const uint8_t *px) {
     return n ? (int)(sum / n) : 0;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    // Матрица бэкендов (замена Qt-матрице после сноса Qt):
+    // view_test <backend 1|2|3> [domain] -> 8 кадров + вердикт одной строкой.
+    if (argc > 1) {
+        int be = atoi(argv[1]);
+        unsigned dom = argc > 2 ? (unsigned)atoi(argv[2]) : 1u;
+        if (be < 1 || be > 3) {
+            printf("MATRIX FAIL: backend %d\n", be);
+            return 1;
+        }
+        static uint8_t mp[(size_t)1280 * 720 * 4];
+        EngView *m = eng_view_open(dom, (unsigned)be);
+        if (!m) {
+            printf("MATRIX FAIL: open %u/%d (нет ячейки?)\n", dom, be);
+            return 1;
+        }
+        int f0 = eng_view_frames(m);
+        int ok = 1;
+        for (int i = 0; i < 8; i++)
+            if (!eng_view_frame(m, mp, 1280, 720)) ok = 0;
+        int f1 = eng_view_frames(m);
+        int br = brightness(mp);
+        printf("matrix dom=%u be=%d: frames %d->%d %s %s\n", dom, be, f0, f1,
+               f1 > f0 && ok ? "ADVANCE-OK" : "STUCK-FAIL",
+               br > 36 ? "PICTURE-OK" : "BLACK-FAIL");
+        eng_view_close(m);
+        return (f1 > f0 && ok && br > 36) ? 0 : 1;
+    }
     int bad = 0;
     static uint8_t px[(size_t)1280 * 720 * 4]; // статика, не malloc в цикле
     // Воксель GL: греем подачу (12 чанков/кадр, мир 25) + проверяем картинку.

@@ -262,6 +262,27 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     return 1;
 }
 
+// Скачать цель в CPU (RGBA, верх первый). Сразу после рендера в неё.
+static int core_download(RenderCore *rc, RcTarget *t, uint8_t *rgba, int w, int h) {
+    (void)rc;
+    if (!t || t->backend != 2 || !t->fbo || !rgba || w != t->w || h != t->h) return 0;
+    static uint8_t *stage = 0;
+    static int stageN = 0;
+    if (w * h * 4 > stageN) {
+        free(stage);
+        stage = (uint8_t *)malloc((size_t)w * h * 4);
+        stageN = stage ? w * h * 4 : 0;
+    }
+    if (!stage) return 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, stage);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    for (int y = 0; y < h; y++)
+        memcpy(rgba + (size_t)y * w * 4, stage + (size_t)(h - 1 - y) * w * 4,
+               (size_t)w * 4);
+    return 1;
+}
+
 // Атлас из API (фидер): пиксели + тинты материала (трава #91BD59, листва #77AB2F).
 // Тинты — константы воксельного материала ядра, не контент.
 static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int layers) {
@@ -446,6 +467,7 @@ RenderCore *rc_gl_create(void) {
     w->api.shutdown = core_shutdown;
     w->api.frame = core_frame;
     w->api.frame_to = core_frame_to;
+    w->api.download = core_download;
     w->api.upload_chunk = 0; // сырые воксели ест только DDA (webgpu)
     w->api.set_origin = 0;
     w->api.unload_chunk = 0;

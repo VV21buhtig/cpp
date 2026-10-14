@@ -19,6 +19,13 @@ struct RcTarget {
     // 1 = поздний (без чисток, без неба, только глубинный тест).
     // Ставит композитор между проходами; одиночки держат 0 каждый кадр.
     int noClear;
+    // Нативные хендлы цели по бэкендам (только своё читает своё ядро;
+    // числа/указатели вместо GPU-типов — comp.h без GPU-зависимостей).
+    // VK (создаёт и владеет vk-ядро, смерть — в его shutdown):
+    //   nobj = [VKTarget*], где VKTarget = {w,h,img,view,dimg,dview,rpClear,rpLoad,fb}.
+    // WebGPU: nobj = [WGTarget*] (см. webgpu_core).
+    void *nobj[2];
+    long long nint[2]; // запас чисел (резерв)
 };
 
 #ifdef __cplusplus
