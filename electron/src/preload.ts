@@ -9,6 +9,7 @@ export interface EngBridge {
   switch(domain: string, backend: string): Promise<boolean>;
   resize(w: number, h: number): Promise<[number, number]>;
   ack(): void;
+  pick(x: number, y: number): Promise<number>;
   shaders(): Promise<string[]>;
   shaderRead(id: string): Promise<string>;
   shader(id: string, code: string): Promise<{ ok: boolean; log: string }>;
@@ -30,6 +31,7 @@ const api: EngBridge = {
   switch: (domain: string, backend: string) => ipcRenderer.invoke('switch', domain, backend),
   resize: (w: number, h: number) => ipcRenderer.invoke('resize', w, h),
   ack: () => ipcRenderer.send('frame-ack'),
+  pick: (x: number, y: number) => ipcRenderer.invoke('pick', x, y),
   shaders: () => ipcRenderer.invoke('shaders'),
   shaderRead: (id: string) => ipcRenderer.invoke('shader-read', id),
   shader: (id: string, code: string) => ipcRenderer.invoke('shader', id, code),

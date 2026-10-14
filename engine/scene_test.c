@@ -66,6 +66,28 @@ int main(void) {
     if (strcmp(sc_name(&w, cam), "MainCamera") != 0) { printf("SCENE FAIL: rename-empty\n"); bad = 1; }
     sc_rename(&w, 99999, "Ghost");
     if (strcmp(sc_name(&w, 99999), "") != 0) { printf("SCENE FAIL: rename-dead\n"); bad = 1; }
+    // Меш-компонент: положить/забрать/снять, смерть чистит, мёртвым отказ.
+    {
+        float tri[3 * 9] = {0};
+        if (!sc_mesh_set(&w, cam, tri, 3)) { printf("SCENE FAIL: mesh-set\n"); bad = 1; }
+        int mn = 0;
+        const float *mg = sc_mesh_get(&w, cam, &mn);
+        if (!mg || mn != 3 || mg != sc_mesh_get(&w, cam, 0)) {
+            printf("SCENE FAIL: mesh-get\n");
+            bad = 1;
+        }
+        if (!sc_mesh_set(&w, cam, 0, 0) || sc_mesh_get(&w, cam, &mn)) {
+            printf("SCENE FAIL: mesh-unset\n");
+            bad = 1;
+        }
+        if (sc_mesh_set(&w, 99999, tri, 3) || sc_mesh_get(&w, 99999, &mn)) {
+            printf("SCENE FAIL: mesh-dead\n");
+            bad = 1;
+        }
+        sc_mesh_set(&w, cam, tri, 3);
+        sc_kill(&w, cam);
+        if (sc_mesh_get(&w, cam, &mn)) { printf("SCENE FAIL: mesh-kill\n"); bad = 1; }
+    }
     // Проект в бекенде: create + load + roundtrip + JSON (будущий Electron ест это).
     {
         mkdir("/tmp/opencode", 0755);

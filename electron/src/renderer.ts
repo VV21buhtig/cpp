@@ -19,7 +19,17 @@ let pending: Uint8ClampedArray<ArrayBuffer> | null = null;
 let pendingW = 0, pendingH = 0;
 
 interface Ent {
+  id: number;
   name: string;
+}
+
+let selectedId = 0;
+
+function paintSel(): void {
+  const rows = tree.querySelectorAll<HTMLElement>('.ent');
+  rows.forEach((r) => {
+    r.classList.toggle('sel', r.dataset['eid'] === String(selectedId));
+  });
 }
 
 async function refreshTree(): Promise<void> {
@@ -31,8 +41,14 @@ async function refreshTree(): Promise<void> {
       const d = document.createElement('div');
       d.className = 'ent';
       d.textContent = e.name;
+      d.dataset['eid'] = String(e.id);
+      d.onclick = () => {
+        selectedId = e.id;
+        paintSel();
+      };
       tree.appendChild(d);
     }
+    paintSel();
     stat.textContent = `entities: ${sc.entities.length}`;
   } catch (err) {
     stat.textContent = 'scene err: ' + String(err);
@@ -67,34 +83,43 @@ async function pullOnce(): Promise<void> {
   snap(buf);
 }
 
+let loopDeaths = 0;
+
 async function loop(): Promise<void> {
-  if (!playing) await pullOnce();
-  if (pending && pendingW === cv.width && pendingH === cv.height) {
-    // Путь вывода выбирается замером (см. доку): bitmap vs putImage.
-    if (USE_BITMAP) {
-      try {
-        const bmp = await createImageBitmap(new ImageData(pending, cv.width, cv.height));
-        ctx.drawImage(bmp, 0, 0);
-        bmp.close();
+  // rAF ПЕРВЫМ и ЕДИНСТВЕННЫЙ: цикл неубиваем даже при исключении ниже.
+  // Смерти считаем и показываем (было: двойной rAF форкал цикл + тихая смерть).
+  requestAnimationFrame(() => void loop().catch(() => loopDeaths++));
+  try {
+    if (!playing) await pullOnce();
+    if (pending && pendingW === cv.width && pendingH === cv.height) {
+      // Путь вывода выбирается замером (см. доку): bitmap vs putImage.
+      if (USE_BITMAP) {
+        try {
+          const bmp = await createImageBitmap(new ImageData(pending, cv.width, cv.height));
+          ctx.drawImage(bmp, 0, 0);
+          bmp.close();
+          nFrames++;
+        } catch {
+          // кадр в пути после ресайза — пропуск
+        }
+      } else {
+        ctx.putImageData(new ImageData(pending, cv.width, cv.height), 0, 0);
         nFrames++;
-      } catch {
-        // кадр в пути после ресайза — пропуск
       }
-    } else {
-      ctx.putImageData(new ImageData(pending, cv.width, cv.height), 0, 0);
-      nFrames++;
+      pending = null;
+      window.eng.ack(); // следующий кадр можно слать (самопейсинг линка)
     }
-    pending = null;
-    window.eng.ack(); // следующий кадр можно слать (самопейсинг линка)
+    const now = performance.now();
+    if (now - lastT > 1000) {
+      const n = await window.eng.frames();
+      const dead = loopDeaths > 0 ? ` deaths=${loopDeaths}` : '';
+      fpsEl.textContent = `fps ${Math.round((nFrames * 1000) / (now - lastT))} / eng ${n}${dead}`;
+      nFrames = 0;
+      lastT = now;
+    }
+  } catch {
+    loopDeaths++;
   }
-  const now = performance.now();
-  if (now - lastT > 1000) {
-    const n = await window.eng.frames();
-    fpsEl.textContent = `fps ${Math.round((nFrames * 1000) / (now - lastT))} / eng ${n}`;
-    nFrames = 0;
-    lastT = now;
-  }
-  requestAnimationFrame(() => void loop());
 }
 
 playBtn.onclick = async (): Promise<void> => {
@@ -106,11 +131,23 @@ playBtn.onclick = async (): Promise<void> => {
 
 async function reswitch(): Promise<void> {
   const ok = await window.eng.switch(domSel.value, beSel.value);
+  selectedId = 0;
   stat.textContent = ok ? `core: ${domSel.value} / ${beSel.value}` : 'NO CORE for domain x backend';
   void refreshTree();
 }
 domSel.onchange = () => void reswitch();
 beSel.onchange = () => void reswitch();
+
+// Пикинг: клик по канвасу -> id -> подсветка в дереве (v1: MESH-домен).
+cv.onclick = async (ev: MouseEvent): Promise<void> => {
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor(((ev.clientX - r.left) / r.width) * cv.width);
+  const y = Math.floor(((ev.clientY - r.top) / r.height) * cv.height);
+  const id = await window.eng.pick(x, y);
+  selectedId = id;
+  paintSel();
+  stat.textContent = id ? `selected: ${id}` : 'selected: —';
+};
 
 // Динамика: панель потянули — шлём размер в бекенд, canvas под ответ.
 // Троттлим (не чаще раза в 300мс): ресайз окна/swapchain — тяжёлый.

@@ -118,6 +118,11 @@ app.whenReady().then(() => {
     return [vw, vh];
   });
   ipcMain.handle('ping', () => ({ domain, backend, playing }));
+  // Пикинг: клик по канвасу -> id сущности (0 = мимо). Только MESH-домен v1.
+  ipcMain.handle('pick', (_e, x: unknown, y: unknown): number => {
+    if (!view || typeof x !== 'number' || typeof y !== 'number') return 0;
+    return EngineAPI.pick(view, x, y);
+  });
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

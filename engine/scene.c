@@ -1,4 +1,5 @@
 // Сцена: пул сущностей, C11. Без аллокаций после init (массивы внутри).
+#include <stdlib.h>
 #include <string.h>
 #include "scene.h"
 
@@ -41,8 +42,37 @@ void sc_kill(ScWorld *w, Entity e) {
     if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
     w->alive[i] = 0;
     w->count--;
+    free(w->mesh[i]); // меш умирал вместе с сущностью
+    w->mesh[i] = 0;
+    w->meshN[i] = 0;
     for (int k = 0; k < SC_MAX; k++)
         if (w->alive[k] && w->parent[k] == i) w->parent[k] = -1;
+}
+
+int sc_mesh_set(ScWorld *w, Entity e, const float *verts, int nverts) {
+    if (!w) return 0;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return 0;
+    free(w->mesh[i]);
+    w->mesh[i] = 0;
+    w->meshN[i] = 0;
+    if (!verts || nverts <= 0) return 1; // снять — тоже успех
+    if (nverts > 1000000) return 0;
+    float *nv = (float *)malloc((size_t)nverts * 9 * sizeof(float));
+    if (!nv) return 0;
+    memcpy(nv, verts, (size_t)nverts * 9 * sizeof(float));
+    w->mesh[i] = nv;
+    w->meshN[i] = nverts;
+    return 1;
+}
+
+const float *sc_mesh_get(const ScWorld *w, Entity e, int *nverts) {
+    if (nverts) *nverts = 0;
+    if (!w) return 0;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i] || !w->mesh[i]) return 0;
+    if (nverts) *nverts = w->meshN[i];
+    return w->mesh[i];
 }
 
 int sc_parent(ScWorld *w, Entity e, Entity parent) {    if (!w) return 0;

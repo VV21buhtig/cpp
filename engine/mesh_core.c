@@ -17,6 +17,8 @@ typedef struct {
     RenderCore api;
     GLFWwindow *win;
     RhiGlProg prog;
+    RhiGlProg pick; // pick-программа (тот же mesh.vert + плоский id)
+    int u_pickMVP, u_pickId;
     unsigned vao;
     unsigned vbo;
     int u_mvp, u_sun;
@@ -106,7 +108,6 @@ static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh, int first) {
     }
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS); // единая глубина: у всех 3D-проходов LESS (SDF: LEQUAL)
-    glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glUseProgram(c->prog.prog);
@@ -163,7 +164,37 @@ static void mesh_frame(RenderCore *rc, const RcView *v) {
     c->frame++;
 }
 
-// Кадр в цель композитора (Qt-вьюпорт): тот же рисунок, без swap/шота.
+// Пикинг: текущий суп плоским id сущности в цель (R=id+1, фон 0).
+// Глубина честная (тот же тест): перекрытое не выберется.
+static int mesh_pick(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id) {
+    MeshWrap *c = (MeshWrap *)rc->ctx;
+    if (!t || t->backend != RC_BACKEND_GL || !t->fbo || !c->nverts) return 0;
+    Vec3 f, r, u;
+    cam_basis(v->yaw, v->pitch, &f, &r, &u);
+    Mat4 proj = m4persp(2.0f * atanf(0.5f / (v->fov > 0.2f ? v->fov : 1.6f)),
+                        (float)t->w / (float)t->h, 0.1f, 600.0f);
+    Mat4 view = m4look(v->camPos.x, v->camPos.y, v->camPos.z,
+                       v->camPos.x + f.x, v->camPos.y + f.y, v->camPos.z + f.z);
+    Mat4 pv = m4mul(&proj, &view);
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDisable(GL_CULL_FACE); // обе стороны: id важнее лицевой
+    glUseProgram(c->pick.prog);
+    glUniformMatrix4fv(c->u_pickMVP, 1, 0, pv.m);
+    glUniform1ui(c->u_pickId, id + 1);
+    glBindVertexArray(c->vao);
+    glDrawArrays(GL_TRIANGLES, 0, c->nverts);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return 1;
+}
+
+// Кадр в цель композитора: тот же рисунок, без swap/шота.
 static int mesh_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
     if (!t || t->backend != 2 || !t->fbo) return 0;
@@ -180,6 +211,11 @@ static int mesh_init(RenderCore *rc, void *glfwWindow) {
     if (!rhi_gl_load(c->win)) return 0;
     if (!rhi_gl_prog_load(&c->prog, "shaders/mesh/mesh.vert", "shaders/mesh/mesh.frag"))
         return 0;
+    // Pick-пара: тот же вершинный, плоский id во фрагменте.
+    if (!rhi_gl_prog_load(&c->pick, "shaders/mesh/mesh.vert", "shaders/mesh/pick.frag"))
+        return 0;
+    c->u_pickMVP = glGetUniformLocation(c->pick.prog, "uMVP");
+    c->u_pickId = glGetUniformLocation(c->pick.prog, "uId");
     glGenVertexArrays(1, &c->vao);
     glGenBuffers(1, &c->vbo);
     glBindVertexArray(c->vao);
@@ -211,6 +247,7 @@ static int mesh_init(RenderCore *rc, void *glfwWindow) {
 static void mesh_shutdown(RenderCore *rc) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
     if (c->prog.prog) glDeleteProgram(c->prog.prog);
+    if (c->pick.prog) glDeleteProgram(c->pick.prog);
     if (c->vao) glDeleteVertexArrays(1, &c->vao);
     if (c->vbo) glDeleteBuffers(1, &c->vbo);
     free(c->soup);
@@ -236,6 +273,7 @@ RenderCore *rc_mesh_create(void) {
     w->api.frame = mesh_frame;
     w->api.frame_to = mesh_frame_to;
     w->api.upload_mesh = mesh_upload;
+    w->api.pick = mesh_pick;
     w->api.shader_reload = core_shader_reload;
     w->api.fps = mesh_fps;
     return &w->api;

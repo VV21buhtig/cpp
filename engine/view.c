@@ -41,6 +41,8 @@ struct EngView {
     size_t jsonCap;
 };
 
+static void vw_cube_at(float *cube, float cx, float cy, float cz, float h);
+
 static const VoxChunk *vw_find(EngView *vw, int cx, int cz) {
     for (int i = 0; i < VW_GW * VW_GW; i++) {
         const VoxChunk *c = &vw->world[i];
@@ -145,6 +147,17 @@ EngView *eng_view_open(unsigned domain, unsigned backend) {
         if (hero) sc_set(&vw->scene, hero, &t);
         if (sword && scene) sc_parent(&vw->scene, sword, scene);
         (void)scene;
+        // Демо-меш Hero (тот же куб что рисует feed): для eng_view_pick.
+        // Мировые координаты (трансформ сущностей меш-подача v1 игнорит).
+        if (hero) {
+            static float hc[36 * 9];
+            static int hcMade = 0;
+            if (!hcMade) {
+                vw_cube_at(hc, -24.0f, 56.0f, -16.0f, 3.0f);
+                hcMade = 1;
+            }
+            sc_mesh_set(&vw->scene, hero, hc, 36);
+        }
     }
     return vw;
 }
@@ -218,36 +231,41 @@ static void vw_feed_vec(EngView *vw) {
     if (vw->rc->upload_vector(vw->rc, sh, 4)) vw->vecFed = 1;
 }
 
+static void vw_cube_at(float *cube, float cx, float cy, float cz, float h) {
+    // Куб-суп 36 вершин x 9 float (pos3 nrm3 col3), как в scene3d.
+    float C[6][3] = {{0.8f, 0.15f, 0.1f}, {1, 0.8f, 0.1f}, {0.15f, 0.7f, 0.15f},
+                     {0.3f, 0.3f, 0.32f}, {0.15f, 0.3f, 0.8f}, {0.15f, 0.7f, 0.7f}};
+    float NN[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    float P[6][4][3] = {{{1, -1, 1}, {1, -1, -1}, {1, 1, -1}, {1, 1, 1}},
+                        {{-1, -1, -1}, {-1, -1, 1}, {-1, 1, 1}, {-1, 1, -1}},
+                        {{-1, 1, 1}, {1, 1, 1}, {1, 1, -1}, {-1, 1, -1}},
+                        {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}},
+                        {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}},
+                        {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, -1}}};
+    int idx[6] = {0, 1, 2, 0, 2, 3}, n = 0;
+    for (int f = 0; f < 6; f++)
+        for (int k = 0; k < 6; k++) {
+            int q = idx[k];
+            cube[n * 9 + 0] = cx + P[f][q][0] * h;
+            cube[n * 9 + 1] = cy + P[f][q][1] * h;
+            cube[n * 9 + 2] = cz + P[f][q][2] * h;
+            cube[n * 9 + 3] = NN[f][0];
+            cube[n * 9 + 4] = NN[f][1];
+            cube[n * 9 + 5] = NN[f][2];
+            cube[n * 9 + 6] = C[f][0];
+            cube[n * 9 + 7] = C[f][1];
+            cube[n * 9 + 8] = C[f][2];
+            n++;
+        }
+}
+
 static void vw_feed_mesh(EngView *vw) {
     if (vw->meshFed || !vw->rc->upload_mesh) return;
     // Куб-суп 36 вершин x 9 float (pos3 nrm3 col3), как в scene3d.
     static float cube[36 * 9];
     static int made = 0;
     if (!made) {
-        float C[6][3] = {{0.8f, 0.15f, 0.1f}, {1, 0.8f, 0.1f}, {0.15f, 0.7f, 0.15f},
-                         {0.3f, 0.3f, 0.32f}, {0.15f, 0.3f, 0.8f}, {0.15f, 0.7f, 0.7f}};
-        float NN[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-        float P[6][4][3] = {{{1, -1, 1}, {1, -1, -1}, {1, 1, -1}, {1, 1, 1}},
-                            {{-1, -1, -1}, {-1, -1, 1}, {-1, 1, 1}, {-1, 1, -1}},
-                            {{-1, 1, 1}, {1, 1, 1}, {1, 1, -1}, {-1, 1, -1}},
-                            {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}},
-                            {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}},
-                            {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, -1}}};
-        int idx[6] = {0, 1, 2, 0, 2, 3}, n = 0;
-        for (int f = 0; f < 6; f++)
-            for (int k = 0; k < 6; k++) {
-                int q = idx[k];
-                cube[n * 9 + 0] = -24.0f + P[f][q][0] * 3.0f;
-                cube[n * 9 + 1] = 56.0f + P[f][q][1] * 3.0f;
-                cube[n * 9 + 2] = -16.0f + P[f][q][2] * 3.0f;
-                cube[n * 9 + 3] = NN[f][0];
-                cube[n * 9 + 4] = NN[f][1];
-                cube[n * 9 + 5] = NN[f][2];
-                cube[n * 9 + 6] = C[f][0];
-                cube[n * 9 + 7] = C[f][1];
-                cube[n * 9 + 8] = C[f][2];
-                n++;
-            }
+        vw_cube_at(cube, -24.0f, 56.0f, -16.0f, 3.0f);
         made = 1;
     }
     RcMesh m;
@@ -376,6 +394,41 @@ const char *eng_view_scene(EngView *vw) {
 
 int eng_view_frames(const EngView *vw) {
     return vw ? vw->frame : 0;
+}
+
+unsigned eng_view_pick(EngView *vw, int x, int y) {
+    if (!vw || !vw->rc || !vw->rc->pick) return 0;
+    if (vw->domain != RC_CAP_MESH || vw->backend != 2) return 0;
+    if (x < 0 || y < 0 || x >= vw->w || y >= vw->h) return 0;
+    // Цель пикинга на один клик (создать-использовать-снести: клики редки).
+    RcTarget pt;
+    memset(&pt, 0, sizeof pt);
+    if (!comp_target_gl_new(&pt, vw->w, vw->h)) return 0;
+    RcView v;
+    vw_view(vw, &v);
+    Entity list[1024];
+    int n = sc_list(&vw->scene, list, 1024);
+    unsigned hit = 0;
+    for (int i = 0; i < n && !hit; i++) {
+        int mn = 0;
+        const float *mv = sc_mesh_get(&vw->scene, list[i], &mn);
+        if (!mv || mn <= 0) continue;
+        RcMesh m;
+        m.verts = mv;
+        m.nverts = mn;
+        if (!vw->rc->upload_mesh(vw->rc, &m)) continue;
+        if (!vw->rc->pick(vw->rc, &v, &pt, (unsigned)list[i])) continue;
+        uint8_t px[3] = {0};
+        glBindFramebuffer(GL_FRAMEBUFFER, pt.fbo);
+        glReadPixels(x, vw->h - 1 - y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, px);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        unsigned id = (unsigned)px[0] + ((unsigned)px[1] << 8) + ((unsigned)px[2] << 16);
+        if (id) hit = id - 1;
+    }
+    // Вернуть меш демо-кадра (пик перетёр суп кадра).
+    vw->meshFed = 0;
+    comp_target_gl_free(&pt);
+    return hit;
 }
 
 int eng_view_shader(EngView *vw, const char *id, const char *code, char *log, int logcap) {

@@ -51,6 +51,7 @@ const c_scene = lib.func('const char *eng_view_scene(void *)');
 const c_frames = lib.func('int eng_view_frames(void *)');
 const c_close = lib.func('void eng_view_close(void *)');
 const c_resize = lib.func('int eng_view_resize(void *, int, int)');
+const c_pick = lib.func('uint eng_view_pick(void *, int, int)');
 const c_shader = lib.func('int eng_view_shader(void *, str, str, char *, int)');
 
 export const EngineAPI = {
@@ -77,6 +78,9 @@ export const EngineAPI = {
   },
   resize(view: ViewHandle, w: number, h: number): boolean {
     return (c_resize(view, Math.round(w), Math.round(h)) as unknown as number) === 1;
+  },
+  pick(view: ViewHandle, x: number, y: number): number {
+    return c_pick(view, Math.round(x), Math.round(y)) as unknown as number;
   },
   shader(view: ViewHandle, id: string, code: string): { ok: boolean; log: string } {
     const lb = Buffer.alloc(2048);

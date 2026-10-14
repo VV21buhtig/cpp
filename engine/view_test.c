@@ -127,6 +127,48 @@ int main(int argc, char **argv) {
         bad = 1;
     }
     eng_view_close(vw);
+    // Меш GL + пикинг: центр — Hero, угол — мимо, повтор стабилен.
+    vw = eng_view_open(16u, 2u);
+    if (!vw) {
+        printf("VIEW FAIL: open mesh-gl\n");
+        return 1;
+    }
+    for (int i = 0; i < 3; i++)
+        if (!eng_view_frame(vw, px, 1280, 720)) {
+            printf("VIEW FAIL: mesh frame\n");
+            bad = 1;
+        }
+    {
+        // id Hero — из JSON дерева (не хардкодим).
+        const char *js = eng_view_scene(vw);
+        int heroId = 0;
+        const char *hp = js ? strstr(js, "\"name\":\"Hero\"") : 0;
+        if (hp) {
+            const char *ip = hp;
+            while (ip > js && strncmp(ip, "\"id\":", 5)) ip--;
+            if (!strncmp(ip, "\"id\":", 5)) heroId = atoi(ip + 5);
+        }
+        unsigned hit = eng_view_pick(vw, 640, 360);
+        if (!heroId || hit != (unsigned)heroId) {
+            printf("VIEW FAIL: pick-center got=%u want=%d\n", hit, heroId);
+            bad = 1;
+        }
+        if (eng_view_pick(vw, 1279, 719)) {
+            printf("VIEW FAIL: pick-corner\n");
+            bad = 1;
+        }
+        // Не-меш домен: честный 0 (пикинга нет).
+        EngView *wv = eng_view_open(1u, 2u);
+        if (wv) {
+            eng_view_frame(wv, px, 1280, 720);
+            if (eng_view_pick(wv, 640, 360)) {
+                printf("VIEW FAIL: pick-voxel\n");
+                bad = 1;
+            }
+            eng_view_close(wv);
+        }
+    }
+    eng_view_close(vw);
     // Нет ячейки: честный NULL (вектор под Vulkan).
     vw = eng_view_open(4u, 3u);
     if (vw) {

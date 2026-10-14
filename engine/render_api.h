@@ -91,6 +91,10 @@ struct RenderCore {
     // Возвращает 1 если залил, 0 если размер чужой/не готово/нет пути.
     // NULL = нет CPU-пути (тогда только frame_to/frame).
     int (*frame_cpu)(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h);
+    // Пикинг: нарисовать сцену плоским id в цель (R=id+1, 0 = мимо).
+    // id — сущность вызывателя (ядро её не знает, просто красит).
+    // NULL = ядро не умеет.
+    int (*pick)(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id);
     // Скачать ЦЕЛЬ в CPU (RGBA, строка 0 = верх): цель создана этим же ядром
     // (его натив в RcTarget), последний рендер — frame_to/comp (картинка уже
     // в читаемом лейауте). Для comp->canvas и тестов. NULL = не умеет.

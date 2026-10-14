@@ -28,6 +28,8 @@ typedef struct ScWorld {
     int visible[SC_MAX];
     char name[SC_MAX][SC_NAME];
     ScTransform tr[SC_MAX];
+    float *mesh[SC_MAX]; // меш-компонент: копия супа 9 float/верт (0 = нет)
+    int meshN[SC_MAX];   // вершин в супе
     int count; // живых
 } ScWorld;
 
@@ -50,6 +52,11 @@ void sc_show(ScWorld *w, Entity e, int on);
 int sc_alive(const ScWorld *w, Entity e);
 const char *sc_name(const ScWorld *w, Entity e);
 void sc_rename(ScWorld *w, Entity e, const char *name);
+// Меш-компонент: положить копию супа (9 float/верт, 1..1000000) или снять (verts=0).
+// 1 ок, 0 отказ (нет сущности / плохой размер / нет памяти).
+int sc_mesh_set(ScWorld *w, Entity e, const float *verts, int nverts);
+// Суп сущности (0/cnt если нет). Указатель живёт пока сущность/мир.
+const float *sc_mesh_get(const ScWorld *w, Entity e, int *nverts);
 // Список живых (порядок создания). Возвращает число (<= cap).
 int sc_list(const ScWorld *w, Entity *out, int cap);
 
