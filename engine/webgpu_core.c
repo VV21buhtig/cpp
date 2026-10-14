@@ -490,22 +490,14 @@ static void core_frame(RenderCore *rc, const RcView *v) {
     int fi = c->frame % FRAMES_IN_FLIGHT;
     wgpuQueueWriteBuffer(c->rhi.queue, c->ubo[fi], 0, &u, sizeof u);
     {
-        float g[4] = {v->gamma, v->exposure, v->fog,
-                      v->menuOpen ? (float)v->menuSel : -1.0f};
+        // Грейд — честные поля вида. Меню-оверлей и фрустум-дебаг из RcView
+        // вычищены (были мёртвыми: все всегда слали нули): меню выкл (-1),
+        // фрустум выкл (0) с нулевой матрицей — шейдер их не рисует.
+        float g[4] = {v->gamma, v->exposure, v->fog, -1.0f};
         wgpuQueueWriteBuffer(c->rhi.queue, c->gradeBuf, 0, g, sizeof g);
-        float vw[4] = {v->fov, v->shadowOn, v->frustumOn ? 1.0f : 0.0f, 0};
+        float vw[4] = {v->fov, v->shadowOn, 0.0f, 0};
         wgpuQueueWriteBuffer(c->rhi.queue, c->viewBuf, 0, vw, sizeof vw);
-        float cp = cosf(v->mainYaw), sp = sinf(v->mainYaw);
-        float cq = cosf(v->mainPitch), sq = sinf(v->mainPitch);
-        Vec3 mf = v3(cq * cp, sq, cq * sp);
-        Vec3 mr = v3_norm(v3_cross(mf, v3(0.0f, 1.0f, 0.0f)));
-        Vec3 mu = v3_cross(mr, mf);
-        float fr[16] = {
-            v->mainPos.x, v->mainPos.y, v->mainPos.z, 0,
-            mf.x, mf.y, mf.z, 0,
-            mr.x, mr.y, mr.z, 0,
-            mu.x, mu.y, mu.z, 0,
-        };
+        float fr[16] = {0};
         wgpuQueueWriteBuffer(c->rhi.queue, c->frustumBuf, 0, fr, sizeof fr);
     }
 

@@ -37,11 +37,6 @@ typedef struct {
     float gamma, exposure, fog;
     float shadowOn;
     int viewMode; // 0 цвет, 1 нормали, 2 глубина, 3 цена
-    int menuOpen, menuSel; // меню поверх (-1 закрыто через menuOpen=0)
-    // Фрустум главной для дебага (frustumOn=0 — не рисуем)
-    int frustumOn;
-    Vec3 mainPos;
-    float mainYaw, mainPitch;
 } RcView;
 
 // SDF-примитив (домен RC_CAP_SDF). p0 — центр/точка, p1 — второй конец/
