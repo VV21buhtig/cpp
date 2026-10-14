@@ -46,6 +46,48 @@ int main(void) {
         printf("VIEW FAIL: json\n");
         bad = 1;
     }
+    // Горячая замена шейдера: тот же исходник (ок), битый (отказ+лог,
+    // старая программа жива — кадр всё ещё яркий), чужой id (отказ).
+    {
+        char src[1 << 16] = {0};
+        FILE *f = fopen("engine/shaders/gl/lighting.fs", "rb");
+        int ok = 0;
+        char log[2048] = {0};
+        if (f) {
+            size_t n = fread(src, 1, sizeof src - 1, f);
+            fclose(f);
+            ok = n > 0;
+        }
+        if (!ok) {
+            printf("VIEW FAIL: shader file\n");
+            bad = 1;
+        } else {
+            if (!eng_view_shader(vw, "engine/shaders/gl/lighting.fs", src, log, sizeof log)) {
+                printf("VIEW FAIL: reload-same %s\n", log);
+                bad = 1;
+            }
+            if (eng_view_shader(vw, "nope.fs", src, log, sizeof log)) {
+                printf("VIEW FAIL: reload-unknown-ok\n");
+                bad = 1;
+            } else if (!log[0]) {
+                printf("VIEW FAIL: reload-unknown-nolog\n");
+                bad = 1;
+            }
+            if (eng_view_shader(vw, "lighting.fs", "this is not glsl {{{", log, sizeof log)) {
+                printf("VIEW FAIL: reload-broken-ok\n");
+                bad = 1;
+            }
+            if (!log[0] || !strstr(log, "fs:")) {
+                printf("VIEW FAIL: reload-broken-nolog [%s]\n", log);
+                bad = 1;
+            }
+            // Старая жива: кадр после битой попытки всё ещё яркий.
+            if (!eng_view_frame(vw, px, 1280, 720) || brightness(px) <= 36) {
+                printf("VIEW FAIL: frame-after-broken\n");
+                bad = 1;
+            }
+        }
+    }
     eng_view_close(vw);
     // Пиксель GL: паттерн zeer быстро (1 кадр).
     vw = eng_view_open(8u, 2u);

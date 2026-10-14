@@ -51,6 +51,7 @@ const c_scene = lib.func('const char *eng_view_scene(void *)');
 const c_frames = lib.func('int eng_view_frames(void *)');
 const c_close = lib.func('void eng_view_close(void *)');
 const c_resize = lib.func('int eng_view_resize(void *, int, int)');
+const c_shader = lib.func('int eng_view_shader(void *, str, str, char *, int)');
 
 export const EngineAPI = {
   version(): string {
@@ -76,5 +77,11 @@ export const EngineAPI = {
   },
   resize(view: ViewHandle, w: number, h: number): boolean {
     return (c_resize(view, Math.round(w), Math.round(h)) as unknown as number) === 1;
+  },
+  shader(view: ViewHandle, id: string, code: string): { ok: boolean; log: string } {
+    const lb = Buffer.alloc(2048);
+    const r = c_shader(view, id, code, lb, lb.length) as unknown as number;
+    const log = lb.toString('utf8').split('\0')[0] || '';
+    return { ok: r === 1, log };
   },
 };

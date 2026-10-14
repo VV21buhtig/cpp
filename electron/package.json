@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "electron": "^37.0.0",
-    "koffi": "^2.11.0"
+    "koffi": "^2.11.0",
+    "monaco-editor": "^0.57.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

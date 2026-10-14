@@ -15,7 +15,7 @@ extern "C" {
 
 typedef struct {
     GLFWwindow *win;
-    unsigned prog;
+    RhiGlProg prog;
     unsigned vao;
     unsigned tex;
     int tw, th;
@@ -24,39 +24,35 @@ typedef struct {
     float fpsEma;
 } BlitGL;
 
-// Шейдеры блита ищутся от корня репо; запасной — рядом с движком.
-static const char *blit_vs(void) {
-    static const char *paths[] = {
-        "engine/shaders/blit/blit.vert", "shaders/blit/blit.vert",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
-    }
-    return paths[0];
-}
-
-static const char *blit_fs(void) {
-    static const char *paths[] = {
-        "engine/shaders/blit/blit.frag", "shaders/blit/blit.frag",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
-    }
-    return paths[0];
-}
-
+// Пути шейдеров — через VFS (vfs_resolve в prog_load).
 static int blit_init(BlitGL *b, GLFWwindow *win) {
     memset(b, 0, sizeof *b);
     b->win = win;
     if (!rhi_gl_load(win)) return 0; // контекст + glad через RHI
-    b->prog = rhi_gl_prog(blit_vs(), blit_fs());
-    if (!b->prog) return 0;
+    if (!rhi_gl_prog_load(&b->prog, "shaders/blit/blit.vert", "shaders/blit/blit.frag"))
+        return 0;
     b->vao = rhi_gl_empty_vao();
     if (!b->vao) return 0;
     glGenTextures(1, &b->tex);
     b->prevT = glfwGetTime();
+    return 1;
+}
+
+// Горячая замена шейдера блита (Monaco): swap, refetch нечего (юниформ один
+// сэмплер, биндится каждый draw). При отказе старая жива.
+static int blit_reload(BlitGL *b, const char *id, const char *code, char *log, int logcap) {
+    char lmem[2048] = {0};
+    unsigned np = rhi_gl_prog_reload(&b->prog, id, code, lmem, sizeof lmem);
+    if (!np) {
+        if (log && logcap > 0) {
+            strncpy(log, lmem, (size_t)logcap - 1);
+            log[logcap - 1] = 0;
+        }
+        return 0;
+    }
+    glDeleteProgram(b->prog.prog);
+    b->prog.prog = np;
+    if (log && logcap > 0) snprintf(log, (size_t)logcap, "blit: %s", lmem);
     return 1;
 }
 
@@ -84,7 +80,7 @@ static void blit_overlay_to(BlitGL *b, unsigned fbo, int w, int h) {
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(b->prog);
+    glUseProgram(b->prog.prog);
     glActiveTexture(GL_TEXTURE0); // юнит сэмплера (воксель оставляет 1!)
     glBindTexture(GL_TEXTURE_2D, b->tex);
     glBindVertexArray(b->vao);
@@ -104,7 +100,7 @@ static float blit_frame(BlitGL *b, int ww, int hh, float br, float bg, float bb)
     }
     glViewport(0, 0, ww, hh);
     glDisable(GL_DEPTH_TEST);
-    glUseProgram(b->prog);
+    glUseProgram(b->prog.prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, b->tex);
     glBindVertexArray(b->vao);
@@ -144,7 +140,7 @@ static float blit_frame(BlitGL *b, int ww, int hh, float br, float bg, float bb)
 }
 
 static void blit_shutdown(BlitGL *b) {
-    if (b->prog) glDeleteProgram(b->prog);
+    if (b->prog.prog) glDeleteProgram(b->prog.prog);
     if (b->vao) glDeleteVertexArrays(1, &b->vao);
     if (b->tex) glDeleteTextures(1, &b->tex);
 }

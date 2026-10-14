@@ -378,6 +378,19 @@ int eng_view_frames(const EngView *vw) {
     return vw ? vw->frame : 0;
 }
 
+int eng_view_shader(EngView *vw, const char *id, const char *code, char *log, int logcap) {
+    if (log && logcap > 0) log[0] = 0;
+    if (!vw || !vw->rc || !id || !code) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "нет вида/ядра/id/кода");
+        return 0;
+    }
+    if (!vw->rc->shader_reload) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "ядро не умеет (backend %d)", vw->backend);
+        return 0;
+    }
+    return vw->rc->shader_reload(vw->rc, id, code, log, logcap);
+}
+
 int eng_view_resize(EngView *vw, int w, int h) {
     if (!vw || !vw->rc) return 0;
     if (w < VW_MIN) w = VW_MIN;

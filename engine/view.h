@@ -31,6 +31,10 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h);
 const char *eng_view_scene(EngView *vw);
 // Кадров отрисовано (кадр растёт только при рендере — для вердиктов).
 int eng_view_frames(const EngView *vw);
+// Горячая замена шейдера (Monaco): id — путь файла, code — новый текст.
+// Лог компиляции всегда в log (и при успехе короткое "имя: ok").
+// 1 ок, 0 отказ (нет ядра/API, чужой id, не скомпилилось — старое живо).
+int eng_view_shader(EngView *vw, const char *id, const char *code, char *log, int logcap);
 // Динамика как в UE5/Unity: новый размер кадра. Пересоздаёт цель (GL)
 // или всё окно+свопчейн (VK/WebGPU — экстент там от окна). Подача мира
 // дотягивается за пару кадров (как при смене бэкенда). 1 ок, 0 отказ.

@@ -145,3 +145,109 @@ new ResizeObserver(() => {
 
 void refreshTree();
 void loop();
+
+// --- Monaco: панель шейдеров (VFS + eng_shader_reload) ---
+// Monaco грузится AMD-лоадером из node_modules (без бандла);
+// типизируем только 3 используемые точки (фасад, не any по всему коду).
+interface MonacoEditor {
+  getValue(): string;
+  setValue(v: string): void;
+  updateOptions(o: object): void;
+}
+interface MonacoNS {
+  editor: {
+    create(el: HTMLElement, opts: object): MonacoEditor;
+    setTheme(t: string): void;
+  };
+}
+interface AmdRequire {
+  (mods: string[], cb: () => void): void;
+  config(opts: object): void;
+}
+function getAmd(): AmdRequire {
+  return (window as unknown as { require: AmdRequire }).require;
+}
+
+function langOf(id: string): string {
+  if (id.endsWith('.wgsl')) return 'rust';
+  if (id.endsWith('.vert')) return 'cpp';
+  return 'cpp';
+}
+
+let med: MonacoEditor | null = null;
+let monacoReady: ((m: MonacoNS) => void)[] = [];
+
+function withMonaco(cb: (m: MonacoNS) => void): void {
+  const g = window as unknown as { monaco?: MonacoNS };
+  if (g.monaco) {
+    cb(g.monaco);
+    return;
+  }
+  monacoReady.push(cb);
+}
+
+function bootMonaco(): void {
+  (globalThis as unknown as { MonacoEnvironment?: object }).MonacoEnvironment = {
+    getWorkerUrl: () => '',
+  };
+  const amd = getAmd();
+  amd.config({
+    paths: { vs: '../node_modules/monaco-editor/min/vs' },
+  });
+  amd(['vs/editor/editor.main'], () => {
+    const g = window as unknown as { monaco: MonacoNS };
+    g.monaco.editor.setTheme('vs-dark');
+    for (const cb of monacoReady) cb(g.monaco);
+    monacoReady = [];
+  });
+}
+
+async function bootShaders(): Promise<void> {
+  const sel = document.getElementById('shsel') as HTMLSelectElement;
+  const log = document.getElementById('shlog') as HTMLElement;
+  const st = document.getElementById('shstat') as HTMLElement;
+  const ids = await window.eng.shaders();
+  sel.innerHTML = '';
+  for (const id of ids) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = id;
+    sel.appendChild(o);
+  }
+  const load = async (): Promise<void> => {
+    const text = await window.eng.shaderRead(sel.value);
+    withMonaco((m) => {
+      if (!med) {
+        med = m.editor.create(document.getElementById('med') as HTMLElement, {
+          value: text,
+          language: langOf(sel.value),
+          theme: 'vs-dark',
+          minimap: { enabled: false },
+          fontSize: 12,
+        });
+      } else {
+        med.setValue(text);
+      }
+    });
+    log.textContent = '';
+    log.classList.remove('err');
+    st.textContent = sel.value;
+  };
+  sel.onchange = () => void load();
+  (document.getElementById('shreload') as HTMLButtonElement).onclick = async (): Promise<void> => {
+    if (!med) return;
+    const r = await window.eng.shader(sel.value, med.getValue());
+    log.textContent = (r.ok ? 'OK ' : 'FAIL ') + sel.value + '\n' + r.log;
+    log.classList.toggle('err', !r.ok);
+  };
+  const panel = document.getElementById('shaders') as HTMLElement;
+  (document.getElementById('shtoggle') as HTMLButtonElement).onclick = (): void => {
+    const open = panel.style.display === 'none';
+    panel.style.display = open ? 'block' : 'none';
+    if (open) void load();
+  };
+  await load();
+}
+
+bootMonaco();
+void bootShaders();

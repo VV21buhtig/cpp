@@ -13,7 +13,7 @@
 #include "vec.h"
 #include "vox/vox_tex.h"
 
-#define GL_SHADER_DIR "engine/shaders/gl"
+// Пути шейдеров — через VFS (vfs_resolve: проект перекрывает сток).
 #define GL_MESH_SLOTS 256
 
 // Слот textured-меша: суп 12 float + модель. Чанков ядро не знает —
@@ -27,9 +27,9 @@ typedef struct {
 
 typedef struct {
     GLFWwindow *win;
-    unsigned skyProg;
+    RhiGlProg sky;
     unsigned skyVAO;
-    unsigned lightProg;
+    RhiGlProg light;
     unsigned tileTex;
     unsigned specTex;
     int tilesReady;
@@ -129,13 +129,13 @@ static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now, i
     // Небо только первому: поздний закрасил бы ранние домены.
     // Глубина небу не нужна, мешам — да.
     glDisable(GL_DEPTH_TEST);
-    glUseProgram(c->skyProg);
-    glUniformMatrix4fv(gl_uniform(c->skyProg, "invVP"), 1, 0, inv.m);
-    glUniform3f(gl_uniform(c->skyProg, "topColor"), 0.16f, 0.32f, 0.58f);
-    glUniform3f(gl_uniform(c->skyProg, "horizonColor"), 0.55f, 0.60f, 0.68f);
-    glUniform3f(gl_uniform(c->skyProg, "sunDir"), v->sunDir.x, v->sunDir.y, v->sunDir.z);
-    glUniform1f(gl_uniform(c->skyProg, "nightF"), nightF);
-    glUniform2f(gl_uniform(c->skyProg, "res"), (float)ww, (float)hh);
+    glUseProgram(c->sky.prog);
+    glUniformMatrix4fv(gl_uniform(c->sky.prog, "invVP"), 1, 0, inv.m);
+    glUniform3f(gl_uniform(c->sky.prog, "topColor"), 0.16f, 0.32f, 0.58f);
+    glUniform3f(gl_uniform(c->sky.prog, "horizonColor"), 0.55f, 0.60f, 0.68f);
+    glUniform3f(gl_uniform(c->sky.prog, "sunDir"), v->sunDir.x, v->sunDir.y, v->sunDir.z);
+    glUniform1f(gl_uniform(c->sky.prog, "nightF"), nightF);
+    glUniform2f(gl_uniform(c->sky.prog, "res"), (float)ww, (float)hh);
     glBindVertexArray(c->skyVAO);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
@@ -150,7 +150,7 @@ static void draw_scene(GLCore *c, const RcView *v, int ww, int hh, double now, i
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
     }
-    glUseProgram(c->lightProg);
+    glUseProgram(c->light.prog);
     glUniformMatrix4fv(c->u_view, 1, 0, view.m);
     glUniformMatrix4fv(c->u_proj, 1, 0, proj.m);
     { Mat4 ident = m4id(); glUniformMatrix4fv(c->u_lightSpace, 1, 0, ident.m); }
@@ -285,17 +285,71 @@ static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int 
     return 1;
 }
 
+// Локации + состояние lighting-программы (инит и каждый reload:
+// после перелинковки локации новые, сэмплеры/лампы перенакатить).
+// 1 ок, 0 невалидна.
+static int gl_fetch_light(GLCore *c) {
+#define GLU(n) c->u_##n = glGetUniformLocation(c->light.prog, #n)
+    GLU(model); GLU(view); GLU(lightSpace);
+    GLU(viewPos); GLU(fogColor); GLU(fogRange); GLU(satU); GLU(gammaU); GLU(alphaU); GLU(uTime);
+    GLU(skyAmb); GLU(gndAmb); GLU(shadowOn);
+#undef GLU
+    c->u_proj = glGetUniformLocation(c->light.prog, "projection");
+    c->u_dirDirection = glGetUniformLocation(c->light.prog, "dirLight.direction");
+    c->u_dirAmbient = glGetUniformLocation(c->light.prog, "dirLight.ambient");
+    c->u_dirDiffuse = glGetUniformLocation(c->light.prog, "dirLight.diffuse");
+    c->u_dirSpecular = glGetUniformLocation(c->light.prog, "dirLight.specular");
+    // Сэмплеры раз и навсегда + выкл ламп/фонаря (нули, честный минимум).
+    glUseProgram(c->light.prog);
+    glUniform1i(glGetUniformLocation(c->light.prog, "material.diffuse"), 0);
+    glUniform1i(glGetUniformLocation(c->light.prog, "material.specular"), 1);
+    // shadowMap (sampler2D) с дефолтного юнита 0 — иначе конфликт типов с
+    // material.diffuse (2DArray) на том же юните и программа невалидна.
+    // Тени выкл (shadowOn=0), семплиться не будет. Как у них: юнит 2.
+    glUniform1i(glGetUniformLocation(c->light.prog, "shadowMap"), 2);
+    glUniform1f(glGetUniformLocation(c->light.prog, "material.shininess"), 32.0f);
+    for (int i = 0; i < 4; i++) {
+        char nm[64];
+        snprintf(nm, sizeof nm, "pointLights[%d].constant", i);
+        glUniform1f(glGetUniformLocation(c->light.prog, nm), 1.0f);
+        snprintf(nm, sizeof nm, "pointLights[%d].linear", i);
+        glUniform1f(glGetUniformLocation(c->light.prog, nm), 0.22f);
+        snprintf(nm, sizeof nm, "pointLights[%d].quadratic", i);
+        glUniform1f(glGetUniformLocation(c->light.prog, nm), 0.06f);
+        // position/ambient/diffuse/specular — нули по умолчанию, свет не даёт
+    }
+    glUniform1f(glGetUniformLocation(c->light.prog, "spotLight.constant"), 1.0f);
+    glUniform1f(glGetUniformLocation(c->light.prog, "spotLight.linear"), 0.09f);
+    glUniform1f(glGetUniformLocation(c->light.prog, "spotLight.quadratic"), 0.032f);
+    glUniform1f(glGetUniformLocation(c->light.prog, "spotLight.cutOff"), 0.976f);
+    glUniform1f(glGetUniformLocation(c->light.prog, "spotLight.outerCutOff"), 0.966f);
+    glUseProgram(0);
+    // Разовая валидация: конфликт сэмплеров (как shadowMap на юните 0)
+    // иначе молча роняет все draws. Ловим тут, а не по скриншотам.
+    {
+        glValidateProgram(c->light.prog);
+        int vs = 0;
+        glGetProgramiv(c->light.prog, GL_VALIDATE_STATUS, &vs);
+        if (!vs) {
+            char vlog[1024] = {0};
+            glGetProgramInfoLog(c->light.prog, sizeof vlog, 0, vlog);
+            fprintf(stderr, "gl: lightProg INVALID: %s\n", vlog);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int core_init(RenderCore *rc, void *glfwWindow) {
     GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
     memset(c, 0, sizeof *c);
     c->win = (GLFWwindow *)glfwWindow;
     if (!rhi_gl_load(c->win)) return 0; // контекст + glad через RHI
     printf("gl: %s\n", (const char *)glGetString(GL_RENDERER));
-    c->skyProg = rhi_gl_prog(GL_SHADER_DIR "/sky.vs", GL_SHADER_DIR "/sky.fs");
-    if (!c->skyProg) return 0;
+    if (!rhi_gl_prog_load(&c->sky, "shaders/gl/sky.vs", "shaders/gl/sky.fs")) return 0;
     glGenVertexArrays(1, &c->skyVAO);
-    c->lightProg = rhi_gl_prog(GL_SHADER_DIR "/lighting.vs", GL_SHADER_DIR "/lighting.fs");
-    if (!c->lightProg) return 0;
+    if (!rhi_gl_prog_load(&c->light, "shaders/gl/lighting.vs", "shaders/gl/lighting.fs"))
+        return 0;
     // Атлас — не наш: пиксели прилетают через upload_tiles (фидер).
     // Тут только белая заглушка 1x1x1 (валидный сэмплер до первой заливки).
     {
@@ -314,57 +368,46 @@ static int core_init(RenderCore *rc, void *glfwWindow) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
-#define GLU(n) c->u_##n = glGetUniformLocation(c->lightProg, #n)
-    GLU(model); GLU(view); GLU(lightSpace);
-    GLU(viewPos); GLU(fogColor); GLU(fogRange); GLU(satU); GLU(gammaU); GLU(alphaU); GLU(uTime);
-    GLU(skyAmb); GLU(gndAmb); GLU(shadowOn);
-#undef GLU
-    c->u_proj = glGetUniformLocation(c->lightProg, "projection");
-    c->u_dirDirection = glGetUniformLocation(c->lightProg, "dirLight.direction");
-    c->u_dirAmbient = glGetUniformLocation(c->lightProg, "dirLight.ambient");
-    c->u_dirDiffuse = glGetUniformLocation(c->lightProg, "dirLight.diffuse");
-    c->u_dirSpecular = glGetUniformLocation(c->lightProg, "dirLight.specular");
-    // Сэмплеры раз и навсегда + выкл ламп/фонаря (нули, честный минимум).
-    glUseProgram(c->lightProg);
-    glUniform1i(glGetUniformLocation(c->lightProg, "material.diffuse"), 0);
-    glUniform1i(glGetUniformLocation(c->lightProg, "material.specular"), 1);
-    // shadowMap (sampler2D) с дефолтного юнита 0 — иначе конфликт типов с
-    // material.diffuse (2DArray) на том же юните и программа невалидна.
-    // Тени выкл (shadowOn=0), семплиться не будет. Как у них: юнит 2.
-    glUniform1i(glGetUniformLocation(c->lightProg, "shadowMap"), 2);
-    glUniform1f(glGetUniformLocation(c->lightProg, "material.shininess"), 32.0f);
-    for (int i = 0; i < 4; i++) {
-        char nm[64];
-        snprintf(nm, sizeof nm, "pointLights[%d].constant", i);
-        glUniform1f(glGetUniformLocation(c->lightProg, nm), 1.0f);
-        snprintf(nm, sizeof nm, "pointLights[%d].linear", i);
-        glUniform1f(glGetUniformLocation(c->lightProg, nm), 0.22f);
-        snprintf(nm, sizeof nm, "pointLights[%d].quadratic", i);
-        glUniform1f(glGetUniformLocation(c->lightProg, nm), 0.06f);
-        // position/ambient/diffuse/specular — нули по умолчанию, свет не даёт
-    }
-    glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.constant"), 1.0f);
-    glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.linear"), 0.09f);
-    glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.quadratic"), 0.032f);
-    glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.cutOff"), 0.976f);
-    glUniform1f(glGetUniformLocation(c->lightProg, "spotLight.outerCutOff"), 0.966f);
-    glUseProgram(0);
-    // Разовая валидация: конфликт сэмплеров (как shadowMap на юните 0)
-    // иначе молча роняет все draws. Ловим тут, а не по скриншотам.
-    {
-        glValidateProgram(c->lightProg);
-        int vs = 0;
-        glGetProgramiv(c->lightProg, GL_VALIDATE_STATUS, &vs);
-        if (!vs) {
-            char vlog[1024] = {0};
-            glGetProgramInfoLog(c->lightProg, sizeof vlog, 0, vlog);
-            fprintf(stderr, "gl: lightProg INVALID: %s\n", vlog);
-            return 0;
-        }
-    }
+
+    if (!gl_fetch_light(c)) return 0;
     c->ready = 1;
     c->prevT = glfwGetTime();
     printf("gl core OK: sky + meshes\n");
+    return 1;
+}
+
+// Горячая замена шейдера (Monaco): пробуем обе программы, коммитим
+// с refetch+validate; при отказе старая жива. Лог всегда.
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    GLCore *c = &((GLCoreWrap *)rc->ctx)->core;
+    char lmem[2048] = {0};
+    unsigned np = rhi_gl_prog_reload(&c->sky, id, code, lmem, sizeof lmem);
+    if (np) {
+        // Небо локации берёт динамически (gl_uniform) — только swap.
+        glDeleteProgram(c->sky.prog);
+        c->sky.prog = np;
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "sky: %s", lmem);
+        return 1;
+    }
+    np = rhi_gl_prog_reload(&c->light, id, code, lmem, sizeof lmem);
+    if (!np) {
+        if (log && logcap > 0) {
+            strncpy(log, lmem, (size_t)logcap - 1);
+            log[logcap - 1] = 0;
+        }
+        return 0;
+    }
+    unsigned old = c->light.prog;
+    c->light.prog = np;
+    if (!gl_fetch_light(c)) {
+        c->light.prog = old;
+        glDeleteProgram(np);
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "light: validate fail, откат");
+        return 0;
+    }
+    glDeleteProgram(old);
+    if (log && logcap > 0) snprintf(log, (size_t)logcap, "light: %s", lmem);
     return 1;
 }
 
@@ -378,8 +421,8 @@ static void core_shutdown(RenderCore *rc) {
     }
     if (c->tileTex) glDeleteTextures(1, &c->tileTex);
     if (c->specTex) glDeleteTextures(1, &c->specTex);
-    if (c->lightProg) glDeleteProgram(c->lightProg);
-    if (c->skyProg) glDeleteProgram(c->skyProg);
+    if (c->light.prog) glDeleteProgram(c->light.prog);
+    if (c->sky.prog) glDeleteProgram(c->sky.prog);
     if (c->skyVAO) glDeleteVertexArrays(1, &c->skyVAO);
 }
 
@@ -409,6 +452,7 @@ RenderCore *rc_gl_create(void) {
     w->api.upload_voxmesh = core_upload_voxmesh;
     w->api.unload_voxmesh = core_unload_voxmesh;
     w->api.upload_tiles = core_upload_tiles;
+    w->api.shader_reload = core_shader_reload;
     w->api.fps = core_fps;
     return &w->api;
 }

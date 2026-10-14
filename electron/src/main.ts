@@ -1,5 +1,6 @@
 // Main process: труба C-ABI -> IPC. Никакой математики сцены тут нет.
 import path from 'path';
+import fs from 'fs';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { EngineAPI, Domain, Backend, ViewHandle, FW, FH, VW_MIN, VW_MAX } from './engine_abi';
 
@@ -77,6 +78,33 @@ app.whenReady().then(() => {
     if (b in bm) backend = bm[b as keyof typeof bm];
     return boot();
   });
+  // Шейдеры (Monaco): список из движка, чтение из VFS, reload в ядро.
+  // id — путь как его знают ядра (repo-relative, см. слоты RhiGlProg).
+  ipcMain.handle('shaders', (): string[] => {
+    return [
+      'shaders/gl/sky.vs', 'shaders/gl/sky.fs',
+      'shaders/gl/lighting.vs', 'shaders/gl/lighting.fs',
+      'shaders/sdf_gl/ray.vert', 'shaders/sdf_gl/ray.frag',
+      'shaders/mesh/mesh.vert', 'shaders/mesh/mesh.frag',
+      'shaders/blit/blit.vert', 'shaders/blit/blit.frag',
+    ];
+  });
+  ipcMain.handle('shader-read', (_e, id: unknown): string => {
+    if (typeof id !== 'string' || id.includes('..')) return '';
+    try {
+      return fs.readFileSync(path.join(ROOT, 'engine', String(id)), 'utf8');
+    } catch {
+      return '';
+    }
+  });
+  ipcMain.handle(
+    'shader',
+    (_e, id: unknown, code: unknown): { ok: boolean; log: string } => {
+      if (!view || typeof id !== 'string' || typeof code !== 'string')
+        return { ok: false, log: 'нет вида/id/кода' };
+      return EngineAPI.shader(view, id, code);
+    }
+  );
   // Динамика вьюпорта: ResizeObserver сцены -> бекенд -> новый буфер.
   // Возвращает [w, h] после clamp — renderer ставит в canvas.
   ipcMain.handle('resize', (_e, w: unknown, h: unknown): [number, number] => {

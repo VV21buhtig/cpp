@@ -14,7 +14,7 @@
 
 typedef struct {
     GLFWwindow *win;
-    unsigned prog;
+    RhiGlProg ray;
     unsigned vao;
     unsigned ubo;
     int u_nPrim;
@@ -32,28 +32,9 @@ typedef struct {
     SDFCore core;
 } SDFCoreWrap;
 
-// Шейдеры ищутся от корня репо; запасной — рядом с движком.
-static const char *sdf_vs(void) {
-    static const char *paths[] = {
-        "engine/shaders/sdf_gl/ray.vert", "shaders/sdf_gl/ray.vert",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
-    }
-    return paths[0];
-}
+static void sdf_fetch(SDFCore *c);
 
-static const char *sdf_fs(void) {
-    static const char *paths[] = {
-        "engine/shaders/sdf_gl/ray.frag", "shaders/sdf_gl/ray.frag",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
-    }
-    return paths[0];
-}
+// Пути шейдеров — через VFS (vfs_resolve в prog_load: проект перекрывает сток).
 
 static float sdf_fps(RenderCore *rc) {
     return ((SDFCoreWrap *)rc->ctx)->core.fpsEma;
@@ -99,7 +80,7 @@ static void sdf_draw(SDFCore *c, const RcView *v, int ww, int hh, int late) {
     glViewport(0, 0, ww, hh);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
-    glUseProgram(c->prog);
+    glUseProgram(c->ray.prog);
     glBindBuffer(GL_UNIFORM_BUFFER, c->ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof ub, ub);
     glUniform1i(c->u_nPrim, c->nObjs);
@@ -175,8 +156,8 @@ static int sdf_init(RenderCore *rc, void *glfwWindow) {
     memset(c, 0, sizeof *c);
     c->win = (GLFWwindow *)glfwWindow;
     if (!rhi_gl_load(c->win)) return 0; // контекст + glad через RHI
-    c->prog = rhi_gl_prog(sdf_vs(), sdf_fs());
-    if (!c->prog) return 0;
+    if (!rhi_gl_prog_load(&c->ray, "shaders/sdf_gl/ray.vert", "shaders/sdf_gl/ray.frag"))
+        return 0;
     c->vao = rhi_gl_empty_vao();
     if (!c->vao) return 0;
     glGenBuffers(1, &c->ubo);
@@ -184,17 +165,43 @@ static int sdf_init(RenderCore *rc, void *glfwWindow) {
     glBufferData(GL_UNIFORM_BUFFER, 6 * 16 + 64 * 3 * 16, 0, GL_DYNAMIC_DRAW);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, c->ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
-    c->u_nPrim = glGetUniformLocation(c->prog, "nPrim");
-    c->u_late = glGetUniformLocation(c->prog, "uLate");
+    sdf_fetch(c);
     c->prevT = glfwGetTime();
     c->ready = 1;
     printf("sdf core OK: raymarch on RHI, %d prims max\n", SDF_MAX);
     return 1;
 }
 
+// Локации ray-программы (инит выше и каждый reload).
+static void sdf_fetch(SDFCore *c) {
+    c->u_nPrim = glGetUniformLocation(c->ray.prog, "nPrim");
+    c->u_late = glGetUniformLocation(c->ray.prog, "uLate");
+}
+
+// Горячая замена шейдера (Monaco): swap + refetch; при отказе старая жива.
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    SDFCore *c = &((SDFCoreWrap *)rc->ctx)->core;
+    char lmem[2048] = {0};
+    unsigned np = rhi_gl_prog_reload(&c->ray, id, code, lmem, sizeof lmem);
+    if (!np) {
+        if (log && logcap > 0) {
+            strncpy(log, lmem, (size_t)logcap - 1);
+            log[logcap - 1] = 0;
+        }
+        return 0;
+    }
+    unsigned old = c->ray.prog;
+    c->ray.prog = np;
+    sdf_fetch(c);
+    glDeleteProgram(old);
+    if (log && logcap > 0) snprintf(log, (size_t)logcap, "ray: %s", lmem);
+    return 1;
+}
+
 static void sdf_shutdown(RenderCore *rc) {
     SDFCore *c = &((SDFCoreWrap *)rc->ctx)->core;
-    if (c->prog) glDeleteProgram(c->prog);
+    if (c->ray.prog) glDeleteProgram(c->ray.prog);
     if (c->vao) glDeleteVertexArrays(1, &c->vao);
     if (c->ubo) glDeleteBuffers(1, &c->ubo);
 }
@@ -218,6 +225,7 @@ RenderCore *rc_sdf_create(void) {
     w->api.frame = sdf_frame;
     w->api.frame_to = sdf_frame_to;
     w->api.upload_sdf = sdf_upload_sdf;
+    w->api.shader_reload = core_shader_reload;
     w->api.fps = sdf_fps;
     return &w->api;
 }

@@ -91,6 +91,12 @@ struct RenderCore {
     // Возвращает 1 если залил, 0 если размер чужой/не готово/нет пути.
     // NULL = нет CPU-пути (тогда только frame_to/frame).
     int (*frame_cpu)(RenderCore *rc, const RcView *v, uint8_t *rgba, int w, int h);
+    // Горячая замена шейдера (Monaco/VFS): id — путь файла (полностью или
+    // basename), code — новый текст стороны. Перекомпиляция БЕЗ пересоздания
+    // контекста; при отказе старая программа жива, причина в log (всегда).
+    // NULL = ядро не умеет (честный отказ, не молчание).
+    int (*shader_reload)(RenderCore *rc, const char *id, const char *code, char *log,
+                         int logcap);
     // --- Домен VOXEL (NULL если нет RC_CAP_VOXEL) ---
     // Стриминг: app решает ЧТО (dirty из мира), ядро — КАК.
     // nb[6]: соседи (-x,+x,-y,+y,-z,+z) для швов, NULL = воздух.

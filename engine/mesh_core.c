@@ -16,7 +16,7 @@ RenderCore *rc_mesh_create(void); // определено ниже, нужно �
 typedef struct {
     RenderCore api;
     GLFWwindow *win;
-    unsigned prog;
+    RhiGlProg prog;
     unsigned vao;
     unsigned vbo;
     int u_mvp, u_sun;
@@ -32,26 +32,45 @@ static float mesh_fps(RenderCore *rc) {
     return ((MeshWrap *)rc->ctx)->fpsEma;
 }
 
-static const char *mesh_vs(void) {
-    static const char *paths[] = {
-        "engine/shaders/mesh/mesh.vert", "shaders/mesh/mesh.vert",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
-    }
-    return paths[0];
+// Пути шейдеров — через VFS (vfs_resolve в prog_load: проект перекрывает сток).
+
+// Локации mesh-программы (инит и каждый reload).
+static void mesh_fetch(MeshWrap *c) {
+    c->u_mvp = glGetUniformLocation(c->prog.prog, "uMVP");
+    c->u_sun = glGetUniformLocation(c->prog.prog, "uSun");
 }
 
-static const char *mesh_fs(void) {
-    static const char *paths[] = {
-        "engine/shaders/mesh/mesh.frag", "shaders/mesh/mesh.frag",
-    };
-    for (int i = 0; i < 2; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (f) { fclose(f); return paths[i]; }
+// Горячая замена шейдера (Monaco): swap + refetch + validate.
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    MeshWrap *c = (MeshWrap *)rc->ctx;
+    char lmem[2048] = {0};
+    unsigned np = rhi_gl_prog_reload(&c->prog, id, code, lmem, sizeof lmem);
+    if (!np) {
+        if (log && logcap > 0) {
+            strncpy(log, lmem, (size_t)logcap - 1);
+            log[logcap - 1] = 0;
+        }
+        return 0;
     }
-    return paths[0];
+    unsigned old = c->prog.prog;
+    c->prog.prog = np;
+    mesh_fetch(c);
+    glValidateProgram(np);
+    int vs = 0;
+    glGetProgramiv(np, GL_VALIDATE_STATUS, &vs);
+    if (!vs) {
+        char l[1024] = {0};
+        glGetProgramInfoLog(np, sizeof l, 0, l);
+        c->prog.prog = old;
+        mesh_fetch(c);
+        glDeleteProgram(np);
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "validate fail, откат: %s", l);
+        return 0;
+    }
+    glDeleteProgram(old);
+    if (log && logcap > 0) snprintf(log, (size_t)logcap, "mesh: %s", lmem);
+    return 1;
 }
 
 static int mesh_upload(RenderCore *rc, const RcMesh *m) {
@@ -90,7 +109,7 @@ static void mesh_draw(MeshWrap *c, const RcView *v, int ww, int hh, int first) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
-    glUseProgram(c->prog);
+    glUseProgram(c->prog.prog);
     glUniformMatrix4fv(c->u_mvp, 1, 0, pv.m);
     glUniform3f(c->u_sun, v->sunDir.x, v->sunDir.y, v->sunDir.z);
     glBindVertexArray(c->vao);
@@ -159,8 +178,8 @@ static int mesh_init(RenderCore *rc, void *glfwWindow) {
     // НЕ memset'им всё: caps/name/указатели уже стоят из rc_mesh_create.
     c->win = (GLFWwindow *)glfwWindow;
     if (!rhi_gl_load(c->win)) return 0;
-    c->prog = rhi_gl_prog(mesh_vs(), mesh_fs());
-    if (!c->prog) return 0;
+    if (!rhi_gl_prog_load(&c->prog, "shaders/mesh/mesh.vert", "shaders/mesh/mesh.frag"))
+        return 0;
     glGenVertexArrays(1, &c->vao);
     glGenBuffers(1, &c->vbo);
     glBindVertexArray(c->vao);
@@ -172,15 +191,14 @@ static int mesh_init(RenderCore *rc, void *glfwWindow) {
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
     glBindVertexArray(0);
-    c->u_mvp = glGetUniformLocation(c->prog, "uMVP");
-    c->u_sun = glGetUniformLocation(c->prog, "uSun");
+    mesh_fetch(c);
     // Валидация как в gl-ядре: молчащие падения запрещены.
-    glValidateProgram(c->prog);
+    glValidateProgram(c->prog.prog);
     int vs = 0;
-    glGetProgramiv(c->prog, GL_VALIDATE_STATUS, &vs);
+    glGetProgramiv(c->prog.prog, GL_VALIDATE_STATUS, &vs);
     if (!vs) {
         char l[1024] = {0};
-        glGetProgramInfoLog(c->prog, sizeof l, 0, l);
+        glGetProgramInfoLog(c->prog.prog, sizeof l, 0, l);
         fprintf(stderr, "mesh: INVALID %s\n", l);
         return 0;
     }
@@ -192,7 +210,7 @@ static int mesh_init(RenderCore *rc, void *glfwWindow) {
 
 static void mesh_shutdown(RenderCore *rc) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
-    if (c->prog) glDeleteProgram(c->prog);
+    if (c->prog.prog) glDeleteProgram(c->prog.prog);
     if (c->vao) glDeleteVertexArrays(1, &c->vao);
     if (c->vbo) glDeleteBuffers(1, &c->vbo);
     free(c->soup);
@@ -218,6 +236,7 @@ RenderCore *rc_mesh_create(void) {
     w->api.frame = mesh_frame;
     w->api.frame_to = mesh_frame_to;
     w->api.upload_mesh = mesh_upload;
+    w->api.shader_reload = core_shader_reload;
     w->api.fps = mesh_fps;
     return &w->api;
 }

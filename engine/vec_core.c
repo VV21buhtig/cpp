@@ -149,6 +149,13 @@ static void rc_reg_self(void) {
     rc_register("vec", RC_CAP_VECTOR, RC_BACKEND_GL, rc_vec_create);
 }
 
+// Горячая замена шейдера блита (Monaco).
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    VecWrap *p = (VecWrap *)rc->ctx;
+    return blit_reload(&p->blit, id, code, log, logcap);
+}
+
 RenderCore *rc_vec_create(void) {
     VecWrap *w = (VecWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
@@ -162,5 +169,6 @@ RenderCore *rc_vec_create(void) {
     w->api.frame_to = vec_frame_to;
     w->api.upload_vector = vec_upload;
     w->api.fps = vec_fps;
+    w->api.shader_reload = core_shader_reload;
     return &w->api;
 }

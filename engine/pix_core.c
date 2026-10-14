@@ -79,6 +79,13 @@ static void rc_reg_self(void) {
     rc_register("pix", RC_CAP_PIXEL, RC_BACKEND_GL, rc_pix_create);
 }
 
+// Горячая замена шейдера блита (Monaco).
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    PixWrap *p = (PixWrap *)rc->ctx;
+    return blit_reload(&p->blit, id, code, log, logcap);
+}
+
 RenderCore *rc_pix_create(void) {
     PixWrap *w = (PixWrap *)calloc(1, sizeof *w);
     if (!w) return 0;
@@ -92,5 +99,6 @@ RenderCore *rc_pix_create(void) {
     w->api.frame_to = pix_frame_to;
     w->api.upload_pixels = pix_upload;
     w->api.fps = pix_fps;
+    w->api.shader_reload = core_shader_reload;
     return &w->api;
 }

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>VoxEngine (Electron skeleton)</title>
+<link rel="stylesheet" href="../node_modules/monaco-editor/min/vs/editor/editor.main.css">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #1e1e1e; color: #d4d4d4; font: 13px system-ui, sans-serif;
@@ -25,6 +26,12 @@
   canvas { max-width: 100%; max-height: 100%; }
   #stat { padding: 4px 10px; color: #888; font-size: 12px; background: #2d2d2d;
           border-top: 1px solid #2a2a2e; }
+  #shaders { border-top: 1px solid #2a2a2e; background: #252526; }
+  #shbar { display: flex; gap: 8px; padding: 6px 10px; align-items: center; }
+  #shlog { max-height: 90px; overflow: auto; margin: 0 10px 8px; padding: 6px 8px;
+           background: #111; color: #9cdcfe; font: 12px monospace; white-space: pre-wrap; }
+  #shlog.err { color: #f48771; }
+  #med { height: 220px; margin: 0 10px 8px; border: 1px solid #2a2a2e; }
 </style>
 </head>
 <body>
@@ -49,11 +56,22 @@
   <div id="main">
     <div id="bar">
       <button id="play">Play</button>
+      <button id="shtoggle">Shaders</button>
       <span id="fps">fps -</span>
     </div>
     <div id="stage"><canvas id="cv" width="1280" height="720"></canvas></div>
+    <div id="shaders" style="display:none">
+      <div id="shbar">
+        <select id="shsel"></select>
+        <button id="shreload">Reload</button>
+        <span id="shstat"></span>
+      </div>
+      <div id="med"></div>
+      <pre id="shlog"></pre>
+    </div>
     <div id="stat">boot…</div>
   </div>
+<script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>
