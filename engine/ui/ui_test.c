@@ -9,6 +9,7 @@
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_reflect.h" // X-макросы: дескрипторы из одного списка
+#include "ui/ui_text.h" // Фаза 2: атлас глифов + quad/flush
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "rhi_gl.h"
@@ -215,6 +216,8 @@ int main(int argc, char **argv) {
         printf("ui_test: ui FAIL\n");
         return 1;
     }
+    UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
+    if (!text) printf("ui_test: text OFF (rects only)\n");
     ui_push_dirty(); // первая заливка (dirty=1 из create)
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
@@ -252,11 +255,32 @@ int main(int argc, char **argv) {
         if (sa && sa[0]) shotAt = atoi(sa);
     }
     int frames = 0;
+    static const float white[4] = {0.85f, 0.85f, 0.87f, 1.0f};
+    static const float dim[4] = {0.55f, 0.55f, 0.58f, 1.0f};
+    double tPrev = glfwGetTime();
+    char fpsBuf[64] = "ui_test";
     while (!glfwWindowShouldClose(win)) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
         t.noClear = 0;
         if (mesh->frame_to) mesh->frame_to(mesh, &v, &t);
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
+        if (text) {
+            // Подписи плашек + живой fps (квады каждый кадр, malloc нет).
+            // В ЦЕЛЬ (fbo), до презента — иначе презент перекроет.
+            double now = glfwGetTime();
+            if (now - tPrev >= 0.5) {
+                tPrev = now;
+                snprintf(fpsBuf, sizeof fpsBuf, "ui_test Text-OK");
+            }
+            ui_text_quad(text, 66.0f, 66.0f, "panel", dim);
+            ui_text_quad(text, 116.0f, 196.0f, "tree", dim);
+            ui_text_quad(text, 166.0f, 326.0f, "props", dim);
+            ui_text_quad(text, 14.0f, 14.0f, fpsBuf, white);
+            glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+            glViewport(0, 0, W, H);
+            ui_text_flush(text, W, H);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
         if (shot && shot[0] && frames == shotAt) {
             uint8_t *px = (uint8_t *)malloc((size_t)W * H * 3);
             if (px) {
@@ -280,6 +304,7 @@ int main(int argc, char **argv) {
         if (++frames == 120) printf("ui_test: 120 frames OK (seam alive)\n");
     }
     printf("ui_test: frames=%d DONE\n", frames);
+    ui_text_destroy(text);
     eng_ui_destroy(g_ui);
     return 0;
 }
