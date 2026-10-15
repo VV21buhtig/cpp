@@ -8,6 +8,7 @@
 #include <math.h>
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
+#include "ui/ui_reflect.h" // X-макросы: дескрипторы из одного списка
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "rhi_gl.h"
@@ -141,6 +142,34 @@ int main(int argc, char **argv) {
             bad = 1;
         }
         eng_ui_destroy(ui);
+        // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.
+        if (TRANSFORM_NFIELDS != 9) {
+            printf("SELF FAIL: nfields=%d\n", TRANSFORM_NFIELDS);
+            bad = 1;
+        }
+        {
+            ScTransform t;
+            memset(&t, 0, sizeof t);
+            for (int i = 0; i < TRANSFORM_NFIELDS; i++) {
+                if (transform_fields[i].off != (size_t)(i * 4)) {
+                    printf("SELF FAIL: off %d=%zu\n", i, transform_fields[i].off);
+                    bad = 1;
+                }
+                ui_field_set_f(&t, &transform_fields[i], (float)(i + 1) * 1.5f);
+            }
+            // Через дескрипторы писалось в НАСТОЯЩУЮ структуру?
+            if (t.pos.x != 1.5f || t.rot.y != 7.5f || t.scale.z != 13.5f) {
+                printf("SELF FAIL: struct not written %f %f %f\n", t.pos.x, t.rot.y, t.scale.z);
+                bad = 1;
+            }
+            for (int i = 0; i < TRANSFORM_NFIELDS; i++) {
+                float want = (float)(i + 1) * 1.5f;
+                if (ui_field_get_f(&t, &transform_fields[i]) != want) {
+                    printf("SELF FAIL: roundtrip %d\n", i);
+                    bad = 1;
+                }
+            }
+        }
         printf(bad ? "SELF FAIL\n" : "ui selftest OK\n");
         return bad;
     }
