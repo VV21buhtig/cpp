@@ -278,7 +278,7 @@ static void vw_cube_at(float *cube, float cx, float cy, float cz, float h) {
                         {{-1, 1, 1}, {1, 1, 1}, {1, 1, -1}, {-1, 1, -1}},
                         {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}},
                         {{-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}},
-                        {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, -1}}};
+                        {{1, -1, -1}, {-1, -1, -1}, {-1, 1, -1}, {1, 1, -1}}};
     int idx[6] = {0, 1, 2, 0, 2, 3}, n = 0;
     for (int f = 0; f < 6; f++)
         for (int k = 0; k < 6; k++) {
@@ -391,17 +391,8 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     if (vw->backend == 2 && vw->hasTarget && vw->rc->frame_to) {
         vw->target.noClear = 0; // одиночка: каждый кадр с чисток
         if (vw->rc->frame_to(vw->rc, &v, &vw->target)) {
-            // Цель -> RGBA верх первый: ОДНО чтение + memcpy-флип строк
-            // (было 720 синхронных чтений + попиксельный свизл = ~100мс).
-            glBindFramebuffer(GL_FRAMEBUFFER, vw->target.fbo);
-            glReadPixels(0, 0, vw->w, vw->h, GL_RGBA, GL_UNSIGNED_BYTE, vw->stage);
-            for (int y = 0; y < vw->h; y++)
-                memcpy(rgba + (size_t)y * vw->w * 4,
-                       vw->stage + (size_t)(vw->h - 1 - y) * vw->w * 4,
-                       (size_t)vw->w * 4);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            ok = 1;
-            // Нативный монолит: та же цель — в своё окно (фронт только меню).
+            // Нативный монолит: презент БЕЗ readback (★2: никакого glReadPixels
+            // в sink — кадр не покидает GPU вообще).
             if (vw->native && vw->presentProg && vw->presentVao) {
                 GLFWwindow *nwin = (GLFWwindow *)vw->win;
                 // Drag тянет камеру (клик без протяжки ничего не делает —
@@ -421,6 +412,18 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
                 comp_present_gl(vw->presentProg, vw->presentVao, &vw->target, vw->w, vw->h);
                 glfwSwapBuffers(nwin);
                 glfwPollEvents();
+                ok = 1;
+            } else {
+                // Canvas-тракт: ОДНО чтение + memcpy-флип строк
+                // (было 720 синхронных чтений + попиксельный свизл = ~100мс).
+                glBindFramebuffer(GL_FRAMEBUFFER, vw->target.fbo);
+                glReadPixels(0, 0, vw->w, vw->h, GL_RGBA, GL_UNSIGNED_BYTE, vw->stage);
+                for (int y = 0; y < vw->h; y++)
+                    memcpy(rgba + (size_t)y * vw->w * 4,
+                           vw->stage + (size_t)(vw->h - 1 - y) * vw->w * 4,
+                           (size_t)vw->w * 4);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                ok = 1;
             }
         }
     } else if (vw->rc->frame_cpu) {

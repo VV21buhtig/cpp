@@ -23,7 +23,8 @@
   #fps { margin-left: auto; color: #888; }
   #stage { flex: 1; display: flex; align-items: center; justify-content: center;
            background: #111; overflow: hidden; }
-  canvas { max-width: 100%; max-height: 100%; }
+  #noview { color: #666; font-size: 14px; text-align: center; line-height: 2;
+            padding: 40px; }
   #stat { padding: 4px 10px; color: #888; font-size: 12px; background: #2d2d2d;
           border-top: 1px solid #2a2a2e; }
   #shaders { border-top: 1px solid #2a2a2e; background: #252526; }
@@ -55,13 +56,13 @@
   </div>
   <div id="main">
     <div id="bar">
-      <button id="play">Play</button>
+      <button id="viewbtn">Show viewport</button>
       <button id="shtoggle">Shaders</button>
       <label title="Прямой вывод: движок рисует в своё окно (как Roblox/UE5), без копии через IPC/canvas. Только GL.">
         <input type="checkbox" id="native"> native-view</label>
-      <span id="fps">fps -</span>
+      <span id="vp">viewport: closed</span>
     </div>
-    <div id="stage"><canvas id="cv" width="1280" height="720"></canvas></div>
+    <div id="stage"><div id="noview">VIEWPORT — ОТДЕЛЬНОЕ ОКНО (direct, GPU→GPU, 0 копий)<br>Show viewport или галочка native-view. Drag — орбита, крестик — закрыть.</div></div>
     <div id="shaders" style="display:none">
       <div id="shbar">
         <select id="shsel"></select>

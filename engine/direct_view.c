@@ -49,8 +49,9 @@ int main(int argc, char **argv) {
         printf("direct: open FAIL\n");
         return 1;
     }
-    // Readback-буфер не нужен окну, но eng_view_frame его требует:
-    // статика вне цикла (malloc в кадре запрещён).
+    // Readback-буфер не нужен окну (нативный путь present-only, ★2), но ABI
+    // eng_view_frame его пока требует (размерная проверка): статика вне цикла.
+    // Фаза 2 уберёт буфер из ABI полностью.
     static uint8_t sink[(size_t)1280 * 720 * 4];
     double t0 = now_s();
     int n = 0;

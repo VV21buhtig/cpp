@@ -1,12 +1,8 @@
-// Строгие типы C-ABI движка. Фронт не хранит сцену сам:
-// дерево — из JSON бекенда, кадр — из буфера бекенда.
+// Строгие типы C-ABI движка. Фронт не хранит сцену сам: дерево — из JSON.
+// Кадров тут нет (антипаттерн удалён): вьюпорт — direct_view, GPU->GPU.
+// CPU-путь кадра (frame/download) живёт только в C-тестах и VOX_SHOT.
 import path from 'path';
 import koffi from 'koffi';
-
-export const FW = 1280;
-export const FH = 720;
-export const VW_MIN = 64;
-export const VW_MAX = 2048;
 
 export const enum Domain {
   Voxel = 1,
@@ -46,13 +42,8 @@ const lib = koffi.load(LIB);
 // Явные сигнатуры каждой функции (ошибка типов — на этапе tsc, не segfault).
 const c_version = lib.func('const char *eng_version()');
 const c_open = lib.func('void *eng_view_open(uint, int)');
-const c_frame = lib.func('int eng_view_frame(void *, uint8_t *, int, int)');
 const c_scene = lib.func('const char *eng_view_scene(void *)');
-const c_frames = lib.func('int eng_view_frames(void *)');
 const c_close = lib.func('void eng_view_close(void *)');
-const c_orbit = lib.func('void eng_view_orbit(void *, float, float, float)');
-const c_resize = lib.func('int eng_view_resize(void *, int, int)');
-const c_pick = lib.func('uint eng_view_pick(void *, int, int)');
 const c_shader = lib.func('int eng_view_shader(void *, str, str, char *, int)');
 
 export const EngineAPI = {
@@ -64,27 +55,12 @@ export const EngineAPI = {
     if (!h || koffi.address(h as object) === 0n) return null;
     return h;
   },
-  frame(view: ViewHandle, buf: Buffer, w: number, h: number): boolean {
-    return (c_frame(view, buf, w, h) as unknown as number) === 1;
-  },
   scene(view: ViewHandle): SceneTree {
     const s = c_scene(view) as unknown as string;
     return JSON.parse(s.length ? s : '{"entities":[]}') as SceneTree;
   },
-  frames(view: ViewHandle): number {
-    return c_frames(view) as unknown as number;
-  },
   close(view: ViewHandle): void {
     c_close(view);
-  },
-  resize(view: ViewHandle, w: number, h: number): boolean {
-    return (c_resize(view, Math.round(w), Math.round(h)) as unknown as number) === 1;
-  },
-  orbit(view: ViewHandle, dA: number, dH: number, dZ: number): void {
-    c_orbit(view, dA, dH, dZ);
-  },
-  pick(view: ViewHandle, x: number, y: number): number {
-    return c_pick(view, Math.round(x), Math.round(y)) as unknown as number;
   },
   shader(view: ViewHandle, id: string, code: string): { ok: boolean; log: string } {
     const lb = Buffer.alloc(2048);

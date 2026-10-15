@@ -1,22 +1,13 @@
-// Renderer: рисует то, что дал main. Состояния сцены тут нет.
-// Push-кадры складываем в последний; rAF рисует без IPC round-trip,
-// загрузка в GPU через createImageBitmap (не putImageData).
-const cv = document.getElementById('cv') as HTMLCanvasElement;
-const ctx = cv.getContext('2d') as CanvasRenderingContext2D;
+// Renderer: меню/дерево/шейдеры. Сцены тут нет, КАДРОВ тут нет.
+// Вьюпорт — отдельное окно direct_view (GPU->GPU). Пиксели через IPC запрещены
+// (антипаттерн удалён: frameBuf/push/pull/putImageData/createImageBitmap/ack).
 const tree = document.getElementById('tree') as HTMLElement;
 const stat = document.getElementById('stat') as HTMLElement;
-const fpsEl = document.getElementById('fps') as HTMLElement;
-const playBtn = document.getElementById('play') as HTMLButtonElement;
+const vpEl = document.getElementById('vp') as HTMLElement;
+const viewBtn = document.getElementById('viewbtn') as HTMLButtonElement;
+const nativeBox = document.getElementById('native') as HTMLInputElement;
 const domSel = document.getElementById('dom') as HTMLSelectElement;
 const beSel = document.getElementById('be') as HTMLSelectElement;
-
-let playing = false;
-let lastT = performance.now(), nFrames = 0;
-// Путь вывода: true = createImageBitmap+drawImage, false = putImageData.
-// Выбирается замером на железе (в софтверном Chromium bitmap медленнее).
-const USE_BITMAP = true;
-let pending: Uint8ClampedArray<ArrayBuffer> | null = null;
-let pendingW = 0, pendingH = 0;
 
 interface Ent {
   id: number;
@@ -55,78 +46,26 @@ async function refreshTree(): Promise<void> {
   }
 }
 
-function snap(buf: Buffer): void {
-  // Вид прямо на IPC-буфер БЕЗ копии: Electron уже склонировал его
-  // при передаче (свой ArrayBuffer), reuse main-буфера нас не рвёт.
-  // Типизация: только свежий ArrayBuffer ест ImageData (см. выше).
-  const view = new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
-  const ab = view.buffer;
-  if (ab instanceof ArrayBuffer) {
-    pending = new Uint8ClampedArray(ab, view.byteOffset, view.byteLength);
-  } else {
-    const fresh = new Uint8ClampedArray(view.length);
-    fresh.set(view);
-    pending = fresh;
+function setVp(open: boolean): void {
+  vpEl.textContent = open ? 'viewport: direct (no copy)' : 'viewport: closed';
+  viewBtn.textContent = open ? 'Hide viewport' : 'Show viewport';
+  viewBtn.classList.toggle('on', open);
+}
+
+async function setDirect(on: boolean): Promise<void> {
+  nativeBox.checked = on;
+  stat.textContent = on ? 'viewport: opening…' : 'viewport: closing…';
+  const ok = await window.eng.native(on);
+  await refreshTree();
+  if (on && !ok) {
+    nativeBox.checked = false;
+    stat.textContent += ' | NATIVE FAILED (GL only?)';
   }
-  pendingW = cv.width;
-  pendingH = cv.height;
+  setVp(on && ok);
 }
 
-window.eng.onFrame((buf: Buffer) => {
-  snap(buf);
-});
-
-async function pullOnce(): Promise<void> {
-  // Пауза: кадр по требованию (pull), в play — только push.
-  if (playing) return;
-  const buf = await window.eng.frame();
-  snap(buf);
-}
-
-let loopDeaths = 0;
-
-async function loop(): Promise<void> {
-  // rAF ПЕРВЫМ и ЕДИНСТВЕННЫЙ: цикл неубиваем даже при исключении ниже.
-  // Смерти считаем и показываем (было: двойной rAF форкал цикл + тихая смерть).
-  requestAnimationFrame(() => void loop().catch(() => loopDeaths++));
-  try {
-    if (!playing) await pullOnce();
-    if (pending && pendingW === cv.width && pendingH === cv.height) {
-      // Путь вывода выбирается замером (см. доку): bitmap vs putImage.
-      if (USE_BITMAP) {
-        try {
-          const bmp = await createImageBitmap(new ImageData(pending, cv.width, cv.height));
-          ctx.drawImage(bmp, 0, 0);
-          bmp.close();
-          nFrames++;
-        } catch {
-          // кадр в пути после ресайза — пропуск
-        }
-      } else {
-        ctx.putImageData(new ImageData(pending, cv.width, cv.height), 0, 0);
-        nFrames++;
-      }
-      pending = null;
-      window.eng.ack(); // следующий кадр можно слать (самопейсинг линка)
-    }
-    const now = performance.now();
-    if (now - lastT > 1000) {
-      const n = await window.eng.frames();
-      const dead = loopDeaths > 0 ? ` deaths=${loopDeaths}` : '';
-      fpsEl.textContent = `fps ${Math.round((nFrames * 1000) / (now - lastT))} / eng ${n}${dead}`;
-      nFrames = 0;
-      lastT = now;
-    }
-  } catch {
-    loopDeaths++;
-  }
-}
-
-playBtn.onclick = async (): Promise<void> => {
-  playing = !playing;
-  await window.eng.play(playing);
-  playBtn.textContent = playing ? 'Stop' : 'Play';
-  playBtn.classList.toggle('on', playing);
+viewBtn.onclick = (): void => {
+  void setDirect(!nativeBox.checked);
 };
 
 async function reswitch(): Promise<void> {
@@ -153,87 +92,20 @@ async function reswitch(): Promise<void> {
 }
 domSel.onchange = () => void reswitch();
 beSel.onchange = () => void reswitch();
-(document.getElementById('native') as HTMLInputElement).onchange = async (ev: Event): Promise<void> => {
-  const on = (ev.target as HTMLInputElement).checked;
-  stat.textContent = on ? 'native-view: opening…' : 'canvas-view: opening…';
-  const ok = await window.eng.native(on);
-  await refreshTree();
-  stat.textContent += on
-    ? (ok ? ' | DIRECT (no copy)' : ' | NATIVE FAILED (GL only?)')
-    : ' | canvas (copy path)';
+nativeBox.onchange = (ev: Event): void => {
+  void setDirect((ev.target as HTMLInputElement).checked);
 };
-
-// Крутилка вьюпорта: drag — орбита на каждую сторону, wheel — зум.
-// Автовращения нет (камера статична, пока не потянешь).
-// Клик без протяжки (< 4px) — по-прежнему пикинг (v1: MESH-домен).
-let dragOn = false, dragX = 0, dragY = 0, dragMoved = 0;
-cv.onmousedown = (ev: MouseEvent): void => {
-  dragOn = true;
-  dragX = ev.clientX;
-  dragY = ev.clientY;
-  dragMoved = 0;
-};
-window.onmousemove = (ev: MouseEvent): void => {
-  if (!dragOn) return;
-  const dx = ev.clientX - dragX, dy = ev.clientY - dragY;
-  dragX = ev.clientX;
-  dragY = ev.clientY;
-  dragMoved += Math.abs(dx) + Math.abs(dy);
-  // 0.008 рад/px — полный оборот за ~800px протяжки.
-  void window.eng.orbit(-dx * 0.008, -dy * 0.15, 0);
-};
-window.onmouseup = (): void => {
-  dragOn = false;
-};
-cv.onwheel = (ev: WheelEvent): void => {
-  ev.preventDefault();
-  // Колесо от себя — ближе (множитель < 1), к себе — дальше.
-  void window.eng.orbit(0, 0, ev.deltaY > 0 ? 1.1 : 1 / 1.1);
-};
-cv.onclick = async (ev: MouseEvent): Promise<void> => {
-  if (dragMoved > 4) return; // это был drag, не клик
-  const r = cv.getBoundingClientRect();
-  const x = Math.floor(((ev.clientX - r.left) / r.width) * cv.width);
-  const y = Math.floor(((ev.clientY - r.top) / r.height) * cv.height);
-  const id = await window.eng.pick(x, y);
-  selectedId = id;
-  paintSel();
-  stat.textContent = id ? `selected: ${id}` : 'selected: —';
-};
-
-// Динамика: панель потянули — шлём размер в бекенд, canvas под ответ.
-// Троттлим (не чаще раза в 300мс): ресайз окна/swapchain — тяжёлый.
-let rzT = 0;
-let rzQueued: [number, number] | null = null;
-async function doResize(w: number, h: number): Promise<void> {
-  const [bw, bh] = await window.eng.resize(w, h);
-  cv.width = bw;
-  cv.height = bh;
-  stat.textContent = `viewport: ${bw}x${bh}`;
-}
-new ResizeObserver(() => {
-  const r = (document.getElementById('stage') as HTMLElement).getBoundingClientRect();
-  const w = Math.floor(r.width), h = Math.floor(r.height);
-  if (w < 64 || h < 64 || (w === cv.width && h === cv.height)) return;
-  const now = performance.now();
-  if (now - rzT > 300) {
-    rzT = now;
-    void doResize(w, h);
-  } else {
-    rzQueued = [w, h];
-    setTimeout(() => {
-      if (rzQueued) {
-        const [qw, qh] = rzQueued;
-        rzQueued = null;
-        rzT = performance.now();
-        void doResize(qw, qh);
-      }
-    }, 320);
+// Процесс умер снаружи (крестик): снять чекбокс, статус закрыть.
+window.eng.onDirect((on: boolean) => {
+  nativeBox.checked = on;
+  setVp(on);
+  if (!on) {
+    stat.textContent += ' | direct closed';
+    void refreshTree();
   }
-}).observe(document.getElementById('stage') as HTMLElement);
+});
 
 void refreshTree();
-void loop();
 
 // --- Monaco: панель шейдеров (VFS + eng_shader_reload) ---
 // Monaco грузится AMD-лоадером из node_modules (без бандла);
