@@ -10,6 +10,7 @@
 #include "render_api.h"
 #include "ui/ui_reflect.h" // X-макросы: дескрипторы из одного списка
 #include "ui/ui_text.h" // Фаза 2: атлас глифов + quad/flush
+#include "ui/ui_panels.h" // Фаза 3: меню/тулбар/иерархия/статус
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "rhi_gl.h"
@@ -20,6 +21,8 @@
 
 static EngUi *g_ui = 0;
 static RenderCore *g_vec = 0;
+static UiPanels *g_panels = 0;
+static ScWorld g_scene;
 static double g_mx = 0, g_my = 0;
 
 // Тестовый куб (только тест! продуктовая подача — vw_feed_mesh).
@@ -63,7 +66,7 @@ static void ui_push_dirty(void) {
     // UiPrim и RcVecShape совпадают полями 1:1 (kind/a,b,c,d/rgba) —
     // копируем явно (strict aliasing не испытываем).
     const UiFrame *fr = 0;
-    if (!eng_ui_build(g_ui, W, H, &fr)) return; // чисто — не трогаем ядро
+    if (!ui_panels_build(g_panels, &g_scene, W, H, &fr)) return; // чисто
     RcVecShape shapes[UI_MAX_PRIMS];
     for (int i = 0; i < fr->n; i++) {
         shapes[i].kind = fr->prims[i].kind;
@@ -87,20 +90,31 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
         e.kind = UI_EV_DOWN;
-        if (eng_ui_event(g_ui, &e)) ui_push_dirty();
+        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
     }
 }
 
 static void on_move(GLFWwindow *win, double x, double y) {
     (void)win;
-    UiEvent e;
-    memset(&e, 0, sizeof e);
-    e.kind = UI_EV_MOVE;
-    e.x = (float)x;
-    e.y = (float)y;
+    (void)x;
+    (void)y;
+    // Hover по панелям не нужен (клики + клавиши). Мышь держим для будущего.
     g_mx = x;
     g_my = y;
-    if (eng_ui_event(g_ui, &e)) ui_push_dirty();
+}
+
+static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
+    (void)win;
+    (void)scancode;
+    (void)mods;
+    if (action != GLFW_PRESS) return;
+    if (key == GLFW_KEY_Q || key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_R) {
+        UiEvent e;
+        memset(&e, 0, sizeof e);
+        e.kind = UI_EV_KEY;
+        e.key = key; // GLFW_KEY_Q/W/E/R = ASCII Q/W/E/R
+        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+    }
 }
 
 int main(int argc, char **argv) {
@@ -143,6 +157,37 @@ int main(int argc, char **argv) {
             bad = 1;
         }
         eng_ui_destroy(ui);
+        // Панели без окна: клик по строке + клавиша W.
+        {
+            ScWorld sw;
+            sc_init(&sw);
+            Entity a = sc_spawn(&sw, "A");
+            Entity b = sc_spawn(&sw, "B");
+            (void)a;
+            UiPanels *pn = ui_panels_create();
+            const UiFrame *pf = 0;
+            if (!ui_panels_build(pn, &sw, 1280, 720, &pf) || pf->n < 4) {
+                printf("SELF FAIL: panels build\n");
+                bad = 1;
+            }
+            UiEvent pe;
+            memset(&pe, 0, sizeof pe);
+            pe.kind = UI_EV_DOWN;
+            pe.x = 30;
+            pe.y = 64 + 24; // вторая строка = B (ряды по 24 с y=64)
+            if (!ui_panels_event(pn, &sw, &pe) || ui_panels_selected(pn) != b) {
+                printf("SELF FAIL: panels select\n");
+                bad = 1;
+            }
+            memset(&pe, 0, sizeof pe);
+            pe.kind = UI_EV_KEY;
+            pe.key = 'W';
+            if (!ui_panels_event(pn, &sw, &pe) || ui_panels_tool(pn) != 1) {
+                printf("SELF FAIL: panels tool\n");
+                bad = 1;
+            }
+            ui_panels_destroy(pn);
+        }
         // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.
         if (TRANSFORM_NFIELDS != 9) {
             printf("SELF FAIL: nfields=%d\n", TRANSFORM_NFIELDS);
@@ -216,11 +261,26 @@ int main(int argc, char **argv) {
         printf("ui_test: ui FAIL\n");
         return 1;
     }
+    // Демо-сцена для иерархии (та же тройка что в EngView).
+    sc_init(&g_scene);
+    {
+        Entity scene = sc_spawn(&g_scene, "Scene");
+        Entity hero = sc_spawn(&g_scene, "Hero");
+        Entity sword = sc_spawn(&g_scene, "Sword");
+        if (sword && scene) sc_parent(&g_scene, sword, scene);
+        (void)hero;
+    }
+    g_panels = ui_panels_create();
+    if (!g_panels) {
+        printf("ui_test: panels FAIL\n");
+        return 1;
+    }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
     if (!text) printf("ui_test: text OFF (rects only)\n");
     ui_push_dirty(); // первая заливка (dirty=1 из create)
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
+    glfwSetKeyCallback(win, on_key);
     // Статичная камера на куб (как vw_view mesh, orbA=-2.2).
     RcView v;
     memset(&v, 0, sizeof v);
@@ -256,7 +316,6 @@ int main(int argc, char **argv) {
     }
     int frames = 0;
     static const float white[4] = {0.85f, 0.85f, 0.87f, 1.0f};
-    static const float dim[4] = {0.55f, 0.55f, 0.58f, 1.0f};
     double tPrev = glfwGetTime();
     char fpsBuf[64] = "ui_test";
     while (!glfwWindowShouldClose(win)) {
@@ -265,17 +324,15 @@ int main(int argc, char **argv) {
         if (mesh->frame_to) mesh->frame_to(mesh, &v, &t);
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
         if (text) {
-            // Подписи плашек + живой fps (квады каждый кадр, malloc нет).
+            // Панели: текст (имена/режимы/статус) + живой fps.
             // В ЦЕЛЬ (fbo), до презента — иначе презент перекроет.
             double now = glfwGetTime();
             if (now - tPrev >= 0.5) {
                 tPrev = now;
-                snprintf(fpsBuf, sizeof fpsBuf, "ui_test Text-OK");
+                snprintf(fpsBuf, sizeof fpsBuf, "ui_test %d", frames);
             }
-            ui_text_quad(text, 66.0f, 66.0f, "panel", dim);
-            ui_text_quad(text, 116.0f, 196.0f, "tree", dim);
-            ui_text_quad(text, 166.0f, 326.0f, "props", dim);
-            ui_text_quad(text, 14.0f, 14.0f, fpsBuf, white);
+            ui_panels_text(g_panels, &g_scene, text, W, H);
+            ui_text_quad(text, 14.0f, 700.0f, fpsBuf, white);
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, W, H);
             ui_text_flush(text, W, H);
@@ -304,6 +361,7 @@ int main(int argc, char **argv) {
         if (++frames == 120) printf("ui_test: 120 frames OK (seam alive)\n");
     }
     printf("ui_test: frames=%d DONE\n", frames);
+    ui_panels_destroy(g_panels);
     ui_text_destroy(text);
     eng_ui_destroy(g_ui);
     return 0;
