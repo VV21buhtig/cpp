@@ -3,7 +3,8 @@
 // Ничего кроме rect: текст/круги/линии — следующие фазы, шов уже готов.
 #include <stdlib.h>
 #include <string.h>
-#include "ui.h"
+#include "ui.h" // UiReply шва (ниже): eng_ui_event отдаёт не int
+#include "ui_bind.h"
 
 #define UI_NWID 3
 
@@ -56,8 +57,8 @@ void eng_ui_destroy(EngUi *ui) {
     free(ui);
 }
 
-int eng_ui_event(EngUi *ui, const UiEvent *e) {
-    if (!ui || !e) return 0;
+UiReply eng_ui_event(EngUi *ui, const UiEvent *e) {
+    if (!ui || !e) return ui_unhandled();
     if (e->kind == UI_EV_MOVE) {
         int ch = 0;
         for (int i = 0; i < UI_NWID; i++) {
@@ -68,7 +69,7 @@ int eng_ui_event(EngUi *ui, const UiEvent *e) {
             }
         }
         if (ch) ui->dirty = 1;
-        return ch;
+        return ui_handled(ch, 0);
     }
     if (e->kind == UI_EV_DOWN && e->button == 0) {
         // Hit-test сверху вниз (поздний виджет = верхний).
@@ -76,11 +77,11 @@ int eng_ui_event(EngUi *ui, const UiEvent *e) {
             if (inside(&ui->wids[i], e->x, e->y)) {
                 ui->wids[i].on = !ui->wids[i].on;
                 ui->dirty = 1;
-                return 1;
+                return ui_handled(1, 0);
             }
         }
     }
-    return 0;
+    return ui_unhandled();
 }
 
 int eng_ui_build(EngUi *ui, int w, int h, const UiFrame **out) {

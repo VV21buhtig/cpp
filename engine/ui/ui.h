@@ -6,6 +6,10 @@
 #ifndef ENGINE_UI_H
 #define ENGINE_UI_H
 
+#include "ui_bind.h" // UiReply/UiAttrF шва (по Slate: FReply + TAttribute)
+
+// UiPrim/UiFrame/UiEvent — как было (см. ниже исходные комменты).
+
 #define UI_MAX_PRIMS 256
 #define UI_EV_MOVE 0
 #define UI_EV_DOWN 1
@@ -39,8 +43,8 @@ typedef struct EngUi EngUi;
 // Возвращает 1 если кадр ГРЯЗНЫЙ (надо перезалить в ядро), 0 если тот же.
 EngUi *eng_ui_create(void);
 void eng_ui_destroy(EngUi *ui);
-// Событие ввода -> hit-test/state. Возвращает 1 если стало грязно.
-int eng_ui_event(EngUi *ui, const UiEvent *e);
+// Событие ввода -> hit-test/state. Reply как FReply (handled+dirty+capture).
+UiReply eng_ui_event(EngUi *ui, const UiEvent *e);
 // Построить UiFrame (только если грязно, иначе вернуть прошлый).
 // out принадлежит ui, не free(). Возвращает 1 если грязный.
 int eng_ui_build(EngUi *ui, int w, int h, const UiFrame **out);

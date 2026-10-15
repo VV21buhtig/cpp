@@ -6,14 +6,15 @@
 
 #include "scene.h"
 #include "ui.h"
+#include "ui_bind.h" // UiReply шва
 #include "ui_text.h"
 
 typedef struct UiPanels UiPanels;
 
 UiPanels *ui_panels_create(void);
 void ui_panels_destroy(UiPanels *p);
-// Ввод (мышь y вниз, клавиши Q/W/E/R). 1 если грязно.
-int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e);
+// Ввод как FReply: handled + захват мыши (см. ui_bind.h). Dirty внутри reply.
+UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e);
 // Построить rect-примитивы (dirty-паттерн как eng_ui_build).
 int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **out);
 // Текст поверх (имена, режимы, статус). Всегда рисует (дешёвые квады).

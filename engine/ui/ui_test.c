@@ -26,6 +26,7 @@ static RenderCore *g_vec = 0;
 static UiPanels *g_panels = 0;
 static ScWorld g_scene;
 static double g_mx = 0, g_my = 0;
+static int g_capture = 0; // захват мыши модальным виджетом (FReply::CaptureMouse)
 
 // Тестовый куб: ЛОКАЛЬНЫЙ (центр 0, h=3). Мир = TRS сущности (см. ниже).
 // Грани P + idx 0,1,2/0,2,3, нормали наружу (проверено скриптом).
@@ -127,10 +128,18 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
         e.kind = UI_EV_DOWN;
-        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+        {
+        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
+        if (r.handled) g_capture = r.capture;
+        if (r.dirty) ui_push_dirty();
+    }
     } else if (action == GLFW_RELEASE) {
         e.kind = UI_EV_UP;
-        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+        {
+        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
+        if (r.handled) g_capture = r.capture;
+        if (r.dirty) ui_push_dirty();
+    }
     }
 }
 
@@ -144,7 +153,11 @@ static void on_move(GLFWwindow *win, double x, double y) {
     e.kind = UI_EV_MOVE;
     e.x = (float)x;
     e.y = (float)y;
-    if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+    {
+        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
+        if (r.handled) g_capture = r.capture;
+        if (r.dirty) ui_push_dirty();
+    }
 }
 
 static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
@@ -159,7 +172,11 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
         e.kind = UI_EV_KEY;
         e.key = key; // GLFW_KEY_Q.. совпадают с ASCII
         e.mods = mods; // 1 shift 2 ctrl 4 alt (для Ctrl+Z/Y)
-        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+        {
+        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
+        if (r.handled) g_capture = r.capture;
+        if (r.dirty) ui_push_dirty();
+    }
     }
 }
 
@@ -183,13 +200,13 @@ int main(int argc, char **argv) {
         e.kind = UI_EV_DOWN;
         e.x = 10;
         e.y = 10; // мимо всех
-        if (eng_ui_event(ui, &e)) {
+        if (eng_ui_event(ui, &e).handled) {
             printf("SELF FAIL: outside click dirty\n");
             bad = 1;
         }
         e.x = 170;
         e.y = 235; // центр второго (110,190,220,90)
-        if (!eng_ui_event(ui, &e)) {
+        if (!eng_ui_event(ui, &e).handled) {
             printf("SELF FAIL: inside click clean\n");
             bad = 1;
         }
@@ -221,14 +238,14 @@ int main(int argc, char **argv) {
             pe.kind = UI_EV_DOWN;
             pe.x = 30;
             pe.y = 64 + 24; // вторая строка = B (ряды по 24 с y=64)
-            if (!ui_panels_event(pn, &sw, &pe) || ui_panels_selected(pn) != b) {
+            if (!ui_panels_event(pn, &sw, &pe).handled || ui_panels_selected(pn) != b) {
                 printf("SELF FAIL: panels select\n");
                 bad = 1;
             }
             memset(&pe, 0, sizeof pe);
             pe.kind = UI_EV_KEY;
             pe.key = 'W';
-            if (!ui_panels_event(pn, &sw, &pe) || ui_panels_tool(pn) != 1) {
+            if (!ui_panels_event(pn, &sw, &pe).handled || ui_panels_tool(pn) != 1) {
                 printf("SELF FAIL: panels tool\n");
                 bad = 1;
             }
@@ -439,7 +456,7 @@ int main(int argc, char **argv) {
         se.kind = UI_EV_DOWN;
         se.x = 30;
         se.y = 100; // строка Hero (64 Scene, 88 Hero, 112 Sword)
-        if (ui_panels_event(g_panels, &g_scene, &se)) ui_push_dirty();
+        if (ui_panels_event(g_panels, &g_scene, &se).dirty) ui_push_dirty();
     }
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);

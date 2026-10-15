@@ -8,6 +8,7 @@
 #include "ui_reflect.h" // дескрипторы Transform: один список на всех
 #include "ui_theme.h" // одна тема + hot-reload по mtime
 #include "ui_undo.h" // стек команд float-полей
+#include "ui_bind.h" // UiReply/UiAttrF (FReply + TAttribute по-Slate)
 
 #define PN_MAXROWS 64
 
@@ -24,6 +25,13 @@ typedef struct {
     int field; // 0..8 индекс дескриптора
 } PnField;
 
+// Живая привязка строки инспектора к полю сущности (TAttribute<float>).
+typedef struct {
+    ScWorld *scene;
+    Entity ent;
+    int field; // индекс transform_fields
+} UiEcsRef;
+
 struct UiPanels {
     unsigned selected;
     int tool;
@@ -34,12 +42,13 @@ struct UiPanels {
     PnRow rows[PN_MAXROWS];
     int nrows;
     PnField frows[PN_NF];
-    int scrubField; // -1 нет модального скраба
-    ScTransform scrubBase; // трансформ на начало скраба (коммит идёт в сцену)
-    float scrubVal;
+    int scrubField; // -1 нет модального скраба (захват мыши как CaptureMouse)
+    float scrubWas; // значение на DOWN (для undo-коммита на UP)
     float scrubX0;
     UiTheme theme; // одна тема (hot-reload по mtime)
     UiUndo undo; // стек команд (Фаза 5)
+    UiEcsRef erefs[PN_NF]; // привязки строк инспектора к ECS (TAttribute)
+    UiAttrF binds[PN_NF];
 };
 
 #define THEME_PATH "engine/assets/theme.json"
@@ -83,48 +92,70 @@ static int depth_of(ScWorld *s, Entity e) {
     return d;
 }
 
-int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
-    if (!p || !e) return 0;
-    // Модальный скраб: тянешь значение — живьём применяется (коммит на UP).
+static float ecs_get(void *user) {
+    UiEcsRef *r = (UiEcsRef *)user;
+    if (!r || !r->scene || !sc_alive(r->scene, r->ent)) return 0.0f;
+    ScTransform t = sc_get(r->scene, r->ent);
+    return ui_field_get_f(&t, &transform_fields[r->field]);
+}
+
+static void ecs_set(void *user, float v) {
+    UiEcsRef *r = (UiEcsRef *)user;
+    if (!r || !r->scene || !sc_alive(r->scene, r->ent)) return;
+    ScTransform t = sc_get(r->scene, r->ent);
+    ui_field_set_f(&t, &transform_fields[r->field], v);
+    sc_set(r->scene, r->ent, &t);
+}
+
+// Перепривязать 9 строк к сущности (при смене selection).
+static void rebind(UiPanels *p, ScWorld *scene, unsigned ent) {
+    for (int i = 0; i < PN_NF; i++) {
+        p->erefs[i].scene = scene;
+        p->erefs[i].ent = ent;
+        p->erefs[i].field = i;
+        p->binds[i].bound = 1;
+        p->binds[i].value = 0.0f;
+        p->binds[i].get = ecs_get;
+        p->binds[i].set = ecs_set;
+        p->binds[i].user = &p->erefs[i];
+    }
+}
+
+UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
+    if (!p || !e) return ui_unhandled();
+    // Модальный скраб: тянешь значение — живьём через бинд (коммит на UP).
     if (p->scrubField >= 0) {
         if (e->kind == UI_EV_MOVE) {
-            float v = p->scrubVal + (e->x - p->scrubX0) * 0.05f;
-            ui_field_set_f(&p->scrubBase, &transform_fields[p->scrubField], v);
-            if (scene) sc_set(scene, p->selected, &p->scrubBase);
+            float v = p->scrubWas + (e->x - p->scrubX0) * 0.05f;
+            ui_attr_f_set(&p->binds[p->scrubField], v);
             p->posed = 1;
             p->dirty = 1;
-            return 1;
+            return ui_handled(1, 1); // держим захват до UP
         }
         if (e->kind == UI_EV_UP) {
             // Коммит mouse-up: {было -> стало} в undo (как Unity flush).
-            if (scene && p->selected) {
-                ScTransform cur = sc_get(scene, p->selected);
-                float now = ui_field_get_f(&cur, &transform_fields[p->scrubField]);
-                float was = ui_field_get_f(&p->scrubBase, &transform_fields[p->scrubField]);
-                ui_undo_push(&p->undo, p->selected, p->scrubField, was, now);
-            }
+            float now = ui_attr_f_get(&p->binds[p->scrubField]);
+            ui_undo_push(&p->undo, p->selected, p->scrubField, p->scrubWas, now);
             p->scrubField = -1;
             p->dirty = 1;
-            return 1;
+            return ui_handled(1, 0); // отпустили захват
         }
-        return 0;
+        return ui_unhandled();
     }
     if (e->kind == UI_EV_KEY) {
         // Ctrl+Z откат, Ctrl+Shift+Z / Ctrl+Y повтор (как везде).
         if ((e->mods & 2) && (e->key == 'Z' || e->key == 'Y')) {
+            int isUndo = (e->key == 'Z' && !(e->mods & 1));
             UiCmd c;
-            int ok = (e->key == 'Z' && !(e->mods & 1)) ? ui_undo_undo(&p->undo, &c)
-                                                      : ui_undo_redo(&p->undo, &c);
+            int ok = isUndo ? ui_undo_undo(&p->undo, &c) : ui_undo_redo(&p->undo, &c);
             if (ok && scene && sc_alive(scene, c.ent)) {
-                ScTransform t = sc_get(scene, c.ent);
-                float v = (e->key == 'Z' && !(e->mods & 1)) ? c.before : c.after;
-                ui_field_set_f(&t, &transform_fields[c.field], v);
-                sc_set(scene, c.ent, &t);
+                rebind(p, scene, c.ent);
+                ui_attr_f_set(&p->binds[c.field], isUndo ? c.before : c.after);
                 p->posed = 1;
                 p->dirty = 1;
-                return 1;
+                return ui_handled(1, 0);
             }
-            return 0;
+            return ui_unhandled();
         }
     }
     if (e->kind == UI_EV_KEY) {
@@ -136,22 +167,22 @@ int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         if (t >= 0 && t != p->tool) {
             p->tool = t;
             p->dirty = 1;
-            return 1;
+            return ui_handled(1, 0);
         }
-        return 0;
+        return ui_unhandled();
     }
-    if (e->kind != UI_EV_DOWN || e->button != 0) return 0;
+    if (e->kind != UI_EV_DOWN || e->button != 0) return ui_unhandled();
     float x = e->x, y = e->y;
-    // Инспектор: DOWN на строке поля = начать скраб (коммит на mouse-up).
+    // Инспектор: DOWN на строке поля = начать скраб через бинд (коммит на UP).
     if (scene && p->selected && sc_alive(scene, p->selected)) {
         for (int i = 0; i < PN_NF; i++) {
             if (x >= p->frows[i].x && x < p->frows[i].x + p->frows[i].w &&
                 y >= p->frows[i].y && y < p->frows[i].y + p->frows[i].h) {
-                p->scrubBase = sc_get(scene, p->selected);
+                rebind(p, scene, p->selected);
                 p->scrubField = p->frows[i].field;
-                p->scrubVal = ui_field_get_f(&p->scrubBase, &transform_fields[p->scrubField]);
+                p->scrubWas = ui_attr_f_get(&p->binds[p->scrubField]);
                 p->scrubX0 = x;
-                return 1;
+                return ui_handled(0, 1); // тихо + захват (грязь будет на MOVE)
             }
         }
     }
@@ -161,30 +192,31 @@ int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         if (t != p->tool) {
             p->tool = t;
             p->dirty = 1;
-            return 1;
+            return ui_handled(1, 0);
         }
-        return 0;
+        return ui_unhandled();
     }
     // Менюбар: File|Edit|View — заглушки с flash (команды позже).
     if (y >= 0 && y < 26 && x >= 8 && x < 200) {
         const char *m = x < 70 ? "File" : (x < 135 ? "Edit" : "View");
         snprintf(p->flash, sizeof p->flash, "%s (stub)", m);
         p->dirty = 1;
-        return 1;
+        return ui_handled(1, 0);
     }
-    // Иерархия: строки.
+    // Иерархия: строки (смена selection перепривязывает инспектор).
     for (int i = 0; i < p->nrows; i++) {
         if (x >= p->rows[i].x && x < p->rows[i].x + p->rows[i].w && y >= p->rows[i].y &&
             y < p->rows[i].y + p->rows[i].h) {
             if (p->selected != p->rows[i].id) {
                 p->selected = p->rows[i].id;
+                rebind(p, scene, p->selected);
                 p->dirty = 1;
-                return 1;
+                return ui_handled(1, 0);
             }
-            return 0;
+            return ui_unhandled();
         }
     }
-    return 0;
+    return ui_unhandled();
 }
 
 int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **out) {
@@ -272,14 +304,13 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     }
     snprintf(st, sizeof st, "sel: %s | tool: %d", sel, p->tool);
     ui_text_quad(text, 260, (float)(h - 22), st, p->theme.dim);
-    // Инспектор: имя + 9 значений через дескрипторы (двусторонняя связь).
+    // Инспектор: имя + 9 значений через ЖИВЫЕ бинды (TAttribute, не копии).
     if (scene && p->selected && sc_alive(scene, p->selected)) {
         ui_text_quad(text, (float)(w - 246), 62, sel, p->theme.txt);
-        ScTransform tr = sc_get(scene, p->selected);
         for (int i = 0; i < PN_NF; i++) {
             char vb[64];
             snprintf(vb, sizeof vb, "%s %.2f", transform_fields[i].name,
-                     ui_field_get_f(&tr, &transform_fields[i]));
+                     ui_attr_f_get(&p->binds[i]));
             ui_text_quad(text, p->frows[i].x + 6, p->frows[i].y + 5, vb, p->theme.txt);
         }
     } else {
