@@ -11,6 +11,8 @@
 #include "ui/ui_reflect.h" // X-макросы: дескрипторы из одного списка
 #include "ui/ui_text.h" // Фаза 2: атлас глифов + quad/flush
 #include "ui/ui_panels.h" // Фаза 3: меню/тулбар/иерархия/статус
+#include "ui/ui_gizmo.h" // Гизмо: стрелки RGB=XYZ поверх вьюпорта
+#include "ui/ui_undo.h" // Фаза 5: стек команд (selftest гизмо-коммита)
 #include "ui/ui_undo.h" // Фаза 5: стек команд
 #include "ui/ui_theme.h" // Фаза 5: одна тема + hot-reload
 #include "rtarget.h"
@@ -24,7 +26,9 @@
 static EngUi *g_ui = 0;
 static RenderCore *g_vec = 0;
 static UiPanels *g_panels = 0;
+static UiGizmo *g_gizmo = 0;
 static ScWorld g_scene;
+static RcView g_view; // камера кадра (гизмо проецирует тем же PV что ядра)
 static double g_mx = 0, g_my = 0;
 static int g_capture = 0; // захват мыши модальным виджетом (FReply::CaptureMouse)
 
@@ -103,18 +107,54 @@ static void soup_pose(const ScTransform *tr) {
 static void ui_push_dirty(void) {
     // UiPrim и RcVecShape совпадают полями 1:1 (kind/a,b,c,d/rgba) —
     // копируем явно (strict aliasing не испытываем).
+    // Порядок как SViewport::OnPaint: панели, затем гизмо поверх.
     const UiFrame *fr = 0;
-    if (!ui_panels_build(g_panels, &g_scene, W, H, &fr)) return; // чисто
     RcVecShape shapes[UI_MAX_PRIMS];
-    for (int i = 0; i < fr->n; i++) {
-        shapes[i].kind = fr->prims[i].kind;
-        shapes[i].a = fr->prims[i].a;
-        shapes[i].b = fr->prims[i].b;
-        shapes[i].c = fr->prims[i].c;
-        shapes[i].d = fr->prims[i].d;
-        memcpy(shapes[i].rgba, fr->prims[i].rgba, sizeof shapes[i].rgba);
+    int n = 0;
+    if (g_gizmo) { // гизмо следует за selection/tool панелей
+        ui_gizmo_select(g_gizmo, ui_panels_selected(g_panels));
+        ui_gizmo_tool(g_gizmo, ui_panels_tool(g_panels));
     }
-    if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, fr->n);
+    ui_panels_build(g_panels, &g_scene, W, H, &fr); // зовём только когда грязно
+    if (fr) {
+        for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
+            shapes[n].kind = fr->prims[i].kind;
+            shapes[n].a = fr->prims[i].a;
+            shapes[n].b = fr->prims[i].b;
+            shapes[n].c = fr->prims[i].c;
+            shapes[n].d = fr->prims[i].d;
+            memcpy(shapes[n].rgba, fr->prims[i].rgba, sizeof shapes[n].rgba);
+        }
+    }
+    if (g_gizmo) {
+        UiPrim gp[16];
+        int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, W, H, gp, 16);
+        for (int i = 0; i < ng && n < UI_MAX_PRIMS; i++, n++) {
+            shapes[n].kind = gp[i].kind;
+            shapes[n].a = gp[i].a;
+            shapes[n].b = gp[i].b;
+            shapes[n].c = gp[i].c;
+            shapes[n].d = gp[i].d;
+            memcpy(shapes[n].rgba, gp[i].rgba, sizeof shapes[n].rgba);
+        }
+    }
+    if (!n) return;
+    if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+}
+
+static void route_event(const UiEvent *e) {
+    // Приоритет как UE/Roblox: гизмо > панели (ручка первее строки под ней).
+    // Модальные игнорируют чужие события сами (возврат unhandled).
+    UiReply r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, W, H,
+                               ui_panels_undo(g_panels), e);
+    if (r.handled) {
+        g_capture = r.capture;
+        if (r.dirty) ui_push_dirty();
+        return;
+    }
+    r = ui_panels_event(g_panels, &g_scene, e);
+    if (r.handled) g_capture = r.capture;
+    if (r.dirty) ui_push_dirty();
 }
 
 static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
@@ -128,18 +168,10 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
         e.kind = UI_EV_DOWN;
-        {
-        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
-        if (r.handled) g_capture = r.capture;
-        if (r.dirty) ui_push_dirty();
-    }
+        route_event(&e);
     } else if (action == GLFW_RELEASE) {
         e.kind = UI_EV_UP;
-        {
-        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
-        if (r.handled) g_capture = r.capture;
-        if (r.dirty) ui_push_dirty();
-    }
+        route_event(&e);
     }
 }
 
@@ -147,17 +179,13 @@ static void on_move(GLFWwindow *win, double x, double y) {
     (void)win;
     g_mx = x;
     g_my = y;
-    // Модальный скраб инспектора едет на MOVE (вне скраба — дешёвый no-op).
+    // Модальный скраб/драг едет на MOVE (вне захвата — дешёвый no-op у обоих).
     UiEvent e;
     memset(&e, 0, sizeof e);
     e.kind = UI_EV_MOVE;
     e.x = (float)x;
     e.y = (float)y;
-    {
-        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
-        if (r.handled) g_capture = r.capture;
-        if (r.dirty) ui_push_dirty();
-    }
+    route_event(&e);
 }
 
 static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
@@ -172,11 +200,7 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
         e.kind = UI_EV_KEY;
         e.key = key; // GLFW_KEY_Q.. совпадают с ASCII
         e.mods = mods; // 1 shift 2 ctrl 4 alt (для Ctrl+Z/Y)
-        {
-        UiReply r = ui_panels_event(g_panels, &g_scene, &e);
-        if (r.handled) g_capture = r.capture;
-        if (r.dirty) ui_push_dirty();
-    }
+        route_event(&e);
     }
 }
 
@@ -334,6 +358,104 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
         }
+        // Гизмо без окна: проекция + хит середины X-стрелки + drag + undo.
+        {
+            ScWorld gw;
+            sc_init(&gw);
+            Entity ge = sc_spawn(&gw, "G");
+            ScTransform gt;
+            memset(&gt, 0, sizeof gt);
+            gt.pos.x = -24.0f;
+            gt.pos.y = 56.0f;
+            gt.pos.z = -16.0f;
+            gt.scale.x = gt.scale.y = gt.scale.z = 1.0f;
+            sc_set(&gw, ge, &gt);
+            RcView gv;
+            memset(&gv, 0, sizeof gv);
+            {
+                double a = -2.2;
+                gv.camPos.x = -24.0f + 30.0f * (float)cos(a);
+                gv.camPos.y = 60.0f;
+                gv.camPos.z = -16.0f + 30.0f * (float)sin(a);
+                float dx = -24.0f - gv.camPos.x, dy = 54.0f - gv.camPos.y,
+                      dz = -16.0f - gv.camPos.z;
+                float dl = sqrtf(dx * dx + dy * dy + dz * dz);
+                gv.yaw = (float)atan2(dz, dx);
+                gv.pitch = (float)asin(dy / dl);
+            }
+            gv.fov = 1.6f;
+            gv.resW = 1280;
+            gv.resH = 720;
+            UiGizmo *gz = ui_gizmo_create();
+            UiUndo gu;
+            ui_undo_reset(&gu);
+            ui_gizmo_tool(gz, 1);
+            ui_gizmo_select(gz, ge);
+            float ox, oy, tx, ty;
+            float oo[3] = {-24.0f, 56.0f, -16.0f};
+            float tt[3] = {-16.0f, 56.0f, -16.0f};
+            if (!ui_gizmo_project(&gv, 1280, 720, oo, &ox, &oy) ||
+                !ui_gizmo_project(&gv, 1280, 720, tt, &tx, &ty)) {
+                printf("SELF FAIL: gizmo project offscreen\n");
+                bad = 1;
+            }
+            UiEvent ge2;
+            memset(&ge2, 0, sizeof ge2);
+            ge2.kind = UI_EV_DOWN;
+            ge2.x = (ox + tx) * 0.5f;
+            ge2.y = (oy + ty) * 0.5f;
+            UiReply gr = ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+            if (!gr.handled || !gr.capture) {
+                printf("SELF FAIL: gizmo pick miss\n");
+                bad = 1;
+            }
+            // Тянуть вдоль оси: +60px по направлению стрелки.
+            {
+                float dx = tx - ox, dy = ty - oy;
+                float dl = sqrtf(dx * dx + dy * dy);
+                dx /= dl;
+                dy /= dl;
+                memset(&ge2, 0, sizeof ge2);
+                ge2.kind = UI_EV_MOVE;
+                ge2.x = (ox + tx) * 0.5f + dx * 60.0f;
+                ge2.y = (oy + ty) * 0.5f + dy * 60.0f;
+                gr = ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+                if (!gr.handled) {
+                    printf("SELF FAIL: gizmo drag\n");
+                    bad = 1;
+                }
+            }
+            memset(&ge2, 0, sizeof ge2);
+            ge2.kind = UI_EV_UP;
+            gr = ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+            if (!gr.handled || gr.capture) {
+                printf("SELF FAIL: gizmo drop\n");
+                bad = 1;
+            }
+            {
+                ScTransform chk = sc_get(&gw, ge);
+                // 60px вдоль 8-мировой стрелки: ожидание грубовато — лишь знак и порядок.
+                if (chk.pos.x <= -24.0f || chk.pos.x > -16.0f) {
+                    printf("SELF FAIL: gizmo moved x=%f\n", chk.pos.x);
+                    bad = 1;
+                }
+                UiCmd gc;
+                if (!ui_undo_undo(&gu, &gc) || gc.before != -24.0f) {
+                    printf("SELF FAIL: gizmo undo commit\n");
+                    bad = 1;
+                }
+            }
+            // Мимо стрелков: пустая точка (10,10) — unhandled.
+            memset(&ge2, 0, sizeof ge2);
+            ge2.kind = UI_EV_DOWN;
+            ge2.x = 10;
+            ge2.y = 10;
+            if (ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2).handled) {
+                printf("SELF FAIL: gizmo false hit\n");
+                bad = 1;
+            }
+            ui_gizmo_destroy(gz);
+        }
         // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.
         if (TRANSFORM_NFIELDS != 9) {
             printf("SELF FAIL: nfields=%d\n", TRANSFORM_NFIELDS);
@@ -458,6 +580,14 @@ int main(int argc, char **argv) {
         se.y = 100; // строка Hero (64 Scene, 88 Hero, 112 Sword)
         if (ui_panels_event(g_panels, &g_scene, &se).dirty) ui_push_dirty();
     }
+    // Дефолтный tool: move (стрелки видны сразу; W/E/R переключают).
+    {
+        UiEvent ke;
+        memset(&ke, 0, sizeof ke);
+        ke.kind = UI_EV_KEY;
+        ke.key = 'W';
+        if (ui_panels_event(g_panels, &g_scene, &ke).dirty) ui_push_dirty();
+    }
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
     glfwSetKeyCallback(win, on_key);
@@ -486,6 +616,15 @@ int main(int argc, char **argv) {
     v.fog = 0.387f;
     v.shadowOn = 1.0f;
     v.maxSteps = 100.0f;
+    g_view = v; // гизмо проецирует той же камерой
+    g_gizmo = ui_gizmo_create();
+    if (!g_gizmo) {
+        printf("ui_test: gizmo FAIL\n");
+        return 1;
+    }
+    ui_gizmo_select(g_gizmo, ui_panels_selected(g_panels));
+    ui_gizmo_tool(g_gizmo, ui_panels_tool(g_panels));
+    ui_push_dirty(); // первая заливка СО стрелками (гизмо моложе первого push)
     printf("ui_test: RUN (click rects, Esc/close to quit)\n");
     // Доказательство картинкой (как VOX_SHOT): UI_SHOT=shot.ppm UI_SHOT_AT=60.
     const char *shot = getenv("UI_SHOT");
@@ -500,8 +639,8 @@ int main(int argc, char **argv) {
     char fpsBuf[64] = "ui_test";
     while (!glfwWindowShouldClose(win)) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
-        // Инспектор тронул трансформ — перекачать суп из ECS (двусторонняя связь).
-        if (ui_panels_posed(g_panels)) {
+        // Инспектор/гизмо тронули трансформ — перекачать суп из ECS.
+        if (ui_panels_posed(g_panels) || (g_gizmo && ui_gizmo_posed(g_gizmo))) {
             unsigned sel = ui_panels_selected(g_panels);
             if (sel && sc_alive(&g_scene, sel)) {
                 ScTransform t = sc_get(&g_scene, sel);
@@ -553,6 +692,7 @@ int main(int argc, char **argv) {
         if (++frames == 120) printf("ui_test: 120 frames OK (seam alive)\n");
     }
     printf("ui_test: frames=%d DONE\n", frames);
+    ui_gizmo_destroy(g_gizmo);
     ui_panels_destroy(g_panels);
     ui_text_destroy(text);
     eng_ui_destroy(g_ui);

@@ -322,6 +322,10 @@ unsigned ui_panels_selected(const UiPanels *p) {
     return p ? p->selected : 0;
 }
 
+UiUndo *ui_panels_undo(UiPanels *p) {
+    return p ? &p->undo : 0;
+}
+
 // Трансформ трогали скрабом (тесту надо перекачать суп). Сбрасывается чтением.
 int ui_panels_posed(UiPanels *p) {
     if (!p) return 0;

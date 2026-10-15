@@ -54,6 +54,7 @@ add_library(engine_shared SHARED
   ui/ui_panels.c
   ui/ui_theme.c
   ui/ui_undo.c
+  ui/ui_gizmo.c
   ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.1.0 SOVERSION 0)

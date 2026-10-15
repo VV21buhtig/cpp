@@ -8,6 +8,8 @@
 #include "ui.h"
 #include "ui_bind.h" // UiReply шва
 #include "ui_text.h"
+#include "ui_undo.h" // общий стек (коммит гизмо идёт туда же)
+#include "ui_undo.h"
 
 typedef struct UiPanels UiPanels;
 
@@ -22,6 +24,8 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h);
 
 unsigned ui_panels_selected(const UiPanels *p);
 int ui_panels_tool(const UiPanels *p); // 0 select 1 move 2 rotate 3 scale
+// Общий стек undo (туда же коммитит гизмо).
+UiUndo *ui_panels_undo(UiPanels *p);
 // Трансформ трогали скрабом (тесту надо перекачать суп). Сбрасывается чтением.
 int ui_panels_posed(UiPanels *p);
 
