@@ -8,7 +8,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #1e1e1e; color: #d4d4d4; font: 13px system-ui, sans-serif;
          display: flex; height: 100vh; overflow: hidden; }
-  #side { width: 230px; background: #252526; padding: 10px; display: flex;
+  #side { width: 260px; background: #252526; padding: 10px; display: flex;
           flex-direction: column; gap: 8px; border-right: 1px solid #2a2a2e; }
   #side h3 { color: #888; font-size: 11px; letter-spacing: 1px; }
   #tree { flex: 1; overflow: auto; }
@@ -57,6 +57,8 @@
     <div id="bar">
       <button id="play">Play</button>
       <button id="shtoggle">Shaders</button>
+      <label title="Прямой вывод: движок рисует в своё окно (как Roblox/UE5), без копии через IPC/canvas. Только GL.">
+        <input type="checkbox" id="native"> native-view</label>
       <span id="fps">fps -</span>
     </div>
     <div id="stage"><canvas id="cv" width="1280" height="720"></canvas></div>

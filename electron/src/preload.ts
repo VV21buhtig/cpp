@@ -6,8 +6,10 @@ export interface EngBridge {
   frame(): Promise<Buffer>;
   frames(): Promise<number>;
   play(on: boolean): Promise<void>;
-  switch(domain: string, backend: string): Promise<boolean>;
+  switch(domain: string, backend: string): Promise<{ ok: boolean; error: string }>;
+  native(on: boolean): Promise<boolean>;
   resize(w: number, h: number): Promise<[number, number]>;
+  orbit(dA: number, dH: number, dZ: number): Promise<void>;
   ack(): void;
   pick(x: number, y: number): Promise<number>;
   shaders(): Promise<string[]>;
@@ -29,7 +31,9 @@ const api: EngBridge = {
   frames: () => ipcRenderer.invoke('frames'),
   play: (on: boolean) => ipcRenderer.invoke('play', on),
   switch: (domain: string, backend: string) => ipcRenderer.invoke('switch', domain, backend),
+  native: (on: boolean) => ipcRenderer.invoke('native', on),
   resize: (w: number, h: number) => ipcRenderer.invoke('resize', w, h),
+  orbit: (dA: number, dH: number, dZ: number) => ipcRenderer.invoke('orbit', dA, dH, dZ),
   ack: () => ipcRenderer.send('frame-ack'),
   pick: (x: number, y: number) => ipcRenderer.invoke('pick', x, y),
   shaders: () => ipcRenderer.invoke('shaders'),

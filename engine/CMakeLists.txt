@@ -146,3 +146,8 @@ target_compile_options(depth_test PRIVATE -Wall -Wextra)
 target_include_directories(view_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(view_test PRIVATE engine_shared m)
 target_compile_options(view_test PRIVATE -Wall -Wextra)
+# Прямой вьювер (схема Roblox/UE5): отдельный процесс, своё окно, GPU->GPU.
+add_executable(direct_view direct_view.c)
+target_include_directories(direct_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(direct_view PRIVATE engine_shared m)
+target_compile_options(direct_view PRIVATE -Wall -Wextra)

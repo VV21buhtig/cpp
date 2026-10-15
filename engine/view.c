@@ -14,6 +14,7 @@
 #include "vox/vox_chunk.h"
 #include "vox/vox_gen.h"
 #include "vox_feed.h"
+#include "vfs.h"
 #include "vec.h"
 #include "mat4.h"
 
@@ -29,6 +30,16 @@ struct EngView {
     int frame;
     int w, h; // текущий размер кадра (динамика через resize)
     uint8_t *stage; // RGBA-стейджинг чтения (w*h*4, realloc на resize)
+    // Орбита-камера: статична по умолчанию (автовращения нет — крутит юзер).
+    // orbA — азимут, orbH — высота камеры, orbZoom-множитель — зум (0.35..3).
+    float orbA, orbH, orbZoom;
+    // Нативный вьюпорт-фолбэк (ENG_NATIVE_VIEW=1, только GL): движок рисует
+    // в СВОЁ видимое окно рядом с Electron (как монолит), фронт — только меню.
+    int native;
+    // Drag-орбита нативного окна (свой процесс — колбэков наружу нет).
+    double dragX, dragY;
+    int dragOn;
+    unsigned presentProg, presentVao;
     // воксель: мир + подача
     VoxChunk *world;
     int fed[VW_GW * VW_GW];
@@ -68,6 +79,17 @@ static int vw_boot(EngView *vw, int w, int h) {
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     GLFWwindow *win = glfwCreateWindow(w, h, "eng-view", 0, 0);
     if (!win) return 0;
+    // Фолбэк-монолит: видимое окно движка (позиция ENG_VIEW_POS="X,Y").
+    vw->native = backend == 2 && getenv("ENG_NATIVE_VIEW") && getenv("ENG_NATIVE_VIEW")[0] &&
+                 strcmp(getenv("ENG_NATIVE_VIEW"), "0");
+    if (vw->native) {
+        // Рядом с окном Electron (1600px): движок справа, фронт слева.
+        const char *pos = getenv("ENG_VIEW_POS");
+        int px = 1610, py = 30;
+        if (pos) sscanf(pos, "%d,%d", &px, &py);
+        glfwSetWindowPos(win, px, py);
+        glfwShowWindow(win);
+    }
     vw->win = win;
     vw->rc = rc_create_by(domain, (unsigned)backend);
     if (!vw->rc || !vw->rc->init(vw->rc, win)) {
@@ -113,6 +135,21 @@ static int vw_boot(EngView *vw, int w, int h) {
     }
     vw->w = w;
     vw->h = h;
+    // Камера по умолчанию: статичный ракурс (автовращения нет).
+    // orbA подобран под куб (видно 3 грани), высота/зум — нейтраль.
+    vw->orbA = -2.2f;
+    vw->orbH = 60.0f;
+    vw->orbZoom = 1.0f;
+    // Презент-программа нативного окна (только native-режим, пути через VFS).
+    if (vw->native) {
+        char vs[256], fs[256];
+        if (!vfs_resolve("shaders/blit/blit.vert", vs, sizeof vs) ||
+            !vfs_resolve("shaders/blit/blit.frag", fs, sizeof fs))
+            return 0;
+        vw->presentProg = rhi_gl_prog(vs, fs);
+        vw->presentVao = rhi_gl_empty_vao();
+        if (!vw->presentProg || !vw->presentVao) return 0;
+    }
     // Стейджинг чтения RGBA (одно чтение + memcpy-флип, не 720 синхронов).
     free(vw->stage);
     vw->stage = (uint8_t *)malloc((size_t)w * h * 4);
@@ -314,10 +351,11 @@ static void vw_view(EngView *vw, RcView *v) {
         orbitR = 30.0f;
         orbitY = 60.0f;
     }
-    double a = vw->frame * 0.004;
-    v->camPos.x = lookX + orbitR * (float)cos(a);
-    v->camPos.y = orbitY;
-    v->camPos.z = lookZ + orbitR * (float)sin(a);
+    double a = (double)vw->orbA; // статика: кадр на угол не влияет (крутит юзер)
+    float rEff = orbitR * vw->orbZoom;
+    v->camPos.x = lookX + rEff * (float)cos(a);
+    v->camPos.y = vw->orbH;
+    v->camPos.z = lookZ + rEff * (float)sin(a);
     {
         float dx = lookX - v->camPos.x, dy = lookY - v->camPos.y, dz = lookZ - v->camPos.z;
         float dl = sqrtf(dx * dx + dy * dy + dz * dz);
@@ -363,6 +401,27 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
                        (size_t)vw->w * 4);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             ok = 1;
+            // Нативный монолит: та же цель — в своё окно (фронт только меню).
+            if (vw->native && vw->presentProg && vw->presentVao) {
+                GLFWwindow *nwin = (GLFWwindow *)vw->win;
+                // Drag тянет камеру (клик без протяжки ничего не делает —
+                // пикинг живёт во фронте, тут только орбита).
+                if (glfwGetMouseButton(nwin, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                    double cx, cy;
+                    glfwGetCursorPos(nwin, &cx, &cy);
+                    if (vw->dragOn)
+                        eng_view_orbit(vw, (float)(-(cx - vw->dragX) * 0.008),
+                                       (float)(-(cy - vw->dragY) * 0.15), 0.0f);
+                    vw->dragX = cx;
+                    vw->dragY = cy;
+                    vw->dragOn = 1;
+                } else {
+                    vw->dragOn = 0;
+                }
+                comp_present_gl(vw->presentProg, vw->presentVao, &vw->target, vw->w, vw->h);
+                glfwSwapBuffers(nwin);
+                glfwPollEvents();
+            }
         }
     } else if (vw->rc->frame_cpu) {
         ok = vw->rc->frame_cpu(vw->rc, &v, rgba, vw->w, vw->h);
@@ -459,6 +518,10 @@ int eng_view_resize(EngView *vw, int w, int h) {
         comp_target_gl_free(&vw->target);
         vw->hasTarget = 0;
     }
+    // Презент-программа привязана к контексту окна: снести до него.
+    if (vw->presentProg) glDeleteProgram(vw->presentProg);
+    if (vw->presentVao) glDeleteVertexArrays(1, &vw->presentVao);
+    vw->presentProg = vw->presentVao = 0;
     if (vw->win) {
         glfwDestroyWindow((GLFWwindow *)vw->win);
         vw->win = 0;
@@ -469,7 +532,35 @@ int eng_view_resize(EngView *vw, int w, int h) {
     vw->fedLeft = VW_GW * VW_GW;
     vw->fedCur = 0;
     vw->sdfFed = vw->vecFed = vw->meshFed = 0;
-    return vw_boot(vw, w, h);
+    // Камера переживает ресайз (иначе каждый ресайз щёлкал бы ракурсом).
+    float oA = vw->orbA, oH = vw->orbH, oZ = vw->orbZoom;
+    if (!vw_boot(vw, w, h)) return 0;
+    vw->orbA = oA;
+    vw->orbH = oH;
+    vw->orbZoom = oZ;
+    return 1;
+}
+
+// Орбита-камера (drag/zoom из клиента): dA — азимут, dH — высота,
+// dZ — множитель зума (>1 дальше). Клаampы редакторные, не физические.
+void eng_view_orbit(EngView *vw, float dA, float dH, float dZ) {
+    if (!vw) return;
+    vw->orbA += dA;
+    vw->orbH += dH;
+    if (vw->orbH < 8.0f) vw->orbH = 8.0f;
+    if (vw->orbH > 160.0f) vw->orbH = 160.0f;
+    if (dZ != 0.0f) {
+        vw->orbZoom *= dZ;
+        if (vw->orbZoom < 0.35f) vw->orbZoom = 0.35f;
+        if (vw->orbZoom > 3.0f) vw->orbZoom = 3.0f;
+    }
+}
+
+// Нативное окно закрыли крестиком (1 да). Для direct-процесса (свой цикл).
+int eng_view_closed(EngView *vw) {
+    if (!vw || !vw->win) return 1;
+    if (!vw->native) return 0;
+    return glfwWindowShouldClose((GLFWwindow *)vw->win);
 }
 
 void eng_view_close(EngView *vw) {
@@ -479,6 +570,10 @@ void eng_view_close(EngView *vw) {
         rc_destroy(vw->rc);
     }
     if (vw->hasTarget) comp_target_gl_free(&vw->target);
+    // Презент-программа умирает раньше контекста (окно ещё живо).
+    if (vw->presentProg) glDeleteProgram(vw->presentProg);
+    if (vw->presentVao) glDeleteVertexArrays(1, &vw->presentVao);
+    vw->presentProg = vw->presentVao = 0;
     if (vw->win) glfwDestroyWindow((GLFWwindow *)vw->win);
     free(vw->world);
     free(vw->json);

@@ -23,7 +23,7 @@ static int g_cube(float *v, float cx, float cy, float cz, float h, const float *
                    {1, 5, 6, 2}, {4, 5, 1, 0}, {3, 2, 6, 7}};
     float NN[6][3] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}};
     int n = 0;
-    int idx[6] = {0, 1, 2, 0, 2, 3};
+    int idx[6] = {0, 2, 1, 0, 3, 2}; // обратный порядок: наружу (было наизнанку)
     for (int f = 0; f < 6; f++)
         for (int k = 0; k < 6; k++) {
             int q = F[f][idx[k]];

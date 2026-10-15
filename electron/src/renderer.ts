@@ -130,16 +130,68 @@ playBtn.onclick = async (): Promise<void> => {
 };
 
 async function reswitch(): Promise<void> {
-  const ok = await window.eng.switch(domSel.value, beSel.value);
-  selectedId = 0;
-  stat.textContent = ok ? `core: ${domSel.value} / ${beSel.value}` : 'NO CORE for domain x backend';
-  void refreshTree();
+  const statEl = stat;
+  statEl.textContent = 'loading…';
+  domSel.disabled = true;
+  beSel.disabled = true;
+  try {
+    const r = await window.eng.switch(domSel.value, beSel.value);
+    selectedId = 0;
+    // refreshTree затирает stat своим счётчиком — поэтому сначала дерево,
+    // потом поверх дописываем итог свитча (было: индикация жила 0мс).
+    await refreshTree();
+    const tail = statEl.textContent ? ` | ${statEl.textContent}` : '';
+    statEl.textContent = r.ok
+      ? `core: ${domSel.value} / ${beSel.value}${tail}`
+      : `SWITCH FAILED: ${r.error}${tail}`;
+  } catch (err) {
+    statEl.textContent = 'SWITCH ERROR: ' + String(err);
+  } finally {
+    domSel.disabled = false;
+    beSel.disabled = false;
+  }
 }
 domSel.onchange = () => void reswitch();
 beSel.onchange = () => void reswitch();
+(document.getElementById('native') as HTMLInputElement).onchange = async (ev: Event): Promise<void> => {
+  const on = (ev.target as HTMLInputElement).checked;
+  stat.textContent = on ? 'native-view: opening…' : 'canvas-view: opening…';
+  const ok = await window.eng.native(on);
+  await refreshTree();
+  stat.textContent += on
+    ? (ok ? ' | DIRECT (no copy)' : ' | NATIVE FAILED (GL only?)')
+    : ' | canvas (copy path)';
+};
 
-// Пикинг: клик по канвасу -> id -> подсветка в дереве (v1: MESH-домен).
+// Крутилка вьюпорта: drag — орбита на каждую сторону, wheel — зум.
+// Автовращения нет (камера статична, пока не потянешь).
+// Клик без протяжки (< 4px) — по-прежнему пикинг (v1: MESH-домен).
+let dragOn = false, dragX = 0, dragY = 0, dragMoved = 0;
+cv.onmousedown = (ev: MouseEvent): void => {
+  dragOn = true;
+  dragX = ev.clientX;
+  dragY = ev.clientY;
+  dragMoved = 0;
+};
+window.onmousemove = (ev: MouseEvent): void => {
+  if (!dragOn) return;
+  const dx = ev.clientX - dragX, dy = ev.clientY - dragY;
+  dragX = ev.clientX;
+  dragY = ev.clientY;
+  dragMoved += Math.abs(dx) + Math.abs(dy);
+  // 0.008 рад/px — полный оборот за ~800px протяжки.
+  void window.eng.orbit(-dx * 0.008, -dy * 0.15, 0);
+};
+window.onmouseup = (): void => {
+  dragOn = false;
+};
+cv.onwheel = (ev: WheelEvent): void => {
+  ev.preventDefault();
+  // Колесо от себя — ближе (множитель < 1), к себе — дальше.
+  void window.eng.orbit(0, 0, ev.deltaY > 0 ? 1.1 : 1 / 1.1);
+};
 cv.onclick = async (ev: MouseEvent): Promise<void> => {
+  if (dragMoved > 4) return; // это был drag, не клик
   const r = cv.getBoundingClientRect();
   const x = Math.floor(((ev.clientX - r.left) / r.width) * cv.width);
   const y = Math.floor(((ev.clientY - r.top) / r.height) * cv.height);

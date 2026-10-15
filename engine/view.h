@@ -43,6 +43,11 @@ int eng_view_shader(EngView *vw, const char *id, const char *code, char *log, in
 // или всё окно+свопчейн (VK/WebGPU — экстент там от окна). Подача мира
 // дотягивается за пару кадров (как при смене бэкенда). 1 ок, 0 отказ.
 // Диапазон VW_MIN..VW_MAX, остальное — clamp (не отказ).
+// Орбита-камера: drag/zoom клиента (крутилки вьюпорта). Статики по умолчанию,
+// автовращения нет. Не сцена и не физика — только положение глаза.
+void eng_view_orbit(EngView *vw, float dA, float dH, float dZ);
+// Нативное окно закрыли крестиком (1 да). Для direct-процесса (свой цикл).
+int eng_view_closed(EngView *vw);
 int eng_view_resize(EngView *vw, int w, int h);
 void eng_view_close(EngView *vw);
 
