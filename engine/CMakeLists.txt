@@ -51,6 +51,9 @@ add_library(engine_shared SHARED
   sky_lut.c asset.c scene.c project.c view.c vfs.c third-party/glad/gl.c
   ui/ui_core.c
   ui/ui_text.c
+  ui/ui_panels.c
+  ui/ui_theme.c
+  ui/ui_undo.c
   ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.1.0 SOVERSION 0)

@@ -11,6 +11,8 @@
 #include "ui/ui_reflect.h" // X-макросы: дескрипторы из одного списка
 #include "ui/ui_text.h" // Фаза 2: атлас глифов + quad/flush
 #include "ui/ui_panels.h" // Фаза 3: меню/тулбар/иерархия/статус
+#include "ui/ui_undo.h" // Фаза 5: стек команд
+#include "ui/ui_theme.h" // Фаза 5: одна тема + hot-reload
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "rhi_gl.h"
@@ -150,11 +152,13 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     (void)scancode;
     (void)mods;
     if (action != GLFW_PRESS) return;
-    if (key == GLFW_KEY_Q || key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_R) {
+    if (key == GLFW_KEY_Q || key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_R ||
+        key == GLFW_KEY_Z || key == GLFW_KEY_Y) {
         UiEvent e;
         memset(&e, 0, sizeof e);
         e.kind = UI_EV_KEY;
-        e.key = key; // GLFW_KEY_Q/W/E/R = ASCII Q/W/E/R
+        e.key = key; // GLFW_KEY_Q.. совпадают с ASCII
+        e.mods = mods; // 1 shift 2 ctrl 4 alt (для Ctrl+Z/Y)
         if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
     }
 }
@@ -254,8 +258,7 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: posed flag\n");
                 bad = 1;
             }
-            // TRS-перекачка: pos.x=+10 двигает первый вершинный x ровно на 10.
-            cube_make();
+            // TRS-перекачка: pos.x=+10 двигает первый вершинный x ровно на 10.            cube_make();
             {
                 ScTransform tp;
                 memset(&tp, 0, sizeof tp);
@@ -269,6 +272,50 @@ int main(int argc, char **argv) {
                 }
             }
             ui_panels_destroy(pn);
+        }
+        // Undo: push/undo/redo чистой логики + тема-фолбэк без файла.
+        {
+            UiUndo u;
+            ui_undo_reset(&u);
+            UiCmd c;
+            if (ui_undo_undo(&u, &c)) {
+                printf("SELF FAIL: undo empty\n");
+                bad = 1;
+            }
+            if (!ui_undo_push(&u, 5, 2, 1.0f, 2.0f)) {
+                printf("SELF FAIL: push\n");
+                bad = 1;
+            }
+            if (ui_undo_push(&u, 5, 2, 1.0f, 1.0f)) {
+                printf("SELF FAIL: push same must ignore\n");
+                bad = 1;
+            }
+            if (!ui_undo_undo(&u, &c) || c.before != 1.0f || c.after != 2.0f) {
+                printf("SELF FAIL: undo value\n");
+                bad = 1;
+            }
+            if (!ui_undo_redo(&u, &c) || c.after != 2.0f) {
+                printf("SELF FAIL: redo value\n");
+                bad = 1;
+            }
+            if (!ui_undo_undo(&u, &c)) {
+                printf("SELF FAIL: undo2\n");
+                bad = 1;
+            }
+            if (!ui_undo_push(&u, 5, 3, 0.0f, 9.0f) || ui_undo_redo(&u, &c)) {
+                printf("SELF FAIL: push must kill redo\n");
+                bad = 1;
+            }
+            UiTheme th;
+            ui_theme_dark(&th);
+            if (ui_theme_load(&th, "/nonexistent/theme.json")) {
+                printf("SELF FAIL: load missing\n");
+                bad = 1;
+            }
+            if (th.bg[0] < 0.15f) {
+                printf("SELF FAIL: dark default\n");
+                bad = 1;
+            }
         }
         // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.
         if (TRANSFORM_NFIELDS != 9) {

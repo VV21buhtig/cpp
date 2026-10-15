@@ -28,7 +28,8 @@ typedef struct {
     int kind; // UI_EV_* (мышь в пикселях окна, y вниз от верха)
     float x, y;
     int button; // 0 левая
-    int key;
+    int key; // ASCII (Q/W/E/R/Z/Y) или код
+    int mods; // биты как в GLFW: 1 shift, 2 ctrl, 4 alt
     float value; // wheel-дельта
 } UiEvent;
 

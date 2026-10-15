@@ -6,6 +6,8 @@
 #include <string.h>
 #include "ui_panels.h"
 #include "ui_reflect.h" // дескрипторы Transform: один список на всех
+#include "ui_theme.h" // одна тема + hot-reload по mtime
+#include "ui_undo.h" // стек команд float-полей
 
 #define PN_MAXROWS 64
 
@@ -36,20 +38,21 @@ struct UiPanels {
     ScTransform scrubBase; // трансформ на начало скраба (коммит идёт в сцену)
     float scrubVal;
     float scrubX0;
+    UiTheme theme; // одна тема (hot-reload по mtime)
+    UiUndo undo; // стек команд (Фаза 5)
 };
 
-static const float C_BG[4] = {0.16f, 0.17f, 0.19f, 1.0f};
-static const float C_BAR[4] = {0.23f, 0.24f, 0.27f, 1.0f};
-static const float C_SEL[4] = {0.10f, 0.36f, 0.60f, 1.0f};
-static const float C_TOOL[4] = {0.85f, 0.50f, 0.10f, 1.0f};
-static const float C_TXT[4] = {0.85f, 0.85f, 0.87f, 1.0f};
-static const float C_DIM[4] = {0.55f, 0.55f, 0.58f, 1.0f};
+#define THEME_PATH "engine/assets/theme.json"
+
 
 UiPanels *ui_panels_create(void) {
     UiPanels *p = (UiPanels *)calloc(1, sizeof *p);
     if (!p) return 0;
     p->dirty = 1;
     p->scrubField = -1;
+    ui_theme_dark(&p->theme);
+    ui_theme_load(&p->theme, THEME_PATH); // нет файла — дефолт, не ошибка
+    ui_undo_reset(&p->undo);
     return p;
 }
 
@@ -93,11 +96,36 @@ int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
             return 1;
         }
         if (e->kind == UI_EV_UP) {
+            // Коммит mouse-up: {было -> стало} в undo (как Unity flush).
+            if (scene && p->selected) {
+                ScTransform cur = sc_get(scene, p->selected);
+                float now = ui_field_get_f(&cur, &transform_fields[p->scrubField]);
+                float was = ui_field_get_f(&p->scrubBase, &transform_fields[p->scrubField]);
+                ui_undo_push(&p->undo, p->selected, p->scrubField, was, now);
+            }
             p->scrubField = -1;
             p->dirty = 1;
             return 1;
         }
         return 0;
+    }
+    if (e->kind == UI_EV_KEY) {
+        // Ctrl+Z откат, Ctrl+Shift+Z / Ctrl+Y повтор (как везде).
+        if ((e->mods & 2) && (e->key == 'Z' || e->key == 'Y')) {
+            UiCmd c;
+            int ok = (e->key == 'Z' && !(e->mods & 1)) ? ui_undo_undo(&p->undo, &c)
+                                                      : ui_undo_redo(&p->undo, &c);
+            if (ok && scene && sc_alive(scene, c.ent)) {
+                ScTransform t = sc_get(scene, c.ent);
+                float v = (e->key == 'Z' && !(e->mods & 1)) ? c.before : c.after;
+                ui_field_set_f(&t, &transform_fields[c.field], v);
+                sc_set(scene, c.ent, &t);
+                p->posed = 1;
+                p->dirty = 1;
+                return 1;
+            }
+            return 0;
+        }
     }
     if (e->kind == UI_EV_KEY) {
         int t = -1;
@@ -161,18 +189,23 @@ int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
 
 int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **out) {
     if (!p || !out) return 0;
+    // Hot-reload темы по mtime (дешёвый stat, раз в 64 сборки).
+    {
+        static unsigned calls = 0;
+        if ((++calls & 63) == 0 && ui_theme_poll(&p->theme, THEME_PATH)) p->dirty = 1;
+    }
     if (!p->dirty) {
         *out = &p->frame;
         return 0;
     }
     p->frame.n = 0;
     // Менюбар + тулбар.
-    emit(p, 0, 0, (float)w, 26, C_BAR);
-    emit(p, 0, 26, (float)w, 32, C_BG);
+    emit(p, 0, 0, (float)w, 26, p->theme.bar);
+    emit(p, 0, 26, (float)w, 32, p->theme.bg);
     for (int i = 0; i < 4; i++)
-        if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, C_TOOL);
+        if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, p->theme.tool);
     // Иерархия: фон + строки.
-    emit(p, 0, 58, 250, (float)(h - 58), C_BG);
+    emit(p, 0, 58, 250, (float)(h - 58), p->theme.bg);
     p->nrows = 0;
     if (scene) {
         Entity list[SC_MAX];
@@ -182,7 +215,7 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
             int d = depth_of(scene, list[i]);
             float rx = 8 + (float)(d * 16);
             if (list[i] == p->selected)
-                emit(p, 4, y, 242, 24, C_SEL);
+                emit(p, 4, y, 242, 24, p->theme.sel);
             if (p->nrows < PN_MAXROWS) {
                 p->rows[p->nrows].x = rx;
                 p->rows[p->nrows].y = y;
@@ -196,14 +229,14 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
         }
     }
     // Статусбар.
-    emit(p, 250, (float)(h - 26), (float)(w - 250), 26, C_BAR);
+    emit(p, 250, (float)(h - 26), (float)(w - 250), 26, p->theme.bar);
     // Инспектор: правая панель + 9 строк Transform выбранного.
-    // Скрабируемая строка подсвечена (остальные — шапка C_BAR).
-    emit(p, (float)(w - 250), 58, 250, (float)(h - 84), C_BG);
+    // Скрабируемая строка подсвечена (остальные — шапка p->theme.bar).
+    emit(p, (float)(w - 250), 58, 250, (float)(h - 84), p->theme.bg);
     for (int i = 0; i < PN_NF; i++) {
         float fy = 84 + (float)(i * 26 + (i / 3) * 8);
         if (fy + 24 > h - 26) break;
-        emit(p, (float)(w - 246), fy, 242, 24, i == p->scrubField ? C_SEL : C_BAR);
+        emit(p, (float)(w - 246), fy, 242, 24, i == p->scrubField ? p->theme.sel : p->theme.bar);
         p->frows[i].x = (float)(w - 246);
         p->frows[i].y = fy;
         p->frows[i].w = 242;
@@ -219,16 +252,16 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     (void)w;
     (void)h;
     if (!p || !text) return;
-    ui_text_quad(text, 12, 4, "File  Edit  View", C_DIM);
-    if (p->flash[0]) ui_text_quad(text, 220, 4, p->flash, C_DIM);
+    ui_text_quad(text, 12, 4, "File  Edit  View", p->theme.dim);
+    if (p->flash[0]) ui_text_quad(text, 220, 4, p->flash, p->theme.dim);
     static const char *tools[4] = {"Q:Sel", "W:Move", "E:Rot", "R:Scale"};
     for (int i = 0; i < 4; i++)
-        ui_text_quad(text, 14 + (float)(i * 64), 32, tools[i], i == p->tool ? C_TOOL : C_TXT);
+        ui_text_quad(text, 14 + (float)(i * 64), 32, tools[i], i == p->tool ? p->theme.tool : p->theme.txt);
     for (int i = 0; i < p->nrows; i++) {
         const char *nm = scene ? sc_name(scene, p->rows[i].id) : "?";
         char buf[80];
         snprintf(buf, sizeof buf, "%s", nm && nm[0] ? nm : "?");
-        ui_text_quad(text, p->rows[i].x + 4, p->rows[i].y + 4, buf, C_TXT);
+        ui_text_quad(text, p->rows[i].x + 4, p->rows[i].y + 4, buf, p->theme.txt);
     }
     // Статус: selected + tool.
     char st[128];
@@ -238,19 +271,19 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
         if (nm && nm[0]) sel = nm;
     }
     snprintf(st, sizeof st, "sel: %s | tool: %d", sel, p->tool);
-    ui_text_quad(text, 260, (float)(h - 22), st, C_DIM);
+    ui_text_quad(text, 260, (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + 9 значений через дескрипторы (двусторонняя связь).
     if (scene && p->selected && sc_alive(scene, p->selected)) {
-        ui_text_quad(text, (float)(w - 246), 62, sel, C_TXT);
+        ui_text_quad(text, (float)(w - 246), 62, sel, p->theme.txt);
         ScTransform tr = sc_get(scene, p->selected);
         for (int i = 0; i < PN_NF; i++) {
             char vb[64];
             snprintf(vb, sizeof vb, "%s %.2f", transform_fields[i].name,
                      ui_field_get_f(&tr, &transform_fields[i]));
-            ui_text_quad(text, p->frows[i].x + 6, p->frows[i].y + 5, vb, C_TXT);
+            ui_text_quad(text, p->frows[i].x + 6, p->frows[i].y + 5, vb, p->theme.txt);
         }
     } else {
-        ui_text_quad(text, (float)(w - 246), 62, "no selection", C_DIM);
+        ui_text_quad(text, (float)(w - 246), 62, "no selection", p->theme.dim);
     }
 }
 
