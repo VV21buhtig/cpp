@@ -21,5 +21,7 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h);
 
 unsigned ui_panels_selected(const UiPanels *p);
 int ui_panels_tool(const UiPanels *p); // 0 select 1 move 2 rotate 3 scale
+// Трансформ трогали скрабом (тесту надо перекачать суп). Сбрасывается чтением.
+int ui_panels_posed(UiPanels *p);
 
 #endif // ENGINE_UI_PANELS_H

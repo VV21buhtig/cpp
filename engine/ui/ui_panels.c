@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ui_panels.h"
+#include "ui_reflect.h" // дескрипторы Transform: один список на всех
 
 #define PN_MAXROWS 64
 
@@ -14,14 +15,27 @@ typedef struct {
     int depth;
 } PnRow;
 
+#define PN_NF 9 // полей трансформа в инспекторе (pos/rot/scale xyz)
+
+typedef struct {
+    float x, y, w, h;
+    int field; // 0..8 индекс дескриптора
+} PnField;
+
 struct UiPanels {
     unsigned selected;
     int tool;
     int dirty;
+    int posed; // трансформ сущности меняли (тесту надо перекачать суп)
     UiFrame frame;
     char flash[64]; // последняя команда меню (File stub и т.п.)
     PnRow rows[PN_MAXROWS];
     int nrows;
+    PnField frows[PN_NF];
+    int scrubField; // -1 нет модального скраба
+    ScTransform scrubBase; // трансформ на начало скраба (коммит идёт в сцену)
+    float scrubVal;
+    float scrubX0;
 };
 
 static const float C_BG[4] = {0.16f, 0.17f, 0.19f, 1.0f};
@@ -35,6 +49,7 @@ UiPanels *ui_panels_create(void) {
     UiPanels *p = (UiPanels *)calloc(1, sizeof *p);
     if (!p) return 0;
     p->dirty = 1;
+    p->scrubField = -1;
     return p;
 }
 
@@ -67,6 +82,23 @@ static int depth_of(ScWorld *s, Entity e) {
 
 int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
     if (!p || !e) return 0;
+    // Модальный скраб: тянешь значение — живьём применяется (коммит на UP).
+    if (p->scrubField >= 0) {
+        if (e->kind == UI_EV_MOVE) {
+            float v = p->scrubVal + (e->x - p->scrubX0) * 0.05f;
+            ui_field_set_f(&p->scrubBase, &transform_fields[p->scrubField], v);
+            if (scene) sc_set(scene, p->selected, &p->scrubBase);
+            p->posed = 1;
+            p->dirty = 1;
+            return 1;
+        }
+        if (e->kind == UI_EV_UP) {
+            p->scrubField = -1;
+            p->dirty = 1;
+            return 1;
+        }
+        return 0;
+    }
     if (e->kind == UI_EV_KEY) {
         int t = -1;
         if (e->key == 'Q') t = 0;
@@ -82,6 +114,19 @@ int ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
     }
     if (e->kind != UI_EV_DOWN || e->button != 0) return 0;
     float x = e->x, y = e->y;
+    // Инспектор: DOWN на строке поля = начать скраб (коммит на mouse-up).
+    if (scene && p->selected && sc_alive(scene, p->selected)) {
+        for (int i = 0; i < PN_NF; i++) {
+            if (x >= p->frows[i].x && x < p->frows[i].x + p->frows[i].w &&
+                y >= p->frows[i].y && y < p->frows[i].y + p->frows[i].h) {
+                p->scrubBase = sc_get(scene, p->selected);
+                p->scrubField = p->frows[i].field;
+                p->scrubVal = ui_field_get_f(&p->scrubBase, &transform_fields[p->scrubField]);
+                p->scrubX0 = x;
+                return 1;
+            }
+        }
+    }
     // Тулбар: 4 кнопки по 64px с x=8.
     if (y >= 26 && y < 58 && x >= 8 && x < 8 + 4 * 64) {
         int t = (int)((x - 8) / 64);
@@ -152,6 +197,19 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     }
     // Статусбар.
     emit(p, 250, (float)(h - 26), (float)(w - 250), 26, C_BAR);
+    // Инспектор: правая панель + 9 строк Transform выбранного.
+    // Скрабируемая строка подсвечена (остальные — шапка C_BAR).
+    emit(p, (float)(w - 250), 58, 250, (float)(h - 84), C_BG);
+    for (int i = 0; i < PN_NF; i++) {
+        float fy = 84 + (float)(i * 26 + (i / 3) * 8);
+        if (fy + 24 > h - 26) break;
+        emit(p, (float)(w - 246), fy, 242, 24, i == p->scrubField ? C_SEL : C_BAR);
+        p->frows[i].x = (float)(w - 246);
+        p->frows[i].y = fy;
+        p->frows[i].w = 242;
+        p->frows[i].h = 24;
+        p->frows[i].field = i;
+    }
     p->dirty = 0;
     *out = &p->frame;
     return 1;
@@ -181,10 +239,31 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     }
     snprintf(st, sizeof st, "sel: %s | tool: %d", sel, p->tool);
     ui_text_quad(text, 260, (float)(h - 22), st, C_DIM);
+    // Инспектор: имя + 9 значений через дескрипторы (двусторонняя связь).
+    if (scene && p->selected && sc_alive(scene, p->selected)) {
+        ui_text_quad(text, (float)(w - 246), 62, sel, C_TXT);
+        ScTransform tr = sc_get(scene, p->selected);
+        for (int i = 0; i < PN_NF; i++) {
+            char vb[64];
+            snprintf(vb, sizeof vb, "%s %.2f", transform_fields[i].name,
+                     ui_field_get_f(&tr, &transform_fields[i]));
+            ui_text_quad(text, p->frows[i].x + 6, p->frows[i].y + 5, vb, C_TXT);
+        }
+    } else {
+        ui_text_quad(text, (float)(w - 246), 62, "no selection", C_DIM);
+    }
 }
 
 unsigned ui_panels_selected(const UiPanels *p) {
     return p ? p->selected : 0;
+}
+
+// Трансформ трогали скрабом (тесту надо перекачать суп). Сбрасывается чтением.
+int ui_panels_posed(UiPanels *p) {
+    if (!p) return 0;
+    int v = p->posed;
+    p->posed = 0;
+    return v;
 }
 
 int ui_panels_tool(const UiPanels *p) {

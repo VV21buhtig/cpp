@@ -25,9 +25,10 @@ static UiPanels *g_panels = 0;
 static ScWorld g_scene;
 static double g_mx = 0, g_my = 0;
 
-// Тестовый куб (только тест! продуктовая подача — vw_feed_mesh).
+// Тестовый куб: ЛОКАЛЬНЫЙ (центр 0, h=3). Мир = TRS сущности (см. ниже).
 // Грани P + idx 0,1,2/0,2,3, нормали наружу (проверено скриптом).
 static float g_cube[36 * 9];
+static float g_base[36 * 9]; // локальная копия (источник для TRS)
 static void cube_make(void) {
     static const float P[6][4][3] = {
         {{1, -1, 1}, {1, -1, -1}, {1, 1, -1}, {1, 1, 1}},
@@ -49,17 +50,51 @@ static void cube_make(void) {
     for (int f = 0; f < 6; f++)
         for (int k = 0; k < 6; k++) {
             int q = idx[k];
-            g_cube[n * 9 + 0] = -24.0f + P[f][q][0] * 3.0f;
-            g_cube[n * 9 + 1] = 56.0f + P[f][q][1] * 3.0f;
-            g_cube[n * 9 + 2] = -16.0f + P[f][q][2] * 3.0f;
-            g_cube[n * 9 + 3] = NN[f][0];
-            g_cube[n * 9 + 4] = NN[f][1];
-            g_cube[n * 9 + 5] = NN[f][2];
-            g_cube[n * 9 + 6] = C[f][0];
-            g_cube[n * 9 + 7] = C[f][1];
-            g_cube[n * 9 + 8] = C[f][2];
+            g_base[n * 9 + 0] = P[f][q][0] * 3.0f;
+            g_base[n * 9 + 1] = P[f][q][1] * 3.0f;
+            g_base[n * 9 + 2] = P[f][q][2] * 3.0f;
+            g_base[n * 9 + 3] = NN[f][0];
+            g_base[n * 9 + 4] = NN[f][1];
+            g_base[n * 9 + 5] = NN[f][2];
+            g_base[n * 9 + 6] = C[f][0];
+            g_base[n * 9 + 7] = C[f][1];
+            g_base[n * 9 + 8] = C[f][2];
             n++;
         }
+}
+
+// TRS сущности -> суп (только тест; продукт — подача из ECS).
+// R = Ry(yaw)*Rx(pitch)*Rz(roll). Нормали: rotate+normalize (при неравном
+// scale точная формула — через inverse-transpose; ограничение зафиксировано).
+static void soup_pose(const ScTransform *tr) {
+    float cy = cosf(tr->rot.x), sy = sinf(tr->rot.x);
+    float cx = cosf(tr->rot.y), sx = sinf(tr->rot.y);
+    float cz = cosf(tr->rot.z), sz = sinf(tr->rot.z);
+    for (int i = 0; i < 36; i++) {
+        float x = g_base[i * 9 + 0] * tr->scale.x;
+        float y = g_base[i * 9 + 1] * tr->scale.y;
+        float z = g_base[i * 9 + 2] * tr->scale.z;
+        // Rz
+        float x1 = x * cz - y * sz, y1 = x * sz + y * cz, z1 = z;
+        // Rx
+        float y2 = y1 * cx - z1 * sx, z2 = y1 * sx + z1 * cx, x2 = x1;
+        // Ry + translate
+        // Цвета едут из базы как есть (TRS их не трогает).
+        g_cube[i * 9 + 6] = g_base[i * 9 + 6];
+        g_cube[i * 9 + 7] = g_base[i * 9 + 7];
+        g_cube[i * 9 + 8] = g_base[i * 9 + 8];
+        g_cube[i * 9 + 0] = x2 * cy + z2 * sy + tr->pos.x;
+        g_cube[i * 9 + 1] = y2 + tr->pos.y;
+        g_cube[i * 9 + 2] = -x2 * sy + z2 * cy + tr->pos.z;
+        float nx = g_base[i * 9 + 3], ny = g_base[i * 9 + 4], nz = g_base[i * 9 + 5];
+        float nx1 = nx * cz - ny * sz, ny1 = nx * sz + ny * cz, nz1 = nz;
+        float ny2 = ny1 * cx - nz1 * sx, nz2 = ny1 * sx + nz1 * cx, nx2 = nx1;
+        float nx3 = nx2 * cy + nz2 * sy, ny3 = ny2, nz3 = -nx2 * sy + nz2 * cy;
+        float il = 1.0f / (sqrtf(nx3 * nx3 + ny3 * ny3 + nz3 * nz3) + 1e-9f);
+        g_cube[i * 9 + 3] = nx3 * il;
+        g_cube[i * 9 + 4] = ny3 * il;
+        g_cube[i * 9 + 5] = nz3 * il;
+    }
 }
 
 static void ui_push_dirty(void) {
@@ -91,16 +126,23 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     if (action == GLFW_PRESS) {
         e.kind = UI_EV_DOWN;
         if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
+    } else if (action == GLFW_RELEASE) {
+        e.kind = UI_EV_UP;
+        if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
     }
 }
 
 static void on_move(GLFWwindow *win, double x, double y) {
     (void)win;
-    (void)x;
-    (void)y;
-    // Hover по панелям не нужен (клики + клавиши). Мышь держим для будущего.
     g_mx = x;
     g_my = y;
+    // Модальный скраб инспектора едет на MOVE (вне скраба — дешёвый no-op).
+    UiEvent e;
+    memset(&e, 0, sizeof e);
+    e.kind = UI_EV_MOVE;
+    e.x = (float)x;
+    e.y = (float)y;
+    if (ui_panels_event(g_panels, &g_scene, &e)) ui_push_dirty();
 }
 
 static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
@@ -186,6 +228,46 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: panels tool\n");
                 bad = 1;
             }
+            // Скраб: DOWN на поле pos.x + MOVE +40px + UP => +2.0 в сцену.
+            ui_panels_build(pn, &sw, 1280, 720, &pf);
+            memset(&pe, 0, sizeof pe);
+            pe.kind = UI_EV_DOWN;
+            pe.x = 1280 - 246 + 10;
+            pe.y = 84 + 12;
+            ui_panels_event(pn, &sw, &pe);
+            memset(&pe, 0, sizeof pe);
+            pe.kind = UI_EV_MOVE;
+            pe.x = 1280 - 246 + 50;
+            pe.y = 84 + 12;
+            ui_panels_event(pn, &sw, &pe);
+            memset(&pe, 0, sizeof pe);
+            pe.kind = UI_EV_UP;
+            ui_panels_event(pn, &sw, &pe);
+            {
+                ScTransform tb = sc_get(&sw, b);
+                if (tb.pos.x < 1.99f || tb.pos.x > 2.01f) {
+                    printf("SELF FAIL: scrub pos.x=%f\n", tb.pos.x);
+                    bad = 1;
+                }
+            }
+            if (!ui_panels_posed(pn)) {
+                printf("SELF FAIL: posed flag\n");
+                bad = 1;
+            }
+            // TRS-перекачка: pos.x=+10 двигает первый вершинный x ровно на 10.
+            cube_make();
+            {
+                ScTransform tp;
+                memset(&tp, 0, sizeof tp);
+                tp.pos.x = 10.0f;
+                tp.scale.x = tp.scale.y = tp.scale.z = 1.0f;
+                soup_pose(&tp);
+                if (g_cube[0] != g_base[0] + 10.0f || g_cube[1] != g_base[1] ||
+                    g_cube[2] != g_base[2]) {
+                    printf("SELF FAIL: soup pose %f %f %f\n", g_cube[0], g_cube[1], g_cube[2]);
+                    bad = 1;
+                }
+            }
             ui_panels_destroy(pn);
         }
         // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.
@@ -239,7 +321,41 @@ int main(int argc, char **argv) {
         return 1;
     }
     g_vec = vec;
+    // Демо-сцена для иерархии (та же тройка что в EngView).
+    // Hero несёт куб: демо-поза как в камере (иначе куб в начале координат).
+    sc_init(&g_scene);
+    {
+        Entity scene = sc_spawn(&g_scene, "Scene");
+        Entity hero = sc_spawn(&g_scene, "Hero");
+        Entity sword = sc_spawn(&g_scene, "Sword");
+        if (sword && scene) sc_parent(&g_scene, sword, scene);
+        if (hero) {
+            ScTransform t;
+            memset(&t, 0, sizeof t);
+            t.pos.x = -24.0f;
+            t.pos.y = 56.0f;
+            t.pos.z = -16.0f;
+            t.scale.x = t.scale.y = t.scale.z = 1.0f;
+            sc_set(&g_scene, hero, &t);
+        }
+        (void)hero;
+    }
     cube_make();
+    // Куб следует за Hero (инспектор двигает сущность — суп перекачивается).
+    {
+        Entity hero = 0, list[64];
+        int n = sc_list(&g_scene, list, 64);
+        for (int i = 0; i < n; i++) {
+            const char *nm = sc_name(&g_scene, list[i]);
+            if (nm && !strcmp(nm, "Hero")) hero = list[i];
+        }
+        if (hero) {
+            ScTransform t = sc_get(&g_scene, hero);
+            soup_pose(&t);
+            printf("ui_test: hero=%u pos=(%.1f,%.1f,%.1f) v0=(%.1f,%.1f,%.1f)\n", hero, t.pos.x,
+                   t.pos.y, t.pos.z, g_cube[0], g_cube[1], g_cube[2]);
+        } else printf("ui_test: HERO NOT FOUND\n");
+    }
     RcMesh m;
     m.verts = g_cube;
     m.nverts = 36;
@@ -261,15 +377,6 @@ int main(int argc, char **argv) {
         printf("ui_test: ui FAIL\n");
         return 1;
     }
-    // Демо-сцена для иерархии (та же тройка что в EngView).
-    sc_init(&g_scene);
-    {
-        Entity scene = sc_spawn(&g_scene, "Scene");
-        Entity hero = sc_spawn(&g_scene, "Hero");
-        Entity sword = sc_spawn(&g_scene, "Sword");
-        if (sword && scene) sc_parent(&g_scene, sword, scene);
-        (void)hero;
-    }
     g_panels = ui_panels_create();
     if (!g_panels) {
         printf("ui_test: panels FAIL\n");
@@ -277,7 +384,16 @@ int main(int argc, char **argv) {
     }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
     if (!text) printf("ui_test: text OFF (rects only)\n");
-    ui_push_dirty(); // первая заливка (dirty=1 из create)
+    ui_push_dirty(); // первая заливка (dirty=1 из create): строит и строки
+    // Дефолтный select: Hero (ПОСЛЕ первой сборки — строкам есть куда попасть).
+    {
+        UiEvent se;
+        memset(&se, 0, sizeof se);
+        se.kind = UI_EV_DOWN;
+        se.x = 30;
+        se.y = 100; // строка Hero (64 Scene, 88 Hero, 112 Sword)
+        if (ui_panels_event(g_panels, &g_scene, &se)) ui_push_dirty();
+    }
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
     glfwSetKeyCallback(win, on_key);
@@ -320,6 +436,18 @@ int main(int argc, char **argv) {
     char fpsBuf[64] = "ui_test";
     while (!glfwWindowShouldClose(win)) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+        // Инспектор тронул трансформ — перекачать суп из ECS (двусторонняя связь).
+        if (ui_panels_posed(g_panels)) {
+            unsigned sel = ui_panels_selected(g_panels);
+            if (sel && sc_alive(&g_scene, sel)) {
+                ScTransform t = sc_get(&g_scene, sel);
+                soup_pose(&t);
+                RcMesh mm;
+                mm.verts = g_cube;
+                mm.nverts = 36;
+                if (mesh->upload_mesh) mesh->upload_mesh(mesh, &mm);
+            }
+        }
         t.noClear = 0;
         if (mesh->frame_to) mesh->frame_to(mesh, &v, &t);
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
