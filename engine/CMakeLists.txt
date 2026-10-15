@@ -49,6 +49,7 @@ add_library(engine_shared SHARED
   vec_core.c pix_core.c sdf_core.c mesh_core.c gl_core.c vk_core.c webgpu_core.c
   vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c
   sky_lut.c asset.c scene.c project.c view.c vfs.c third-party/glad/gl.c
+  ui/ui_core.c
   ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.1.0 SOVERSION 0)
@@ -146,6 +147,11 @@ target_compile_options(depth_test PRIVATE -Wall -Wextra)
 target_include_directories(view_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(view_test PRIVATE engine_shared m)
 target_compile_options(view_test PRIVATE -Wall -Wextra)
+# Фаза 1 шва EngUi: своё окно, куб + 3 прямоугольника, клик = смена цвета.
+add_executable(ui_test ui/ui_test.c)
+target_include_directories(ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(ui_test PRIVATE engine_shared m)
+target_compile_options(ui_test PRIVATE -Wall -Wextra)
 # Прямой вьювер (схема Roblox/UE5): отдельный процесс, своё окно, GPU->GPU.
 add_executable(direct_view direct_view.c)
 target_include_directories(direct_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
