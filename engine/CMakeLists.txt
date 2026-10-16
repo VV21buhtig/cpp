@@ -49,6 +49,7 @@ add_library(engine_shared SHARED
   ui/ui_gizmo.c
   wgsl_file.c
   project_db.c
+  graph.c
   ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.2.0 SOVERSION 0)

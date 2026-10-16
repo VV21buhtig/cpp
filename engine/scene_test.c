@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include "scene.h"
 #include "project.h"
+#include "graph.h"
 
 int main(void) {
     int bad = 0;
@@ -456,6 +457,98 @@ int main(void) {
                 }
             }
             eng_db_close(db);
+        }
+    }
+    // Этап В: eval + цикл + хранение в project.db.
+    {
+        EngGraph *gr = eng_graph_create();
+        if (!gr) {
+            printf("SCENE FAIL: graph-create\n");
+            bad = 1;
+        } else {
+            // out0 = sin(2*t + 1): TIME×2 (MUL CONST 2) + CONST(1) + ADD + SIN.
+            int tm = eng_graph_add_node(gr, GN_TIME, 0, 0);
+            int k2 = eng_graph_add_node(gr, GN_CONST, 2.0f, 0);
+            int ml = eng_graph_add_node(gr, GN_MUL, 0, 0);
+            int c1 = eng_graph_add_node(gr, GN_CONST, 1.0f, 0);
+            int ad = eng_graph_add_node(gr, GN_ADD, 0, 0);
+            int sn = eng_graph_add_node(gr, GN_SIN, 0, 0);
+            int ou = eng_graph_add_node(gr, GN_OUT, 0, 0);
+            if (!tm || !k2 || !ml || !c1 || !ad || !sn || !ou) {
+                printf("SCENE FAIL: graph-add\n");
+                bad = 1;
+            }
+            // Битые линки: нет узла/порта, сам на себя, второй драйвер.
+            if (!eng_graph_link(gr, tm, 0, ml, 0) || !eng_graph_link(gr, k2, 0, ml, 1) ||
+                !eng_graph_link(gr, ml, 0, ad, 0) || !eng_graph_link(gr, c1, 0, ad, 1) ||
+                !eng_graph_link(gr, ad, 0, sn, 0) || !eng_graph_link(gr, sn, 0, ou, 0)) {
+                printf("SCENE FAIL: graph-link\n");
+                bad = 1;
+            }
+            if (eng_graph_link(gr, tm, 0, 999, 0) || eng_graph_link(gr, tm, 1, ad, 0) ||
+                eng_graph_link(gr, tm, 0, tm, 0) || eng_graph_link(gr, c1, 0, ad, 0) ||
+                eng_graph_add_node(gr, 99, 0, 0)) {
+                printf("SCENE FAIL: graph-bad-ok\n");
+                bad = 1;
+            }
+            float out[4] = {0};
+            int nout = eng_graph_eval(gr, 0.5f, out, 4);
+            float want = sinf(2.0f * 0.5f + 1.0f);
+            if (nout != 1 || fabsf(out[0] - want) > 1e-5f) {
+                printf("SCENE FAIL: graph-eval %d %f want %f\n", nout, out[0], want);
+                bad = 1;
+            }
+            // Несвязанный вход = 0: MUL(CONST 3, -) = 0.
+            EngGraph *g2 = eng_graph_create();
+            int k3 = eng_graph_add_node(g2, GN_CONST, 3.0f, 0);
+            int mu = eng_graph_add_node(g2, GN_MUL, 0, 0);
+            int o2 = eng_graph_add_node(g2, GN_OUT, 1, 0);
+            eng_graph_link(g2, k3, 0, mu, 0);
+            eng_graph_link(g2, mu, 0, o2, 0);
+            float out2[4] = {-1, -1, -1, -1};
+            if (eng_graph_eval(g2, 0, out2, 4) != 2 || out2[1] != 0.0f) {
+                printf("SCENE FAIL: graph-unlinked\n");
+                bad = 1;
+            }
+            // Цикл: ADD выход -> свой вход через второй ADD = отказ.
+            int a2 = eng_graph_add_node(g2, GN_ADD, 0, 0);
+            eng_graph_link(g2, mu, 0, a2, 0);
+            eng_graph_link(g2, a2, 0, mu, 1);
+            float out3[4] = {0};
+            if (eng_graph_eval(g2, 0, out3, 4) != -1) {
+                printf("SCENE FAIL: graph-cycle-ok\n");
+                bad = 1;
+            }
+            eng_graph_destroy(g2);
+            // Хранение: save/load roundtrip eval совпадает.
+            mkdir("/tmp/opencode/dbgraph", 0755);
+            remove("/tmp/opencode/dbgraph/project.db");
+            EngDb *db = eng_db_open("/tmp/opencode/dbgraph");
+            if (!db || !eng_graph_save(db, gr)) {
+                printf("SCENE FAIL: graph-save\n");
+                bad = 1;
+            } else {
+                EngGraph *rl = eng_graph_create();
+                if (!rl || !eng_graph_load(db, rl)) {
+                    printf("SCENE FAIL: graph-load\n");
+                    bad = 1;
+                } else {
+                    if (eng_graph_nnodes(rl) != 7 || eng_graph_nlinks(rl) != 6) {
+                        printf("SCENE FAIL: graph-count %d %d\n", eng_graph_nnodes(rl),
+                               eng_graph_nlinks(rl));
+                        bad = 1;
+                    }
+                    float out4[4] = {0};
+                    if (eng_graph_eval(rl, 0.5f, out4, 4) != 1 ||
+                        fabsf(out4[0] - want) > 1e-5f) {
+                        printf("SCENE FAIL: graph-rl-eval\n");
+                        bad = 1;
+                    }
+                    eng_graph_destroy(rl);
+                }
+            }
+            if (db) eng_db_close(db);
+            eng_graph_destroy(gr);
         }
     }
     printf(bad ? "SCENE FAIL\n" : "SCENE OK\n");

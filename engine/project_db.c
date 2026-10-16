@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <sqlite3.h>
 #include "project.h"
+#include "graph.h"
 
 struct EngDb {
     sqlite3 *db;
@@ -92,7 +93,11 @@ EngDb *eng_db_open(const char *dir) {
         "dyn INTEGER,mass REAL,velx REAL,vely REAL,velz REAL);"
         "CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY "
         "AUTOINCREMENT,op TEXT,ent INTEGER,field TEXT,before TEXT,after TEXT,"
-        "rev INTEGER DEFAULT 0);";
+        "rev INTEGER DEFAULT 0);"
+        "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY,type INTEGER,"
+        "p0 REAL,p1 REAL,x REAL,y REAL);"
+        "CREATE TABLE IF NOT EXISTS links(id INTEGER PRIMARY KEY "
+        "AUTOINCREMENT,fn INTEGER,fp INTEGER,tn INTEGER,tp INTEGER);";
     char *err = 0;
     if (sqlite3_exec(d->db, schema, 0, 0, &err) != SQLITE_OK) {
         sqlite3_free(err);
@@ -534,8 +539,7 @@ int eng_db_undo(EngDb *db, ScWorld *w) {
     return 1;
 }
 
-int eng_db_redo(EngDb *db, ScWorld *w) {
-    if (!db || !w) return 0;
+int eng_db_redo(EngDb *db, ScWorld *w) {    if (!db || !w) return 0;
     int seq = 0, ent = 0;
     char op[16] = {0}, field[DBF_NAMELEN] = {0}, val[4096] = {0};
     if (!journal_top(db, 1, &seq, op, sizeof op, &ent, field, sizeof field, val, sizeof val,
@@ -576,5 +580,130 @@ int eng_db_redo(EngDb *db, ScWorld *w) {
     if (!db_apply(w, i, field, val)) return 0;
     db_mirror_field(db, ent, field, val);
     journal_set_rev(db, seq, 0);
+    return 1;
+}
+
+// --- Этап В: граф в project.db (замена таблиц целиком, одна транзакция) ---
+int eng_graph_save(EngDb *db, const EngGraph *gr) {
+    if (!db || !gr) return 0;
+    if (!db_exec(db, "BEGIN;")) return 0;
+    if (!db_exec(db, "DELETE FROM nodes;") || !db_exec(db, "DELETE FROM links;")) {
+        db_exec(db, "ROLLBACK;");
+        return 0;
+    }
+    int nn = eng_graph_nnodes(gr);
+    for (int i = 0; i < nn; i++) {
+        int id = 0, type = 0;
+        float p0 = 0, p1 = 0;
+        if (!eng_graph_node_at(gr, i, &id, &type, &p0, &p1)) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+        sqlite3_stmt *st = 0;
+        if (sqlite3_prepare_v2(db->db, "INSERT INTO nodes(id,type,p0,p1,x,y) "
+                                       "VALUES(?1,?2,?3,?4,0,0);",
+                               -1, &st, 0) != SQLITE_OK) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+        sqlite3_bind_int(st, 1, id);
+        sqlite3_bind_int(st, 2, type);
+        sqlite3_bind_double(st, 3, p0);
+        sqlite3_bind_double(st, 4, p1);
+        int ok = sqlite3_step(st) == SQLITE_DONE;
+        sqlite3_finalize(st);
+        if (!ok) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+    }
+    int nl = eng_graph_nlinks(gr);
+    for (int i = 0; i < nl; i++) {
+        int fn = 0, fp = 0, tn = 0, tp = 0;
+        if (!eng_graph_link_at(gr, i, &fn, &fp, &tn, &tp)) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+        sqlite3_stmt *st = 0;
+        if (sqlite3_prepare_v2(db->db, "INSERT INTO links(fn,fp,tn,tp) "
+                                       "VALUES(?1,?2,?3,?4);",
+                               -1, &st, 0) != SQLITE_OK) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+        sqlite3_bind_int(st, 1, fn);
+        sqlite3_bind_int(st, 2, fp);
+        sqlite3_bind_int(st, 3, tn);
+        sqlite3_bind_int(st, 4, tp);
+        int ok = sqlite3_step(st) == SQLITE_DONE;
+        sqlite3_finalize(st);
+        if (!ok) {
+            db_exec(db, "ROLLBACK;");
+            return 0;
+        }
+    }
+    return db_exec(db, "COMMIT;");
+}
+
+int eng_graph_load(EngDb *db, EngGraph *gr) {
+    if (!db || !gr) return 0;
+    // Чистим граф: load = замена (как сцена).
+    EngGraph *fresh = eng_graph_create();
+    if (!fresh) return 0;
+    sqlite3_stmt *st = 0;
+    if (sqlite3_prepare_v2(db->db, "SELECT id,type,p0,p1 FROM nodes ORDER BY id;", -1,
+                           &st, 0) != SQLITE_OK) {
+        eng_graph_destroy(fresh);
+        return 0;
+    }
+    // id файла -> id графа (порядок вставки сохраняет Justin? нет: id задаём
+    // линкуемым — вставляем с теми же id через add+remap).
+    int fids[256];
+    int gids[256];
+    int nn = 0;
+    int ok = 1;
+    while (ok && nn < 256 && sqlite3_step(st) == SQLITE_ROW) {
+        int fid = sqlite3_column_int(st, 0);
+        int gid = eng_graph_add_node(fresh, sqlite3_column_int(st, 1),
+                                     (float)sqlite3_column_double(st, 2),
+                                     (float)sqlite3_column_double(st, 3));
+        if (!gid) ok = 0;
+        else {
+            fids[nn] = fid;
+            gids[nn] = gid;
+            nn++;
+        }
+    }
+    sqlite3_finalize(st);
+    if (ok) {
+        if (sqlite3_prepare_v2(db->db, "SELECT fn,fp,tn,tp FROM links ORDER BY id;", -1,
+                               &st, 0) != SQLITE_OK)
+            ok = 0;
+        else {
+            while (ok && sqlite3_step(st) == SQLITE_ROW) {
+                int fn = sqlite3_column_int(st, 0), tn = sqlite3_column_int(st, 2);
+                int gfn = 0, gtn = 0;
+                for (int i = 0; i < nn; i++) {
+                    if (fids[i] == fn) gfn = gids[i];
+                    if (fids[i] == tn) gtn = gids[i];
+                }
+                if (!gfn || !gtn ||
+                    !eng_graph_link(fresh, gfn, sqlite3_column_int(st, 1), gtn,
+                                    sqlite3_column_int(st, 3)))
+                    ok = 0;
+            }
+            sqlite3_finalize(st);
+        }
+    }
+    if (!ok) {
+        eng_graph_destroy(fresh);
+        return 0;
+    }
+    // Коммит в целевой: замена целиком через клон (id сохраняются).
+    if (!eng_graph_clone(gr, fresh)) {
+        eng_graph_destroy(fresh);
+        return 0;
+    }
+    eng_graph_destroy(fresh);
     return 1;
 }

@@ -4,6 +4,7 @@
 #define ENGINE_PROJECT_H
 
 #include "scene.h"
+#include "graph.h" // EngGraph (граф хранится в project.db)
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +45,10 @@ int eng_db_undo(EngDb *db, ScWorld *w); // 1 если было что откат
 int eng_db_redo(EngDb *db, ScWorld *w); // 1 если было что повторить
 int eng_db_count(EngDb *db, int *nents, int *njournal); // счётчики для тестов
 int eng_db_nfields(void); // число полей таблицы (тест сверяет с X-списками)
+// Этап В: граф в тех же project.db (таблицы nodes/links, замена целиком).
+// save чистит таблицы и пишет граф; load чистит граф и читает. 1 ок.
+int eng_graph_save(EngDb *db, const EngGraph *gr);
+int eng_graph_load(EngDb *db, EngGraph *gr);
 // Создание проекта: root/имя + project.txt + scene.txt по шаблону.
 // tpl: "Empty" (Scene+Camera) или любой другой (Scene+Camera+Light+Mesh).
 // backend 1/2/3 (остальное -> 2). err/errcap — текст отказа (может быть NULL).
