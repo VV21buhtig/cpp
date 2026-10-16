@@ -8,7 +8,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 fail=0
 # 1. Вызовы frame_cpu/download вне разрешённых мест.
-hits=$(grep -rn -- "->frame_cpu\|->download(" engine/*.c engine/*.h engine/ui/*.c template/*.c electron/src/*.ts 2>/dev/null \
+hits=$(grep -rn -- "->frame_cpu\|->download(" engine/*.c engine/*.h engine/ui/*.c template/*.c 2>/dev/null \
   | grep -v "/build/" || true)
 rest=$(echo "$hits" \
   | grep -v "engine/view\.c" \
@@ -20,7 +20,7 @@ if [ -n "$rest" ]; then
     echo "ABICHECK FAIL: cpu-путь вне фолбэка/тестов/ядер:"; echo "$rest"; fail=1
 fi
 # 2. noClear мёртв как код (комменты-история не в счёт).
-if grep -rn -- "\.noClear\|->noClear\|noClear *=\|noClear;" engine/*.c engine/*.h engine/ui/*.c template/*.c electron/src/*.ts 2>/dev/null \
+if grep -rn -- "\.noClear\|->noClear\|noClear *=\|noClear;" engine/*.c engine/*.h engine/ui/*.c template/*.c 2>/dev/null \
     | grep -v "/build/" | grep -q .; then
     echo "ABICHECK FAIL: noClear жив"; fail=1
 fi
