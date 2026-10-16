@@ -32,6 +32,14 @@ typedef struct {
     int field; // индекс transform_fields
 } UiEcsRef;
 
+// Привязка style-строки к теме (§12: 0 round 1 pad 2 bg.a 3 bar.a).
+typedef struct {
+    UiPanels *p;
+    int field;
+} UiThemeRef;
+
+#define PN_NS 4 // style-строк в EDIT (скругление/отступ/альфы)
+
 struct UiPanels {
     unsigned selected;
     int tool;
@@ -52,6 +60,10 @@ struct UiPanels {
     int scrubField; // -1 нет модального скраба (захват мыши как CaptureMouse)
     float scrubWas; // значение на DOWN (для undo-коммита на UP)
     float scrubX0;
+    int scrubKind; // 0 ECS-бинды (undo), 1 theme-бинды (save §12)
+    PnField srows[PN_NS]; // хитбоксы style-строк (EDIT)
+    UiAttrF sbinds[PN_NS]; // бинды на тему
+    UiThemeRef srefs[PN_NS];
     int editMode; // 1 ручной режим (§11): строки инертны, живут сплиттер/коллапс
     UiTheme theme; // одна тема (hot-reload по mtime)
     UiUndo undo; // стек команд (Фаза 5)
@@ -62,6 +74,8 @@ struct UiPanels {
 
 #define THEME_PATH "engine/assets/theme.json"
 
+static float theme_get(void *user);
+static void theme_set(void *user, float v);
 
 UiPanels *ui_panels_create(void) {
     UiPanels *p = (UiPanels *)calloc(1, sizeof *p);
@@ -74,6 +88,15 @@ UiPanels *ui_panels_create(void) {
     p->inspW = 220;
     ui_theme_dark(&p->theme);
     ui_theme_load(&p->theme, THEME_PATH); // нет файла — дефолт, не ошибка
+    for (int i = 0; i < PN_NS; i++) { // style-бинды на тему (§12, живут с панелью)
+        p->srefs[i].p = p;
+        p->srefs[i].field = i;
+        p->sbinds[i].bound = 1;
+        p->sbinds[i].value = 0.0f;
+        p->sbinds[i].get = theme_get;
+        p->sbinds[i].set = theme_set;
+        p->sbinds[i].user = &p->srefs[i];
+    }
     ui_undo_reset(&p->undo);
     return p;
 }
@@ -93,7 +116,7 @@ void ui_panels_destroy(UiPanels *p) {
     free(p);
 }
 
-static void emit(UiPanels *p, float x, float y, float w, float h, const float *c) {
+static void emit(UiPanels *p, float x, float y, float w, float h, const float *c, float r) {
     if (p->frame.n >= UI_MAX_PRIMS) return;
     UiPrim *q = &p->frame.prims[p->frame.n++];
     q->kind = 0;
@@ -101,8 +124,11 @@ static void emit(UiPanels *p, float x, float y, float w, float h, const float *c
     q->b = y;
     q->c = w;
     q->d = h;
+    q->e = r; // радиус §12 (0 = остро)
+    q->f = 0;
     memcpy(q->rgba, c, sizeof q->rgba);
 }
+#define RD (p->theme.round) // радиус хрома (панели/бары), строки острые
 
 static int depth_of(ScWorld *s, Entity e) {
     int d = 0;
@@ -131,6 +157,40 @@ static void ecs_set(void *user, float v) {
     sc_set(r->scene, r->ent, &t);
 }
 
+// Живые значения стиля из темы (§12).
+static float theme_get(void *user) {
+    UiThemeRef *r = (UiThemeRef *)user;
+    if (!r || !r->p) return 0.0f;
+    const UiTheme *t = &r->p->theme;
+    switch (r->field) {
+    case 0: return t->round;
+    case 1: return t->pad;
+    case 2: return t->bg[3];
+    default: return t->bar[3];
+    }
+}
+
+static void theme_set(void *user, float v) {
+    UiThemeRef *r = (UiThemeRef *)user;
+    if (!r || !r->p) return;
+    UiTheme *t = &r->p->theme;
+    switch (r->field) {
+    case 0: // round 0..24
+        t->round = v < 0 ? 0 : (v > 24 ? 24 : v);
+        break;
+    case 1: // pad 0..32
+        t->pad = v < 0 ? 0 : (v > 32 ? 32 : v);
+        break;
+    case 2: // bg.a 0..1
+        t->bg[3] = v < 0 ? 0 : (v > 1 ? 1 : v);
+        break;
+    default: // bar.a 0..1
+        t->bar[3] = v < 0 ? 0 : (v > 1 ? 1 : v);
+        break;
+    }
+    r->p->dirty = 1;
+}
+
 // Перепривязать 9 строк к сущности (при смене selection).
 static void rebind(UiPanels *p, ScWorld *scene, unsigned ent) {
     for (int i = 0; i < PN_NF; i++) {
@@ -148,18 +208,24 @@ static void rebind(UiPanels *p, ScWorld *scene, unsigned ent) {
 UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
     if (!p || !e) return ui_unhandled();
     // Модальный скраб: тянешь значение — живьём через бинд (коммит на UP).
+    // Kind 0: ECS (undo), 1: тема (save §12).
     if (p->scrubField >= 0) {
+        UiAttrF *b = p->scrubKind ? &p->sbinds[p->scrubField] : &p->binds[p->scrubField];
         if (e->kind == UI_EV_MOVE) {
             float v = p->scrubWas + (e->x - p->scrubX0) * 0.05f;
-            ui_attr_f_set(&p->binds[p->scrubField], v);
-            p->posed = 1;
+            ui_attr_f_set(b, v);
+            if (!p->scrubKind) p->posed = 1; // ECS: супу перекачка; теме не надо
             p->dirty = 1;
             return ui_handled(1, 1); // держим захват до UP
         }
         if (e->kind == UI_EV_UP) {
-            // Коммит mouse-up: {было -> стало} в undo (как Unity flush).
-            float now = ui_attr_f_get(&p->binds[p->scrubField]);
-            ui_undo_push(&p->undo, p->selected, p->scrubField, p->scrubWas, now);
+            if (p->scrubKind) {
+                ui_theme_save(&p->theme, THEME_PATH); // файл и есть история
+            } else {
+                // Коммит mouse-up: {было -> стало} в undo (как Unity flush).
+                float now = ui_attr_f_get(b);
+                ui_undo_push(&p->undo, p->selected, p->scrubField, p->scrubWas, now);
+            }
             p->scrubField = -1;
             p->dirty = 1;
             return ui_handled(1, 0); // отпустили захват
@@ -276,7 +342,21 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
                 y >= p->frows[i].y && y < p->frows[i].y + p->frows[i].h) {
                 rebind(p, scene, p->selected);
                 p->scrubField = p->frows[i].field;
+                p->scrubKind = 0; // ECS: коммит в undo
                 p->scrubWas = ui_attr_f_get(&p->binds[p->scrubField]);
+                p->scrubX0 = x;
+                return ui_handled(0, 1); // тихо + захват (грязь будет на MOVE)
+            }
+        }
+    }
+    // EDIT: DOWN на style-строке = скраб темы (коммит на UP пишет файл).
+    if (p->editMode) {
+        for (int i = 0; i < PN_NS; i++) {
+            if (x >= p->srows[i].x && x < p->srows[i].x + p->srows[i].w &&
+                y >= p->srows[i].y && y < p->srows[i].y + p->srows[i].h) {
+                p->scrubField = i;
+                p->scrubKind = 1; // тема: коммит в файл
+                p->scrubWas = ui_attr_f_get(&p->sbinds[i]);
                 p->scrubX0 = x;
                 return ui_handled(0, 1); // тихо + захват (грязь будет на MOVE)
             }
@@ -341,27 +421,28 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     p->winW = w;
     p->winH = h;
     // Менюбар + тулбар (во всю ширину, как UE).
-    emit(p, 0, 0, (float)w, 26, p->theme.bar);
-    emit(p, 0, 26, (float)w, 32, p->theme.bg);
+    emit(p, 0, 0, (float)w, 26, p->theme.bar, RD);
+    emit(p, 0, 26, (float)w, 32, p->theme.bg, RD);
     for (int i = 0; i < 4; i++)
-        if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, p->theme.tool);
+        if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, p->theme.tool, 0.0f);
     int hx = p->showHier ? p->hierW : 0;
     int ix = p->showInsp ? p->inspW : 0;
     // Иерархия: фон + строки + кнопка коллапса («<» прячет полностью, не в полоску).
     if (hx > 0) {
-        emit(p, 0, 58, (float)hx, (float)(h - 58), p->theme.bg);
-        emit(p, (float)(hx - 28), 58, 28, 24, p->theme.bar);
+        emit(p, 0, 58, (float)hx, (float)(h - 58), p->theme.bg, RD);
+        emit(p, (float)(hx - 28), 58, 28, 24, p->theme.bar, 0.0f);
     }
     p->nrows = 0;
+    float pad = p->theme.pad; // отступ строк (§12, 0 = legacy)
     if (scene && p->showHier) {
         Entity list[SC_MAX];
         int n = sc_list(scene, list, SC_MAX);
         float y = 64;
         for (int i = 0; i < n && p->nrows < PN_MAXROWS && y + 24 < h; i++) {
             int d = depth_of(scene, list[i]);
-            float rx = 8 + (float)(d * 16);
+            float rx = 8 + (float)(d * 16) + pad;
             if (list[i] == p->selected)
-                emit(p, 4, y, (float)(hx - 8), 24, p->theme.sel);
+                emit(p, 4, y, (float)(hx - 8), 24, p->theme.sel, 0.0f);
             if (p->nrows < PN_MAXROWS) {
                 p->rows[p->nrows].x = rx;
                 p->rows[p->nrows].y = y;
@@ -375,36 +456,57 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
         }
     }
     // Статусбар (от иерархии до инспектора).
-    emit(p, (float)hx, (float)(h - 26), (float)(w - hx - ix), 26, p->theme.bar);
+    emit(p, (float)hx, (float)(h - 26), (float)(w - hx - ix), 26, p->theme.bar, RD);
     // Инспектор: правая панель + 9 строк + коллапс («>» прячет полностью).
     if (ix > 0) {
-        emit(p, (float)(w - ix), 58, (float)ix, (float)(h - 84), p->theme.bg);
-        emit(p, (float)(w - ix), 58, 28, 24, p->theme.bar);
+        emit(p, (float)(w - ix), 58, (float)ix, (float)(h - 84), p->theme.bg, RD);
+        emit(p, (float)(w - ix), 58, 28, 24, p->theme.bar, 0.0f);
     }
     for (int i = 0; i < PN_NF; i++) {
         p->frows[i].x = 0;
         p->frows[i].w = 0; // нет строк без панели (хит выключен)
         p->frows[i].field = i;
     }
-    if (p->showInsp) {
-        // Сетка: заголовок группы (16px) + 3 строки по 26px. Не налезают.
-        for (int i = 0; i < PN_NF; i++) {
+    for (int i = 0; i < PN_NS; i++) {
+        p->srows[i].x = 0;
+        p->srows[i].w = 0; // хит style-строк только в EDIT
+        p->srows[i].field = i;
+    }
+    if (p->showInsp && p->editMode) {
+        // EDIT: 4 style-строки вместо transform (§12).
+        for (int i = 0; i < PN_NS; i++) {
             float fx0 = (float)(w - ix + 4);
-            float fy = 116 + (float)((i / 3) * 110 + (i % 3) * 26);
+            float fy = 116 + (float)(i * 26);
             if (fy + 24 > h - 26) break;
             emit(p, fx0, fy, (float)(ix - 8), 24,
-                 i == p->scrubField ? p->theme.sel : p->theme.bar);
+                 i == p->scrubField && p->scrubKind ? p->theme.sel : p->theme.bar, 0.0f);
+            p->srows[i].x = fx0;
+            p->srows[i].y = fy;
+            p->srows[i].w = (float)(ix - 8);
+            p->srows[i].h = 24;
+            p->srows[i].field = i;
+        }
+    } else if (p->showInsp) {
+        // Сетка: заголовок группы (16px) + 3 строки по 26px. Не налезают.
+        for (int i = 0; i < PN_NF; i++) {
+            float fx0 = (float)(w - ix + 4) + pad;
+            float fw = (float)(ix - 8) - 2 * pad;
+            if (fw < 8) fw = 8;
+            float fy = 116 + (float)((i / 3) * 110 + (i % 3) * 26);
+            if (fy + 24 > h - 26) break;
+            emit(p, fx0, fy, fw, 24,
+                 i == p->scrubField && !p->scrubKind ? p->theme.sel : p->theme.bar, 0.0f);
             p->frows[i].x = fx0;
             p->frows[i].y = fy;
-            p->frows[i].w = (float)(ix - 8);
+            p->frows[i].w = fw;
             p->frows[i].h = 24;
             p->frows[i].field = i;
         }
     }
     // Ручки EDIT: видимые полосы на краях (рука видит за что тянуть).
     if (p->editMode) {
-        if (hx > 0) emit(p, (float)(hx - 3), 58, 6, (float)(h - 84), p->theme.sel);
-        if (ix > 0) emit(p, (float)(w - ix - 3), 58, 6, (float)(h - 84), p->theme.sel);
+        if (hx > 0) emit(p, (float)(hx - 3), 58, 6, (float)(h - 84), p->theme.sel, 0.0f);
+        if (ix > 0) emit(p, (float)(w - ix - 3), 58, 6, (float)(h - 84), p->theme.sel, 0.0f);
     }
     p->dirty = 0;
     *out = &p->frame;
@@ -446,9 +548,18 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
              p->editMode ? " | EDIT: drag blue edges | L exits" : "");
     ui_text_quad(text, (float)(hx + 10), (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + группы Position/Rotation/Scale + значения в цветах осей.
+    // В EDIT — стиль интерфейса (§12): round/pad/alpha руками.
     if (p->showInsp) {
         float ix0 = (float)(w - ix);
-        if (scene && p->selected && sc_alive(scene, p->selected)) {
+        if (p->editMode) {
+            ui_text_quad(text, ix0 + 34, 62, "UI style", p->theme.txt);
+            static const char *snames[PN_NS] = {"round", "pad", "bg.a", "bar.a"};
+            for (int i = 0; i < PN_NS; i++) {
+                char vb[64];
+                snprintf(vb, sizeof vb, "%s %.2f", snames[i], ui_attr_f_get(&p->sbinds[i]));
+                ui_text_quad(text, p->srows[i].x + 6, p->srows[i].y + 5, vb, p->theme.txt);
+            }
+        } else if (scene && p->selected && sc_alive(scene, p->selected)) {
             ui_text_quad(text, ix0 + 34, 62, sel, p->theme.txt);
             static const char *groups[3] = {"Position", "Rotation", "Scale"};
             for (int i = 0; i < PN_NF; i++) {

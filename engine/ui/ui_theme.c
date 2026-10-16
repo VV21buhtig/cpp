@@ -19,6 +19,18 @@ void ui_theme_dark(UiTheme *t) {
     memcpy(t->tool, tool, sizeof tool);
     memcpy(t->txt, txt, sizeof txt);
     memcpy(t->dim, dim, sizeof dim);
+    t->round = 0.0f; // остро = попиксельно как раньше
+    t->pad = 0.0f; // legacy-раскладка
+}
+
+static int grab1(const char *s, const char *key, float *out) {
+    char pat[32];
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *f = strstr(s, pat);
+    if (!f) return 0;
+    f = strchr(f, '[');
+    if (!f) return 0;
+    return sscanf(f, "[%f", out) == 1;
 }
 
 static int grab(const char *s, const char *key, float *out) {
@@ -64,6 +76,8 @@ int ui_theme_load(UiTheme *t, const char *path) {
     grab(s, "tool", nt.tool);
     grab(s, "txt", nt.txt);
     grab(s, "dim", nt.dim);
+    grab1(s, "round", &nt.round);
+    grab1(s, "pad", &nt.pad);
     free(s);
     *t = nt;
     struct stat st;
@@ -76,4 +90,31 @@ int ui_theme_poll(UiTheme *t, const char *path) {
     if (!t || !path || stat(path, &st) != 0) return 0;
     if ((long)st.st_mtime == g_mtime) return 0;
     return ui_theme_load(t, path);
+}
+
+// Весь JSON одним проходом (§12: коммит стиля пишет файл — файл и есть история).
+int ui_theme_save(const UiTheme *t, const char *path) {
+    if (!t || !path) return 0;
+    FILE *ff = fopen(path, "wb");
+    if (!ff) return 0;
+    fprintf(ff,
+            "{\n"
+            "  \"_note\": \"ONE theme (no light/dark circus). Colors 0..1. Hot-reload by mtime.\",\n"
+            "  \"bg\": [%g, %g, %g, %g],\n"
+            "  \"bar\": [%g, %g, %g, %g],\n"
+            "  \"sel\": [%g, %g, %g, %g],\n"
+            "  \"tool\": [%g, %g, %g, %g],\n"
+            "  \"txt\": [%g, %g, %g, %g],\n"
+            "  \"dim\": [%g, %g, %g, %g],\n"
+            "  \"round\": [%g],\n"
+            "  \"pad\": [%g]\n"
+            "}\n",
+            t->bg[0], t->bg[1], t->bg[2], t->bg[3], t->bar[0], t->bar[1], t->bar[2],
+            t->bar[3], t->sel[0], t->sel[1], t->sel[2], t->sel[3], t->tool[0], t->tool[1],
+            t->tool[2], t->tool[3], t->txt[0], t->txt[1], t->txt[2], t->txt[3], t->dim[0],
+            t->dim[1], t->dim[2], t->dim[3], t->round, t->pad);
+    fclose(ff);
+    struct stat st;
+    if (stat(path, &st) == 0) g_mtime = (long)st.st_mtime; // своё не перечитывать
+    return 1;
 }

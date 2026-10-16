@@ -597,6 +597,72 @@ int main(int argc, char **argv) {
                     printf("SELF FAIL: normal grab wide\n");
                     bad = 1;
                 }
+                // §12: style-скраб в EDIT (round +80px => +4.0) пишет theme.json.
+                {
+                    FILE *bf = fopen("engine/assets/theme.json", "rb");
+                    long bsz = 0;
+                    char *btmp = 0;
+                    if (bf) {
+                        fseek(bf, 0, SEEK_END);
+                        bsz = ftell(bf);
+                        fseek(bf, 0, SEEK_SET);
+                        if (bsz > 0 && bsz < 65536) {
+                            btmp = (char *)malloc((size_t)bsz);
+                            if (btmp && fread(btmp, 1, (size_t)bsz, bf) != (size_t)bsz) {
+                                free(btmp);
+                                btmp = 0;
+                            }
+                        }
+                        fclose(bf);
+                    }
+                    memset(&pe, 0, sizeof pe);
+                    pe.kind = UI_EV_KEY;
+                    pe.key = 'L';
+                    ui_panels_event(pn, &sw, &pe); // EDIT вкл
+                    ui_panels_build(pn, &sw, 1280, 720, &pf); // srows посчитать
+                    memset(&pe, 0, sizeof pe);
+                    pe.kind = UI_EV_DOWN;
+                    pe.x = 1074;
+                    pe.y = 128; // style-строка 0 (round)
+                    ui_panels_event(pn, &sw, &pe);
+                    memset(&pe, 0, sizeof pe);
+                    pe.kind = UI_EV_MOVE;
+                    pe.x = 1154;
+                    pe.y = 128;
+                    ui_panels_event(pn, &sw, &pe);
+                    memset(&pe, 0, sizeof pe);
+                    pe.kind = UI_EV_UP;
+                    ui_panels_event(pn, &sw, &pe);
+                    int roundOk = 0;
+                    FILE *rf = fopen("engine/assets/theme.json", "rb");
+                    if (rf) {
+                        char rb[2048];
+                        size_t rn = fread(rb, 1, sizeof rb - 1, rf);
+                        rb[rn] = 0;
+                        fclose(rf);
+                        const char *qp = strstr(rb, "\"round\"");
+                        float rv = -1;
+                        if (qp && sscanf(strchr(qp, '['), "[%f", &rv) == 1 && rv > 3.9f &&
+                            rv < 4.1f)
+                            roundOk = 1;
+                    }
+                    if (!roundOk) {
+                        printf("SELF FAIL: style scrub save\n");
+                        bad = 1;
+                    }
+                    if (btmp) { // вернуть файл как был
+                        FILE *wf = fopen("engine/assets/theme.json", "wb");
+                        if (wf) {
+                            fwrite(btmp, 1, (size_t)bsz, wf);
+                            fclose(wf);
+                        }
+                        free(btmp);
+                    }
+                    memset(&pe, 0, sizeof pe);
+                    pe.kind = UI_EV_KEY;
+                    pe.key = 'L';
+                    ui_panels_event(pn, &sw, &pe); // EDIT выкл
+                }
             }
             ui_panels_destroy(pn);
         }
@@ -642,6 +708,26 @@ int main(int argc, char **argv) {
             if (th.bg[0] < 0.15f) {
                 printf("SELF FAIL: dark default\n");
                 bad = 1;
+            }
+            // §12: save/load roundtrip + style-скраб пишет файл.
+            {
+                const char *tp = "/tmp/opencode/selftest_theme.json";
+                th.round = 8.0f;
+                th.pad = 3.0f;
+                th.bg[3] = 0.5f;
+                if (!ui_theme_save(&th, tp)) {
+                    printf("SELF FAIL: theme save\n");
+                    bad = 1;
+                }
+                UiTheme th2;
+                ui_theme_dark(&th2);
+                if (!ui_theme_load(&th2, tp) || th2.round != 8.0f || th2.pad != 3.0f ||
+                    th2.bg[3] != 0.5f) {
+                    printf("SELF FAIL: theme roundtrip %f %f %f\n", th2.round, th2.pad,
+                           th2.bg[3]);
+                    bad = 1;
+                }
+                remove(tp);
             }
         }
         // Гизмо без окна: проекция + хит середины X-стрелки + drag + undo.

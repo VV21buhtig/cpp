@@ -36,14 +36,33 @@ static void blend_px(uint8_t *fb, int w, int h, int x, int y, const float *rgba)
 }
 
 static void vec_rect(uint8_t *fb, int w, int h, const RcVecShape *s) {
+    // Радиус в e (§12, 0 = остро). Углы режем четвертью круга как circle.
     int x0 = (int)floorf(s->a), y0 = (int)floorf(s->b);
     int x1 = (int)ceilf(s->a + s->c), y1 = (int)ceilf(s->b + s->d);
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > w) x1 = w;
     if (y1 > h) y1 = h;
+    float r = s->e;
+    if (r < 0.0f) r = 0.0f;
+    float maxr = (s->c < s->d ? s->c : s->d) * 0.5f;
+    if (r > maxr) r = maxr;
+    float r2 = r * r;
     for (int y = y0; y < y1; y++)
-        for (int x = x0; x < x1; x++) blend_px(fb, w, h, x, y, s->rgba);
+        for (int x = x0; x < x1; x++) {
+            if (r > 0.0f) {
+                float cx = x + 0.5f, cy = y + 0.5f;
+                // Ближайший центр угла: отступ r от каждого края.
+                float qx = cx - (s->a + r);
+                if (cx > s->a + s->c - r) qx = cx - (s->a + s->c - r);
+                else if (cx >= s->a + r) qx = 0.0f;
+                float qy = cy - (s->b + r);
+                if (cy > s->b + s->d - r) qy = cy - (s->b + s->d - r);
+                else if (cy >= s->b + r) qy = 0.0f;
+                if (qx * qx + qy * qy > r2) continue;
+            }
+            blend_px(fb, w, h, x, y, s->rgba);
+        }
 }
 
 static void vec_circle(uint8_t *fb, int w, int h, const RcVecShape *s) {
