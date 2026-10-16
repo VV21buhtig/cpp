@@ -10,6 +10,7 @@
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
+#include "ui/ui_widget.h" // дерево виджетов конструктора (§14 F1: модель)
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "rtarget.h"
 #include "comp_gl.h"
@@ -183,6 +184,142 @@ int main(int argc, char **argv) {
         if (x != x0 + 40) {
             printf("SELF FAIL: splitter drag %d want %d\n", x, x0 + 40);
             bad = 1;
+        }
+        // §14 F1: модель виджетов — add/find/reparent/remove + rect-якоря +
+        // save/load roundtrip в /tmp (следов не оставляем).
+        {
+            UiWidgetTree wt;
+            widget_tree_init(&wt);
+            UiWidgetRect rP = {UI_A_LEFT | UI_A_TOP, 10, 20, 200, 100};
+            UiWidgetStyle sP = {{0.2f, 0.2f, 0.22f, 1.0f}, 4.0f, 1.0f, 16.0f};
+            int P = widget_add(&wt, UI_W_PANEL, "P", 0, &rP, &sP);
+            UiWidgetRect rB = {UI_A_LEFT | UI_A_TOP, 8, 8, 80, 28};
+            int B = widget_add(&wt, UI_W_BUTTON, "Ok", P, &rB, 0);
+            UiWidgetRect rL = {UI_A_RIGHT | UI_A_BOTTOM, 8, 8, 120, 20};
+            int L = widget_add(&wt, UI_W_LABEL, "T", P, &rL, 0);
+            if (!P || !B || !L || wt.count != 3) {
+                printf("SELF FAIL: wadd\n");
+                bad = 1;
+            }
+            if (widget_find(&wt, "Ok") != B || widget_find(&wt, "Nope")) {
+                printf("SELF FAIL: wfind\n");
+                bad = 1;
+            }
+            // Якоря: L+T = как есть; R+B = от правого/нижнего края.
+            float qx, qy, qw, qh;
+            widget_rect_px(widget_cget(&wt, P), W, H, &qx, &qy, &qw, &qh);
+            if (qx != 10 || qy != 20 || qw != 200 || qh != 100) {
+                printf("SELF FAIL: wrect-lt\n");
+                bad = 1;
+            }
+            widget_rect_px(widget_cget(&wt, L), W, H, &qx, &qy, &qw, &qh);
+            if (qx != W - 8 - 120 || qy != H - 8 - 20) {
+                printf("SELF FAIL: wrect-rb %f %f\n", qx, qy);
+                bad = 1;
+            }
+            // Reparent L под B; цикл P под L — отказ; чужой id — отказ.
+            if (!widget_reparent(&wt, L, B)) {
+                printf("SELF FAIL: wreparent\n");
+                bad = 1;
+            }
+            if (widget_reparent(&wt, P, L) || widget_reparent(&wt, B, 999) ||
+                widget_reparent(&wt, 999, 0) || widget_reparent(&wt, P, P)) {
+                printf("SELF FAIL: wreparent-bad-ok\n");
+                bad = 1;
+            }
+            // Remove B валит поддерево (B+L); P сиротеет, count 1.
+            if (!widget_remove(&wt, B) || widget_find(&wt, "T") || wt.count != 1) {
+                printf("SELF FAIL: wremove count=%d\n", wt.count);
+                bad = 1;
+            }
+            if (widget_remove(&wt, B)) {
+                printf("SELF FAIL: wremove-dead-ok\n");
+                bad = 1;
+            }
+            // Дети: 8 ок, 9-й отказ (P пуст после remove).
+            int kidOk = 1;
+            for (int i = 0; i < 8; i++) {
+                char nm[16];
+                snprintf(nm, sizeof nm, "k%d", i);
+                if (!widget_add(&wt, UI_W_LABEL, nm, P, 0, 0)) kidOk = 0;
+            }
+            if (!kidOk || widget_add(&wt, UI_W_LABEL, "k9", P, 0, 0) || wt.count != 9) {
+                printf("SELF FAIL: wkids-cap count=%d\n", wt.count);
+                bad = 1;
+            }
+            // Roundtrip: свежий файл + слияние в файл с доками (ключи целы).
+            const char *tp = "/tmp/opencode/widget_test.json";
+            remove(tp);
+            if (!widget_json_save(&wt, tp)) {
+                printf("SELF FAIL: wsave-fresh\n");
+                bad = 1;
+            }
+            {
+                FILE *df = fopen("/tmp/opencode/widget_dock.json", "wb");
+                if (df) {
+                    fputs("{\n  \"hierW\": [220],\n  \"swapped\": [0]\n}\n", df);
+                    fclose(df);
+                }
+            }
+            if (!widget_json_save(&wt, "/tmp/opencode/widget_dock.json")) {
+                printf("SELF FAIL: wsave-merge\n");
+                bad = 1;
+            }
+            {
+                FILE *df = fopen("/tmp/opencode/widget_dock.json", "rb");
+                char chk[70000];
+                size_t cn = df ? fread(chk, 1, sizeof chk - 1, df) : 0;
+                if (df) fclose(df);
+                chk[cn] = 0;
+                if (!strstr(chk, "\"hierW\": [220]") || !strstr(chk, "\"widgets\": [")) {
+                    printf("SELF FAIL: wsave-dock-kept\n");
+                    bad = 1;
+                }
+            }
+            UiWidgetTree rt;
+            widget_tree_init(&rt);
+            if (!widget_json_load(&rt, "/tmp/opencode/widget_dock.json") || rt.count != 9) {
+                printf("SELF FAIL: wload count=%d\n", rt.count);
+                bad = 1;
+            } else {
+                const UiWidget *rp = widget_cget(&rt, P);
+                if (!rp || strcmp(rp->name, "P") || rp->nchildren != 8 ||
+                    rp->rect.anchors != (UI_A_LEFT | UI_A_TOP) || rp->style.rounding != 4.0f) {
+                    printf("SELF FAIL: wload-data\n");
+                    bad = 1;
+                }
+                // Связи пережили roundtrip (k3 ребёнок P).
+                int k3 = widget_find(&rt, "k3");
+                const UiWidget *rk = widget_cget(&rt, k3);
+                if (!k3 || !rk || rk->parent != P) {
+                    printf("SELF FAIL: wload-links\n");
+                    bad = 1;
+                }
+            }
+            // Чужой файл: дубль id и цикл — отказ, дерево чистое.
+            {
+                FILE *bf = fopen("/tmp/opencode/widget_bad.json", "wb");
+                if (bf) {
+                    fputs("{\"widgets\":["
+                          "{\"id\":1,\"type\":0,\"name\":\"A\",\"parent\":2},"
+                          "{\"id\":2,\"type\":0,\"name\":\"B\",\"parent\":1}]}",
+                          bf);
+                    fclose(bf);
+                }
+            }
+            UiWidgetTree bt;
+            widget_tree_init(&bt);
+            if (widget_json_load(&bt, "/tmp/opencode/widget_bad.json") || bt.count != 0) {
+                printf("SELF FAIL: wload-cycle-ok count=%d\n", bt.count);
+                bad = 1;
+            }
+            if (widget_json_load(&rt, "/tmp/opencode/nope.json") || rt.count != 9) {
+                printf("SELF FAIL: wload-missing\n");
+                bad = 1;
+            }
+            remove(tp);
+            remove("/tmp/opencode/widget_dock.json");
+            remove("/tmp/opencode/widget_bad.json");
         }
         ui_panels_destroy(pn);
         remove("engine/assets/layout.json"); // тест следов не оставляет

@@ -47,6 +47,7 @@ add_library(engine_shared SHARED
   ui/ui_theme.c
   ui/ui_undo.c
   ui/ui_gizmo.c
+  ui/ui_widget.c
   wgsl_file.c
   project_db.c
   graph.c
