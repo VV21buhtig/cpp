@@ -218,6 +218,7 @@ static int depth_vk(void) {
             bad = 1;
             break;
         }
+        eng_pass_end(&t); // SHADER_READ: download читает
         memset(px, 0, sizeof px);
         if (!vk->download(vk, &t, px, W, H)) {
             printf("DEPTH FAIL: download\n");

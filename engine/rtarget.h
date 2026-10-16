@@ -9,12 +9,22 @@ extern "C" {
 // Backend создаёт (сейчас только GL: FBO+RGBA; VK позже).
 // Имя struct совпадает с forward в render_api.h (один тип, не два).
 // Числа вместо GL-типов, чтобы comp.h остался без GPU-зависимостей.
+// Лейаут цели (W3 тёплого ABI): какое состояние у содержимого.
+// Пишет begin/frame_to/end (композитор/ядра знают), читает экспорт
+// (dmabuf/shared-texture позже обязан знать layout). GL переходов нет
+// (implicit), поле — учёт для кросса; VK переходы внутри renderpass.
+#define RC_LAYOUT_UNDEFINED 0
+#define RC_LAYOUT_RENDER 1 // идёт/шёл рендер (цель записи)
+#define RC_LAYOUT_SHADER_READ 2 // можно сэмплировать/скачивать/презентовать
+#define RC_LAYOUT_PRESENT 3 // в свопчейне (окно; не цель кадра)
+
 struct RcTarget {
     unsigned backend; // RC_BACKEND_*
     int w, h;
     unsigned fbo; // GL: FBO; остальным: 0 (не умеют)
     unsigned tex; // GL: RGBA-текстура результата
     unsigned dbo; // GL: глубина мишени (живёт с ней)
+    int layout; // RC_LAYOUT_* (см. выше)
     // Явная чистка прохода (W2 тёплого ABI): 1 = цель ждёт чистки.
     // Пишет ТОЛЬКО eng_pass_begin (композитор/одиночка); ядра читают.
     // Никто больше не тыкает (noClear-хаки убиты: была инверсная семантика

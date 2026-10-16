@@ -1378,6 +1378,7 @@ static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w,
     c->scratch.h = h;
     c->scratch.passClear = 1;
     if (!core_frame_to(rc, v, &c->scratch)) return 0;
+    c->scratch.layout = RC_LAYOUT_SHADER_READ; // нарисовано: download читает
     return core_download(rc, &c->scratch, rgba, w, h);
 }
 

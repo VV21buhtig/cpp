@@ -32,6 +32,10 @@ int eng_comp_frame(const EngPass *passes, int n, RcTarget *t);
 void eng_pass_begin(RcTarget *t, float r, float g, float b, float a, float depth, int doClear);
 // Проход закрыт: чистка потреблена (следующий кадр снова с begin).
 void eng_pass_end(RcTarget *t);
+// W3: барьер layout. GL — валидация + учёт (переходов нет, implicit);
+// VK/WebGPU — 0 (переход только внутри прохода ядра). Возвращает 1 если
+// layout теперь want (или уже был), 0 если бэкенд не умеет вне прохода.
+int eng_target_barrier(RcTarget *t, int want);
 
 // W1: lifecycle целей (P1 тёплого ABI). GL — настоящие; VK/WebGPU — 0
 // (целями владеют ядра, см. rtarget.h nobj; доведут в W3/P3).

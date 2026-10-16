@@ -14,6 +14,7 @@ int eng_target_new(unsigned backend, int w, int h, RcTarget *t) {
     memset(t, 0, sizeof *t);
     if (backend != 2) return 0; // только GL; VK/WG — цели ядер (см. выше)
     t->backend = 2;
+    t->layout = RC_LAYOUT_UNDEFINED; // содержимого ещё нет
     t->w = w;
     t->h = h;
     glGenFramebuffers(1, &t->fbo);

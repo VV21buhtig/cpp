@@ -29,6 +29,7 @@ int main(void) {
     int bad = 0;
     static RcTarget fake; // нулевая цель (begin пишет passClear по-настоящему)
     RcTarget *t = &fake;
+    t->backend = RC_BACKEND_GL; // барьер без GPU (GL: учёт, переходов нет)
     // 1. Порядок 3 проходов x2 кадра + чистка только у первого.
     {
         RenderCore a = mkcore(1, RC_BACKEND_GL, 1);
@@ -50,6 +51,16 @@ int main(void) {
             bad = 1;
         }
         if (t->passClear != 0) { printf("COMP FAIL: clear-stuck\n"); bad = 1; }
+        if (t->layout != RC_LAYOUT_SHADER_READ) { printf("COMP FAIL: layout\n"); bad = 1; }
+        // Барьер: уже SHADER_READ -> 1; назад в RENDER -> 1 (GL: учёт без GPU).
+        if (!eng_target_barrier(t, RC_LAYOUT_SHADER_READ)) {
+            printf("COMP FAIL: barrier-same\n");
+            bad = 1;
+        }
+        if (!eng_target_barrier(t, RC_LAYOUT_RENDER) || t->layout != RC_LAYOUT_RENDER) {
+            printf("COMP FAIL: barrier-set\n");
+            bad = 1;
+        }
     }
     // 2. Смешанные бэкенды — отказ.
     {

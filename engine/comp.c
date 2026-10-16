@@ -12,11 +12,26 @@ void eng_pass_begin(RcTarget *t, float r, float g, float b, float a, float depth
     t->clearB = b;
     t->clearA = a;
     t->clearDepth = depth;
+    t->layout = RC_LAYOUT_RENDER; // цель идёт под запись
 }
 
 void eng_pass_end(RcTarget *t) {
     if (!t) return;
     t->passClear = 0;
+    t->layout = RC_LAYOUT_SHADER_READ; // нарисовано: можно читать/презентовать
+}
+
+// W3: барьер layout. GL — валидация + учёт (переходов нет, implicit);
+// VK/WebGPU — 0 (переход только внутри прохода ядра; см. frame_to).
+// Экспорт (dmabuf позже) спрашивает layout, а не гадает.
+int eng_target_barrier(RcTarget *t, int want) {
+    if (!t) return 0;
+    if (t->layout == want) return 1;
+    if (t->backend == 2) {
+        t->layout = want;
+        return 1;
+    }
+    return 0;
 }
 
 int eng_comp_frame(const EngPass *passes, int n, RcTarget *t) {
