@@ -280,6 +280,8 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
         static unsigned calls = 0;
         if ((++calls & 63) == 0 && ui_theme_poll(&p->theme, THEME_PATH)) p->dirty = 1;
     }
+    // Новый размер окна = новая геометрия (иначе панели в старом размере).
+    if (w != p->winW || h != p->winH) p->dirty = 1;
     if (!p->dirty) {
         *out = &p->frame;
         return 0;

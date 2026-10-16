@@ -21,7 +21,13 @@
 #include "ui/ui.h"
 
 #define W 1280
-#define H 720
+#define H 720 // дефолт до первого замера (тесты/selftest считают на нём)
+
+// Живой размер окна (никакого хардкода в расчётах): фреймбуферные пиксели.
+// UI-координаты = пиксели фреймбуфера; мышь из окна масштабируем.
+static int g_WW = W, g_WH = H;
+static float g_mouseKx = 1.0f, g_mouseKy = 1.0f;
+static int g_needResize = 0;
 
 static EngUi *g_ui = 0;
 static RenderCore *g_vec = 0;
@@ -116,7 +122,7 @@ static void ui_push_dirty(void) {
     const UiFrame *fr = 0;
     RcVecShape shapes[UI_MAX_PRIMS];
     int n = 0;
-    if (g_gizmo) { // гизмо следует за selection/tool панелей
+    if (g_gizmo) { // гизмо следует за selection/tool панелей (живой размер)
         ui_gizmo_select(g_gizmo, ui_panels_selected(g_panels));
         ui_gizmo_tool(g_gizmo, ui_panels_tool(g_panels));
     }
@@ -124,7 +130,7 @@ static void ui_push_dirty(void) {
     // пересоздать ТОЛЬКО цель (как UE UpdateViewportRHI, не ядро/окно).
     {
         int x, y, w, h;
-        ui_panels_viewport(g_panels, W, H, &x, &y, &w, &h);
+        ui_panels_viewport(g_panels, g_WW, g_WH, &x, &y, &w, &h);
         if (w < 64) w = 64;
         if (h < 64) h = 64;
         if (!g_vpOk || x != g_vpx || y != g_vpy || w != g_vpw || h != g_vph) {
@@ -145,7 +151,7 @@ static void ui_push_dirty(void) {
         }
     }
     if (g_gizmo) ui_gizmo_viewport(g_gizmo, g_vpx, g_vpy, g_vpw, g_vph);
-    ui_panels_build(g_panels, &g_scene, W, H, &fr); // зовём только когда грязно
+    ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr); // зовём только когда грязно
     if (fr) {
         for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
             shapes[n].kind = fr->prims[i].kind;
@@ -207,8 +213,8 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
 
 static void on_move(GLFWwindow *win, double x, double y) {
     (void)win;
-    g_mx = x;
-    g_my = y;
+    g_mx = x * g_mouseKx;
+    g_my = y * g_mouseKy;
     // Модальный скраб/драг едет на MOVE (вне захвата — дешёвый no-op у обоих).
     UiEvent e;
     memset(&e, 0, sizeof e);
@@ -612,12 +618,8 @@ int main(int argc, char **argv) {
     m.verts = g_cube;
     m.nverts = 36;
     if (mesh->upload_mesh) mesh->upload_mesh(mesh, &m);
-    RcTarget t;
-    memset(&t, 0, sizeof t);
-    if (!comp_target_gl_new(&t, W, H)) {
-        printf("ui_test: target FAIL\n");
-        return 1;
-    }
+    // Общая цель создаётся в ensure ниже (под живой размер, не 1280x720).
+    // (Декларация RcTarget t — там же, перед циклом; дублей не плодим.)
     unsigned prog = rhi_gl_prog("engine/shaders/blit/blit.vert", "engine/shaders/blit/blit.frag");
     unsigned vao = rhi_gl_empty_vao();
     if (!prog || !vao) {
@@ -657,6 +659,26 @@ int main(int argc, char **argv) {
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
     glfwSetKeyCallback(win, on_key);
+    // Полноразмерное окно (как UE: вьюпорт-герой, не окошко 1280x720).
+    // Игнор WM = остаёмся 1280x720 (тесты детерминированы).
+    glfwShowWindow(win);
+    glfwMaximizeWindow(win);
+    glfwPollEvents();
+    // Замер реального фреймбуфера (окно могли развернуть/экраны HiDPI).
+    {
+        int fw = 0, fh = 0, ww = 0, wh = 0;
+        glfwGetFramebufferSize(win, &fw, &fh);
+        glfwGetWindowSize(win, &ww, &wh);
+        if (fw > 0 && fh > 0) {
+            g_WW = fw;
+            g_WH = fh;
+            if (ww > 0 && wh > 0) {
+                g_mouseKx = (float)fw / (float)ww;
+                g_mouseKy = (float)fh / (float)wh;
+            }
+        }
+        printf("ui_test: window %dx%d\n", g_WW, g_WH);
+    }
     // Статичная камера на куб (как vw_view mesh, orbA=-2.2).
     RcView v;
     memset(&v, 0, sizeof v);
@@ -683,6 +705,10 @@ int main(int argc, char **argv) {
     v.shadowOn = 1.0f;
     v.maxSteps = 100.0f;
     g_view = v; // гизмо проецирует той же камерой
+    // Цели под живой размер окна (создание тут, пересоздание в цикле).
+    RcTarget t;
+    memset(&t, 0, sizeof t);
+    int g_mainW = 0, g_mainH = 0; // размер, под который созданы цели
     g_gizmo = ui_gizmo_create();
     if (!g_gizmo) {
         printf("ui_test: gizmo FAIL\n");
@@ -705,6 +731,47 @@ int main(int argc, char **argv) {
     char fpsBuf[64] = "ui_test";
     while (!glfwWindowShouldClose(win)) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+        // Живой размер: окно могли развернуть/перетянуть (цели — только они).
+        {
+            int fw = 0, fh = 0, ww = 0, wh = 0;
+            glfwGetFramebufferSize(win, &fw, &fh);
+            glfwGetWindowSize(win, &ww, &wh);
+            if (fw > 0 && fh > 0 && (fw != g_WW || fh != g_WH)) {
+                g_WW = fw;
+                g_WH = fh;
+                if (ww > 0 && wh > 0) {
+                    g_mouseKx = (float)fw / (float)ww;
+                    g_mouseKy = (float)fh / (float)wh;
+                }
+                comp_target_gl_free(&t);
+                memset(&t, 0, sizeof t);
+                g_mainW = g_mainH = 0; // ensure ниже пересоздаст
+                if (g_vpOk) {
+                    comp_target_gl_free(&g_vp);
+                    memset(&g_vp, 0, sizeof g_vp);
+                    g_vpOk = 0;
+                }
+                // fb vec-ядра под новый размер (иначе оверлей стянется).
+                RcView vu;
+                memset(&vu, 0, sizeof vu);
+                vu.resW = g_WW;
+                vu.resH = g_WH;
+                if (vec->frame) vec->frame(vec, &vu);
+                ui_push_dirty(); // перерастрировать UI в новом размере
+                printf("ui_test: resize %dx%d\n", g_WW, g_WH);
+            }
+        }
+        // Общая цель под живой размер (создание/пересоздание — только цель).
+        if (!g_mainW || !g_mainH || g_mainW != g_WW || g_mainH != g_WH) {
+            comp_target_gl_free(&t);
+            memset(&t, 0, sizeof t);
+            if (!comp_target_gl_new(&t, g_WW, g_WH)) {
+                printf("ui_test: target FAIL\n");
+                return 1;
+            }
+            g_mainW = g_WW;
+            g_mainH = g_WH;
+        }
         // Инспектор/гизмо тронули трансформ — перекачать суп из ECS.
         if (ui_panels_posed(g_panels) || (g_gizmo && ui_gizmo_posed(g_gizmo))) {
             unsigned sel = ui_panels_selected(g_panels);
@@ -721,7 +788,7 @@ int main(int argc, char **argv) {
         g_view.resH = g_vpOk ? g_vph : H;
         // Чистим общую цель (3D теперь в своей, раньше чистил mesh-проход).
         glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-        glViewport(0, 0, W, H);
+        glViewport(0, 0, g_WW, g_WH);
         glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -734,8 +801,8 @@ int main(int argc, char **argv) {
             // GL y-вверх: dst перевёрнут относительно UI y-вниз.
             glBindFramebuffer(GL_READ_FRAMEBUFFER, g_vp.fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, t.fbo);
-            glBlitFramebuffer(0, 0, g_vpw, g_vph, g_vpx, H - (g_vpy + g_vph),
-                              g_vpx + g_vpw, H - g_vpy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBlitFramebuffer(0, 0, g_vpw, g_vph, g_vpx, g_WH - (g_vpy + g_vph),
+                              g_vpx + g_vpw, g_WH - g_vpy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         } else {
             if (mesh->frame_to) mesh->frame_to(mesh, &g_view, &t);
@@ -750,31 +817,31 @@ int main(int argc, char **argv) {
                 tPrev = now;
                 snprintf(fpsBuf, sizeof fpsBuf, "ui_test %d", frames);
             }
-            ui_panels_text(g_panels, &g_scene, text, W, H);
+            ui_panels_text(g_panels, &g_scene, text, g_WW, g_WH);
             ui_text_quad(text, (float)(g_vpx + 10), (float)(g_vpy + 8), fpsBuf, white);
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-            glViewport(0, 0, W, H);
-            ui_text_flush(text, W, H);
+            glViewport(0, 0, g_WW, g_WH);
+            ui_text_flush(text, g_WW, g_WH);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
         if (shot && shot[0] && frames == shotAt) {
-            uint8_t *px = (uint8_t *)malloc((size_t)W * H * 3);
+            uint8_t *px = (uint8_t *)malloc((size_t)g_WW * g_WH * 3);
             if (px) {
                 glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-                glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, px);
+                glReadPixels(0, 0, g_WW, g_WH, GL_RGB, GL_UNSIGNED_BYTE, px);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 FILE *ff = fopen(shot, "wb");
                 if (ff) {
-                    fprintf(ff, "P6\n%d %d\n255\n", W, H);
-                    for (int y = H - 1; y >= 0; y--)
-                        fwrite(px + (size_t)y * W * 3, 1, (size_t)W * 3, ff);
+                    fprintf(ff, "P6\n%d %d\n255\n", g_WW, g_WH);
+                    for (int y = g_WH - 1; y >= 0; y--)
+                        fwrite(px + (size_t)y * g_WW * 3, 1, (size_t)g_WW * 3, ff);
                     fclose(ff);
                     printf("ui_test: shot %s\n", shot);
                 }
                 free(px);
             }
         }
-        comp_present_gl(prog, vao, &t, W, H);
+        comp_present_gl(prog, vao, &t, g_WW, g_WH);
         glfwSwapBuffers(win);
         glfwPollEvents();
         if (++frames == 120) printf("ui_test: 120 frames OK (seam alive)\n");
