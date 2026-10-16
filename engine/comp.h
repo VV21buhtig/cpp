@@ -26,6 +26,13 @@ typedef struct {
 // Прогнать проходы по порядку в цель t. Возвращает ENG_COMP_*.
 int eng_comp_frame(const EngPass *passes, int n, RcTarget *t);
 
+// W1: lifecycle целей (P1 тёплого ABI). GL — настоящие; VK/WebGPU — 0
+// (целями владеют ядра, см. rtarget.h nobj; доведут в W3/P3).
+int eng_target_new(unsigned backend, int w, int h, RcTarget *t);
+void eng_target_free(RcTarget *t);
+// Пересоздать под размер на месте (тот же размер = no-op 1).
+int eng_target_resize(RcTarget *t, int w, int h);
+
 #ifdef __cplusplus
 }
 #endif

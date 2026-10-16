@@ -8,6 +8,7 @@
 #include "render_api.h"
 #include "rtarget.h"
 #include "comp_gl.h"
+#include "comp.h"
 #include "rhi_gl.h"
 #include "scene.h"
 #include "project.h"
@@ -121,7 +122,7 @@ static int vw_boot(EngView *vw, int w, int h) {
     }
     if (backend == 2) {
         memset(&vw->target, 0, sizeof vw->target);
-        if (!comp_target_gl_new(&vw->target, w, h)) {
+        if (!eng_target_new(2, w, h, &vw->target)) {
             free(vw->world);
             vw->world = 0;
             vw->rc->shutdown(vw->rc);
@@ -465,7 +466,7 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
     // Цель пикинга на один клик (создать-использовать-снести: клики редки).
     RcTarget pt;
     memset(&pt, 0, sizeof pt);
-    if (!comp_target_gl_new(&pt, vw->w, vw->h)) return 0;
+    if (!eng_target_new(2, vw->w, vw->h, &pt)) return 0;
     RcView v;
     vw_view(vw, &v);
     Entity list[1024];
@@ -489,7 +490,7 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
     }
     // Вернуть меш демо-кадра (пик перетёр суп кадра).
     vw->meshFed = 0;
-    comp_target_gl_free(&pt);
+    eng_target_free(&pt);
     return hit;
 }
 
@@ -518,7 +519,7 @@ int eng_view_resize(EngView *vw, int w, int h) {
     rc_destroy(vw->rc);
     vw->rc = 0;
     if (vw->hasTarget) {
-        comp_target_gl_free(&vw->target);
+        eng_target_free(&vw->target);
         vw->hasTarget = 0;
     }
     // Презент-программа привязана к контексту окна: снести до него.
@@ -572,7 +573,7 @@ void eng_view_close(EngView *vw) {
         vw->rc->shutdown(vw->rc);
         rc_destroy(vw->rc);
     }
-    if (vw->hasTarget) comp_target_gl_free(&vw->target);
+    if (vw->hasTarget) eng_target_free(&vw->target);
     // Презент-программа умирает раньше контекста (окно ещё живо).
     if (vw->presentProg) glDeleteProgram(vw->presentProg);
     if (vw->presentVao) glDeleteVertexArrays(1, &vw->presentVao);

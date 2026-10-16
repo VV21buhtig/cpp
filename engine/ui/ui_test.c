@@ -17,6 +17,7 @@
 #include "ui/ui_theme.h" // Фаза 5: одна тема + hot-reload
 #include "rtarget.h"
 #include "comp_gl.h"
+#include "comp.h"
 #include "rhi_gl.h"
 #include "ui/ui.h"
 
@@ -37,6 +38,10 @@ static ScWorld g_scene;
 static RcView g_view; // камера кадра (гизмо проецирует тем же PV что ядра)
 static double g_mx = 0, g_my = 0;
 static int g_capture = 0; // захват мыши модальным виджетом (FReply::CaptureMouse)
+// Dirty-rect (инвалидация по-UE): гизмо-драг перезаливает только bbox стрелок
+// (+ прошлый bbox — стереть было), панели — целиком и редко.
+static int g_forceFull = 1; // стартовый/ресайз: полный upload
+static int g_lastGx = 0, g_lastGy = 0, g_lastGw = 0, g_lastGh = 0;
 // Док-раскладка (как UE: панели отъедают место сплиттерами, вьюпорту остаток).
 // 3D рисуется ТОЛЬКО в rect (цель вьюпорта), панели — вокруг, не поверх 3D.
 static int g_vpx = 220, g_vpy = 58, g_vpw = 840, g_vph = 636;
@@ -134,9 +139,7 @@ static void ui_push_dirty(void) {
         if (w < 64) w = 64;
         if (h < 64) h = 64;
         if (!g_vpOk || x != g_vpx || y != g_vpy || w != g_vpw || h != g_vph) {
-            if (g_vpOk) comp_target_gl_free(&g_vp);
-            memset(&g_vp, 0, sizeof g_vp);
-            if (comp_target_gl_new(&g_vp, w, h)) {
+            if (eng_target_resize(&g_vp, w, h)) {
                 g_vpx = x;
                 g_vpy = y;
                 g_vpw = w;
@@ -159,18 +162,22 @@ static void ui_push_dirty(void) {
             shapes[n].b = fr->prims[i].b;
             shapes[n].c = fr->prims[i].c;
             shapes[n].d = fr->prims[i].d;
+            shapes[n].e = fr->prims[i].e;
+            shapes[n].f = fr->prims[i].f;
             memcpy(shapes[n].rgba, fr->prims[i].rgba, sizeof shapes[n].rgba);
         }
     }
     if (g_gizmo) {
-        UiPrim gp[16];
-        int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, W, H, gp, 16);
+        UiPrim gp[96]; // кольца: 3x24 сегмента + запас
+        int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, W, H, gp, 96);
         for (int i = 0; i < ng && n < UI_MAX_PRIMS; i++, n++) {
             shapes[n].kind = gp[i].kind;
             shapes[n].a = gp[i].a;
             shapes[n].b = gp[i].b;
             shapes[n].c = gp[i].c;
             shapes[n].d = gp[i].d;
+            shapes[n].e = gp[i].e;
+            shapes[n].f = gp[i].f;
             memcpy(shapes[n].rgba, gp[i].rgba, sizeof shapes[n].rgba);
         }
     }
@@ -357,10 +364,34 @@ int main(int argc, char **argv) {
                     printf("SELF FAIL: viewport %d %d %d %d\n", x, y, w, h);
                     bad = 1;
                 }
+                // Сплиттер: DOWN на краю иерархии + MOVE +40 => hierW растёт.
+                // (До коллапса: панель открыта.)
                 memset(&pe, 0, sizeof pe);
                 pe.kind = UI_EV_DOWN;
-                pe.x = 206;
-                pe.y = 70; // кнопка коллапса иерархии
+                pe.x = 217;
+                pe.y = 300; // край hierW=220 (строки до x=212 — хром)
+                UiReply spr = ui_panels_event(pn, &sw, &pe);
+                if (!spr.handled || !spr.capture) {
+                    printf("SELF FAIL: splitter grab\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_MOVE;
+                pe.x = 257;
+                pe.y = 300;
+                ui_panels_event(pn, &sw, &pe);
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_UP;
+                ui_panels_event(pn, &sw, &pe);
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 260 || w != 800) {
+                    printf("SELF FAIL: splitter viewport %d %d %d %d\n", x, y, w, h);
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 246;
+                pe.y = 70; // кнопка коллапса иерархии (hierW=260 после сплиттера)
                 if (!ui_panels_event(pn, &sw, &pe).handled) {
                     printf("SELF FAIL: collapse miss\n");
                     bad = 1;
@@ -526,6 +557,72 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: gizmo false hit\n");
                 bad = 1;
             }
+            // Кольца (tool=2): хит точки 90° + drag по касательной + undo.
+            ui_gizmo_tool(gz, 2);
+            {
+                float hx, hy, ax, ay, bx, by;
+                if (!ui_gizmo_handle(gz, &gw, &gv, 0, 1, 90.0f, &hx, &hy) ||
+                    !ui_gizmo_handle(gz, &gw, &gv, 0, 1, 80.0f, &ax, &ay) ||
+                    !ui_gizmo_handle(gz, &gw, &gv, 0, 1, 100.0f, &bx, &by)) {
+                    printf("SELF FAIL: ring handle\n");
+                    bad = 1;
+                } else {
+                    float dx = bx - ax, dy = by - ay;
+                    float dl = sqrtf(dx * dx + dy * dy);
+                    dx /= dl;
+                    dy /= dl;
+                    memset(&ge2, 0, sizeof ge2);
+                    ge2.kind = UI_EV_DOWN;
+                    ge2.x = hx;
+                    ge2.y = hy;
+                    UiReply gr2 =
+                        ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+                    if (!gr2.handled || !gr2.capture) {
+                        printf("SELF FAIL: ring pick\n");
+                        bad = 1;
+                    }
+                    memset(&ge2, 0, sizeof ge2);
+                    ge2.kind = UI_EV_MOVE;
+                    ge2.x = hx + dx * 30.0f;
+                    ge2.y = hy + dy * 30.0f;
+                    if (!ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2).handled) {
+                        printf("SELF FAIL: ring drag\n");
+                        bad = 1;
+                    }
+                    memset(&ge2, 0, sizeof ge2);
+                    ge2.kind = UI_EV_UP;
+                    ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+                    ScTransform chk = sc_get(&gw, ge);
+                    if (chk.rot.x == 0.0f && chk.rot.y == 0.0f && chk.rot.z == 0.0f) {
+                        printf("SELF FAIL: ring no rot\n");
+                        bad = 1;
+                    }
+                    UiCmd gc2;
+                    if (!ui_undo_undo(&gu, &gc2)) {
+                        printf("SELF FAIL: ring undo empty\n");
+                        bad = 1;
+                    } else {
+                        // Undo возвращает triple в исходный ноль (поле — какое взялось).
+                        ScTransform back = sc_get(&gw, ge);
+                        ui_field_set_f(&back, &transform_fields[gc2.field],
+                                       gc2.before);
+                        sc_set(&gw, ge, &back);
+                        ScTransform fin = sc_get(&gw, ge);
+                        if (fin.rot.x != 0.0f || fin.rot.y != 0.0f || fin.rot.z != 0.0f) {
+                            printf("SELF FAIL: ring undo roundtrip\n");
+                            bad = 1;
+                        }
+                    }
+                    // Кольца строятся (72 сегмента макс, часть клиппится).
+                    UiPrim gout2[96];
+                    ui_gizmo_select(gz, ge);
+                    int nr = ui_gizmo_build(gz, &gw, &gv, 1280, 720, gout2, 96);
+                    if (nr <= 0) {
+                        printf("SELF FAIL: ring build %d\n", nr);
+                        bad = 1;
+                    }
+                }
+            }
             // Клиппинг: rect в стороне от сущности — стрелков 0 (не лезут наружу).
             {
                 UiPrim gout[16];
@@ -544,10 +641,18 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 ui_gizmo_viewport(gz, 0, 0, 10, 10);
-                int nclip = ui_gizmo_build(gz, &gw, &gv, 1280, 720, gout, 16);
-                if (nclip != 0) {
-                    printf("SELF FAIL: gizmo clip %d\n", nclip);
-                    bad = 1;
+                {
+                    // Инвариант клиппинга: всё излучённое — внутри rect.
+                    UiPrim gout2[96];
+                    int nclip = ui_gizmo_build(gz, &gw, &gv, 1280, 720, gout2, 96);
+                    for (int gi = 0; gi < nclip; gi++) {
+                        if (gout2[gi].a < 0 || gout2[gi].a > 10 || gout2[gi].c < 0 ||
+                            gout2[gi].c > 10 || gout2[gi].b < 0 || gout2[gi].b > 10 ||
+                            gout2[gi].d < 0 || gout2[gi].d > 10) {
+                            printf("SELF FAIL: ring clip outside\n");
+                            bad = 1;
+                        }
+                    }
                 }
                 ui_gizmo_viewport(gz, 0, 0, 0, 0);
             }
@@ -674,12 +779,18 @@ int main(int argc, char **argv) {
         if (ui_panels_event(g_panels, &g_scene, &se).dirty) ui_push_dirty();
     }
     // Дефолтный tool: move (стрелки видны сразу; W/E/R переключают).
+    // UI_TOOL=2 для пруфа колец без мыши.
     {
         UiEvent ke;
         memset(&ke, 0, sizeof ke);
         ke.kind = UI_EV_KEY;
         ke.key = 'W';
         if (ui_panels_event(g_panels, &g_scene, &ke).dirty) ui_push_dirty();
+        const char *te = getenv("UI_TOOL");
+        if (te && te[0] == '2') {
+            ke.key = 'E';
+            if (ui_panels_event(g_panels, &g_scene, &ke).dirty) ui_push_dirty();
+        }
     }
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
@@ -689,6 +800,14 @@ int main(int argc, char **argv) {
     glfwShowWindow(win);
     glfwMaximizeWindow(win);
     glfwPollEvents();
+    // Замер без vsync (FUI_NOVSYNC=1): uncapped throughput + цена push.
+    // FUI_PUSH=N: N лишних полных push+upload в кадр (модель drag-нагрузки).
+    if (getenv("FUI_NOVSYNC") && getenv("FUI_NOVSYNC")[0] != '0') glfwSwapInterval(0);
+    int fuiPush = 0;
+    {
+        const char *fp = getenv("FUI_PUSH");
+        if (fp && fp[0]) fuiPush = atoi(fp);
+    }
     // Замер реального фреймбуфера (окно могли развернуть/экраны HiDPI).
     {
         int fw = 0, fh = 0, ww = 0, wh = 0;
@@ -754,6 +873,9 @@ int main(int argc, char **argv) {
     static const float white[4] = {0.85f, 0.85f, 0.87f, 1.0f};
     double tPrev = glfwGetTime();
     char fpsBuf[64] = "ui_test";
+    // Замер стадий (FUI_TIME=1): mesh/vec/text/swap ms каждые 120 кадров.
+    int wantTime = getenv("FUI_TIME") && getenv("FUI_TIME")[0] != '0';
+    double tMesh = 0, tVec = 0, tText = 0, tSwap = 0;
     while (!glfwWindowShouldClose(win)) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
         // Живой размер: окно могли развернуть/перетянуть (цели — только они).
@@ -768,11 +890,11 @@ int main(int argc, char **argv) {
                     g_mouseKx = (float)fw / (float)ww;
                     g_mouseKy = (float)fh / (float)wh;
                 }
-                comp_target_gl_free(&t);
+                eng_target_free(&t);
                 memset(&t, 0, sizeof t);
                 g_mainW = g_mainH = 0; // ensure ниже пересоздаст
                 if (g_vpOk) {
-                    comp_target_gl_free(&g_vp);
+                    eng_target_free(&g_vp);
                     memset(&g_vp, 0, sizeof g_vp);
                     g_vpOk = 0;
                 }
@@ -787,16 +909,12 @@ int main(int argc, char **argv) {
             }
         }
         // Общая цель под живой размер (создание/пересоздание — только цель).
-        if (!g_mainW || !g_mainH || g_mainW != g_WW || g_mainH != g_WH) {
-            comp_target_gl_free(&t);
-            memset(&t, 0, sizeof t);
-            if (!comp_target_gl_new(&t, g_WW, g_WH)) {
-                printf("ui_test: target FAIL\n");
-                return 1;
-            }
-            g_mainW = g_WW;
-            g_mainH = g_WH;
+        if (!eng_target_resize(&t, g_WW, g_WH)) {
+            printf("ui_test: target FAIL\n");
+            return 1;
         }
+        g_mainW = g_WW;
+        g_mainH = g_WH;
         // Инспектор/гизмо тронули трансформ — перекачать суп из ECS.
         if (ui_panels_posed(g_panels) || (g_gizmo && ui_gizmo_posed(g_gizmo))) {
             unsigned sel = ui_panels_selected(g_panels);
@@ -818,6 +936,8 @@ int main(int argc, char **argv) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         t.noClear = 1; // уже чистили сами (vec поверх без чистки)
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+        if (wantTime) s0 = glfwGetTime();
         if (g_vpOk) {
             // 3D ТОЛЬКО во вьюпорт (своя цель, свой аспект)...
             g_vp.noClear = 0;
@@ -832,7 +952,9 @@ int main(int argc, char **argv) {
         } else {
             if (mesh->frame_to) mesh->frame_to(mesh, &g_view, &t);
         }
+        if (wantTime) s1 = glfwGetTime();
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
+        if (wantTime) s2 = glfwGetTime();
         if (text) {
             // Панели: текст (имена/режимы/статус). fps — оверлеем ВНУТРИ
             // вьюпорта (как UE viewport stats), не отдельной полосой.
@@ -849,6 +971,7 @@ int main(int argc, char **argv) {
             ui_text_flush(text, g_WW, g_WH);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
+        if (wantTime) s3 = glfwGetTime();
         if (shot && shot[0] && frames == shotAt) {
             uint8_t *px = (uint8_t *)malloc((size_t)g_WW * g_WH * 3);
             if (px) {
@@ -869,7 +992,28 @@ int main(int argc, char **argv) {
         comp_present_gl(prog, vao, &t, g_WW, g_WH);
         glfwSwapBuffers(win);
         glfwPollEvents();
+        if (wantTime) {
+            s4 = glfwGetTime();
+            tMesh += (s1 - s0) * 1000.0;
+            tVec += (s2 - s1) * 1000.0;
+            tText += (s3 - s2) * 1000.0;
+            tSwap += (s4 - s3) * 1000.0;
+        }
+        if (fuiPush > 0) {
+            // Модель drag-нагрузки: полные push+upload мимо dirty (как MOVE).
+            const UiFrame *frDbg = 0;
+            double p0 = glfwGetTime();
+            for (int pi = 0; pi < fuiPush; pi++) {
+                ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &frDbg);
+                ui_push_dirty();
+            }
+            double p1 = glfwGetTime();
+            tVec += (p1 - p0) * 1000.0;
+        }
         if (++frames == 120) printf("ui_test: 120 frames OK (seam alive)\n");
+        if (wantTime && frames % 120 == 0 && frames > 0)
+            printf("ui_test: ms mesh=%.1f vec=%.1f text=%.1f swap=%.1f (avg/frame)\n",
+                   tMesh / frames, tVec / frames, tText / frames, tSwap / frames);
     }
     printf("ui_test: frames=%d DONE\n", frames);
     ui_gizmo_destroy(g_gizmo);

@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
             vox_gen(&world[cx][cz], 1337);
         }
     RcTarget target;
-    if (!comp_target_gl_new(&target, 1280, 720)) return 1;
+    if (!eng_target_new(2, 1280, 720, &target)) return 1;
     unsigned presentProg = rhi_gl_prog("engine/shaders/blit/blit.vert",
                                        "engine/shaders/blit/blit.frag");
     unsigned presentVao = rhi_gl_empty_vao();
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
         frame++;
     }
     printf("done: %d frames\n", frame);
-    comp_target_gl_free(&target);
+    eng_target_free(&target);
     gl->shutdown(gl);
     vec->shutdown(vec);
     rc_destroy(gl);

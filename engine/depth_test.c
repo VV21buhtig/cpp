@@ -282,7 +282,7 @@ int main(int argc, char **argv) {
     }
     RcTarget t;
     memset(&t, 0, sizeof t);
-    if (!comp_target_gl_new(&t, W, H)) {
+    if (!eng_target_new(2, W, H, &t)) {
         printf("DEPTH FAIL: target\n");
         return 1;
     }
@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
     mesh->shutdown(mesh);
     rc_destroy(sdf);
     rc_destroy(mesh);
-    comp_target_gl_free(&t);
+    eng_target_free(&t);
     glfwDestroyWindow(win);
     glfwTerminate();
     printf(bad ? "DEPTH FAIL\n" : "DEPTH OK\n");
