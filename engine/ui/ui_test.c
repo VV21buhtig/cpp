@@ -526,6 +526,31 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: gizmo false hit\n");
                 bad = 1;
             }
+            // Клиппинг: rect в стороне от сущности — стрелков 0 (не лезут наружу).
+            {
+                UiPrim gout[16];
+                int nfull = ui_gizmo_build(gz, &gw, &gv, 1280, 720, gout, 16);
+                // Инвариант клиппинга: всё излучённое — внутри rect.
+                for (int gi = 0; gi < nfull; gi++) {
+                    if (gout[gi].a < 0 || gout[gi].a > 1280 || gout[gi].c < 0 ||
+                        gout[gi].c > 1280 || gout[gi].b < 0 || gout[gi].b > 720 ||
+                        gout[gi].d < 0 || gout[gi].d > 720) {
+                        printf("SELF FAIL: gizmo seg %d outside\n", gi);
+                        bad = 1;
+                    }
+                }
+                if (nfull <= 0) {
+                    printf("SELF FAIL: gizmo empty full\n");
+                    bad = 1;
+                }
+                ui_gizmo_viewport(gz, 0, 0, 10, 10);
+                int nclip = ui_gizmo_build(gz, &gw, &gv, 1280, 720, gout, 16);
+                if (nclip != 0) {
+                    printf("SELF FAIL: gizmo clip %d\n", nclip);
+                    bad = 1;
+                }
+                ui_gizmo_viewport(gz, 0, 0, 0, 0);
+            }
             ui_gizmo_destroy(gz);
         }
         // X-макросы: один список -> 9 дескрипторов, оффсеты подряд, roundtrip.

@@ -122,6 +122,35 @@ static int vp_project(const UiGizmo *g, const RcView *v, const float w[3], float
     return 1;
 }
 
+// Клиппинг отрезка в rect вьюпорта (как клип виджета SViewport: гизмо не
+// лезет на панели). Liang–Barsky, y вниз — знакам всё равно. 1 виден.
+static int clip_seg(float x0, float y0, float x1, float y1, float rx, float ry, float rw,
+                    float rh, float *ox0, float *oy0, float *ox1, float *oy1) {
+    float t0 = 0.0f, t1 = 1.0f;
+    float dx = x1 - x0, dy = y1 - y0;
+    float px[4] = {-dx, dx, -dy, dy};
+    float qx[4] = {x0 - rx, rx + rw - x0, y0 - ry, ry + rh - y0};
+    for (int i = 0; i < 4; i++) {
+        if (px[i] == 0.0f) {
+            if (qx[i] < 0.0f) return 0;
+        } else {
+            float r = qx[i] / px[i];
+            if (px[i] < 0.0f) {
+                if (r > t1) return 0;
+                if (r > t0) t0 = r;
+            } else {
+                if (r < t0) return 0;
+                if (r < t1) t1 = r;
+            }
+        }
+    }
+    if (ox0) *ox0 = x0 + dx * t0;
+    if (oy0) *oy0 = y0 + dy * t0;
+    if (ox1) *ox1 = x0 + dx * t1;
+    if (oy1) *oy1 = y0 + dy * t1;
+    return 1;
+}
+
 static float seg_dist(float px, float py, float ax, float ay, float bx, float by, float *t) {
     float dx = bx - ax, dy = by - ay;
     float l2 = dx * dx + dy * dy;
@@ -233,31 +262,37 @@ int ui_gizmo_build(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H, Ui
         float len = sqrtf(dx * dx + dy * dy);
         if (len < GIZMO_MINPX) continue;
         // Стрела + наконечник (две короткие под 25°, 12px).
+        // Всё клипим в rect вьюпорта (иначе лезет на панели).
+        float vpx = (float)g->vpx, vpy = (float)g->vpy, vpw = (float)g->vpw,
+              vph = (float)g->vph;
+        if (vpw <= 0 || vph <= 0) {
+            vpx = 0;
+            vpy = 0;
+            vpw = 1280;
+            vph = 720;
+        }
         float ux = dx / len, uy = dy / len;
         float hx = -uy, hy = ux;
         float hl = 12.0f;
-        UiPrim *p = &out[n++];
-        p->kind = 2;
-        p->a = ox;
-        p->b = oy;
-        p->c = tx;
-        p->d = ty;
-        memcpy(p->rgba, COL[a], sizeof p->rgba);
         float c1 = 0.42f, s1 = 0.42f; // cos/sin 25° экономно
-        UiPrim *q1 = &out[n++];
-        q1->kind = 2;
-        q1->a = tx;
-        q1->b = ty;
-        q1->c = tx - (ux * c1 - hx * s1) * hl;
-        q1->d = ty - (uy * c1 - hy * s1) * hl;
-        memcpy(q1->rgba, COL[a], sizeof q1->rgba);
-        UiPrim *q2 = &out[n++];
-        q2->kind = 2;
-        q2->a = tx;
-        q2->b = ty;
-        q2->c = tx - (ux * c1 + hx * s1) * hl;
-        q2->d = ty - (uy * c1 + hy * s1) * hl;
-        memcpy(q2->rgba, COL[a], sizeof q2->rgba);
+        float sg[3][4] = {
+            {ox, oy, tx, ty},
+            {tx, ty, tx - (ux * c1 - hx * s1) * hl, ty - (uy * c1 - hy * s1) * hl},
+            {tx, ty, tx - (ux * c1 + hx * s1) * hl, ty - (uy * c1 + hy * s1) * hl},
+        };
+        for (int sgi = 0; sgi < 3 && n < cap; sgi++) {
+            float cx0, cy0, cx1, cy1;
+            if (!clip_seg(sg[sgi][0], sg[sgi][1], sg[sgi][2], sg[sgi][3], vpx, vpy, vpw,
+                          vph, &cx0, &cy0, &cx1, &cy1))
+                continue;
+            UiPrim *q = &out[n++];
+            q->kind = 2;
+            q->a = cx0;
+            q->b = cy0;
+            q->c = cx1;
+            q->d = cy1;
+            memcpy(q->rgba, COL[a], sizeof q->rgba);
+        }
     }
     return n;
 }
