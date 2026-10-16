@@ -72,6 +72,16 @@ static int blit_upload(BlitGL *b, const uint8_t *rgba, int w, int h) {
     return 1;
 }
 
+// Частичная заливка (dirty-rect, инвалидация по-UE): регион (x,y,w,h)
+// в ТЕКСТУРНЫХ координатах (y вверх, как GL), данные — строки снизу вверх.
+// Текстура должна существовать (размер не меняем).
+static int blit_upload_rect(BlitGL *b, const uint8_t *rgba, int x, int y, int w, int h) {
+    if (!rgba || !b || !b->tex || w <= 0 || h <= 0) return 0;
+    glBindTexture(GL_TEXTURE_2D, b->tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    return 1;
+}
+
 // Кадр в чужой FBO поверх (бленд src-alpha): fb уже залит в текстуру блита.
 // Без чистки (её сделал базовый проход), без swap/бейджа.
 static void blit_overlay_to(BlitGL *b, unsigned fbo, int w, int h) {

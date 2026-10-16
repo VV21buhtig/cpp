@@ -73,6 +73,32 @@ static void vec_line(uint8_t *fb, int w, int h, const RcVecShape *s) {
     }
 }
 
+// Треугольник kind=3: p0=(a,b), p1=(c,d), p2=(e,f). Barycentric fill по bbox
+// (плоскости гизмо маленькие — быстро).
+static void vec_tri(uint8_t *fb, int w, int h, float x0, float y0, float x1, float y1,
+                    float x2, float y2, const float *rgba) {
+    // Barycentric fill по bbox (плоскости гизмо маленькие — быстро).
+    float minx = x0, maxx = x0, miny = y0, maxy = y0;
+    if (x1 < minx) minx = x1;
+    if (x1 > maxx) maxx = x1;
+    if (x2 < minx) minx = x2;
+    if (x2 > maxx) maxx = x2;
+    if (y1 < miny) miny = y1;
+    if (y1 > maxy) maxy = y1;
+    if (y2 < miny) miny = y2;
+    if (y2 > maxy) maxy = y2;
+    float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (den > -1e-6f && den < 1e-6f) return;
+    for (int y = (int)floorf(miny); y <= (int)ceilf(maxy); y++)
+        for (int x = (int)floorf(minx); x <= (int)ceilf(maxx); x++) {
+            float l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den;
+            float l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den;
+            float l2 = 1.0f - l0 - l1;
+            if (l0 >= 0.0f && l1 >= 0.0f && l2 >= 0.0f)
+                blend_px(fb, w, h, x, y, rgba);
+        }
+}
+
 static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     VecWrap *p = (VecWrap *)rc->ctx;
     if (!p->fb) { // upload раньше первого frame: дефолт, frame поправит
@@ -90,6 +116,9 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
         if (shapes[i].kind == 0) vec_rect(p->fb, w, h, &shapes[i]);
         else if (shapes[i].kind == 1) vec_circle(p->fb, w, h, &shapes[i]);
         else if (shapes[i].kind == 2) vec_line(p->fb, w, h, &shapes[i]);
+        else if (shapes[i].kind == 3)
+            vec_tri(p->fb, w, h, shapes[i].a, shapes[i].b, shapes[i].c, shapes[i].d,
+                    shapes[i].e, shapes[i].f, shapes[i].rgba);
     }
     // Верх вниз -> низ вверх под блит.
     static uint8_t *flip = 0;
@@ -103,6 +132,89 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     for (int y = 0; y < h; y++)
         memcpy(flip + (size_t)y * w * 4, p->fb + (size_t)(h - 1 - y) * w * 4, (size_t)w * 4);
     return blit_upload(&p->blit, flip, w, h);
+}
+
+// Частичная заливка (dirty-rect): чистим и рисуем только регион, остальное fb
+// не трогаем; в текстуру едет только регион (SubImage). bbox примитива мимо
+// региона — пропуск (дешёвый reject до растра).
+static int vec_upload_rect(RenderCore *rc, const RcVecShape *shapes, int n, int x, int y,
+                           int w, int h) {
+    VecWrap *p = (VecWrap *)rc->ctx;
+    if (!p->fb || !shapes || n <= 0) return 0;
+    int fw = p->fw, fh = p->fh;
+    if (x < 0) {
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+    if (x + w > fw) w = fw - x;
+    if (y + h > fh) h = fh - y;
+    if (w <= 0 || h <= 0) return 0;
+    if (n > 4096) n = 4096;
+    // Чистим регион (прозрачный — было под стрелками стираем).
+    for (int r = y; r < y + h; r++)
+        memset(p->fb + ((size_t)r * fw + x) * 4, 0, (size_t)w * 4);
+    for (int i = 0; i < n; i++) {
+        // bbox примитива по kind.
+        float bx0, by0, bx1, by1;
+        if (shapes[i].kind == 0) {
+            bx0 = shapes[i].a;
+            by0 = shapes[i].b;
+            bx1 = shapes[i].a + shapes[i].c;
+            by1 = shapes[i].b + shapes[i].d;
+        } else if (shapes[i].kind == 1) {
+            bx0 = shapes[i].a - shapes[i].c;
+            by0 = shapes[i].b - shapes[i].c;
+            bx1 = shapes[i].a + shapes[i].c;
+            by1 = shapes[i].b + shapes[i].c;
+        } else if (shapes[i].kind == 2) {
+            bx0 = shapes[i].a < shapes[i].c ? shapes[i].a : shapes[i].c;
+            by0 = shapes[i].b < shapes[i].d ? shapes[i].b : shapes[i].d;
+            bx1 = shapes[i].a > shapes[i].c ? shapes[i].a : shapes[i].c;
+            by1 = shapes[i].b > shapes[i].d ? shapes[i].b : shapes[i].d;
+        } else if (shapes[i].kind == 3) {
+            bx0 = bx1 = shapes[i].a;
+            by0 = by1 = shapes[i].b;
+            if (shapes[i].c < bx0) bx0 = shapes[i].c;
+            if (shapes[i].c > bx1) bx1 = shapes[i].c;
+            if (shapes[i].d < by0) by0 = shapes[i].d;
+            if (shapes[i].d > by1) by1 = shapes[i].d;
+            if (shapes[i].e < bx0) bx0 = shapes[i].e;
+            if (shapes[i].e > bx1) bx1 = shapes[i].e;
+            if (shapes[i].f < by0) by0 = shapes[i].f;
+            if (shapes[i].f > by1) by1 = shapes[i].f;
+        } else {
+            continue;
+        }
+        if (bx1 < x || by1 < y || bx0 > x + w || by0 > y + h) continue;
+        if (shapes[i].kind == 0) vec_rect(p->fb, fw, fh, &shapes[i]);
+        else if (shapes[i].kind == 1) vec_circle(p->fb, fw, fh, &shapes[i]);
+        else if (shapes[i].kind == 2) vec_line(p->fb, fw, fh, &shapes[i]);
+        else
+            vec_tri(p->fb, fw, fh, shapes[i].a, shapes[i].b, shapes[i].c, shapes[i].d,
+                    shapes[i].e, shapes[i].f, shapes[i].rgba);
+    }
+    // Флип только строк региона; саб-заливка с шагом строки = fw.
+    static uint8_t *flip = 0;
+    static int flipN = 0;
+    if (fw * fh * 4 > flipN) {
+        free(flip);
+        flip = (uint8_t *)malloc((size_t)fw * fh * 4);
+        flipN = flip ? fw * fh * 4 : 0;
+    }
+    if (!flip) return 0;
+    for (int r = 0; r < h; r++)
+        memcpy(flip + (size_t)(fh - 1 - (y + r)) * fw * 4 + (size_t)x * 4,
+               p->fb + (size_t)(y + r) * fw * 4 + (size_t)x * 4, (size_t)w * 4);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, fw);
+    glBindTexture(GL_TEXTURE_2D, p->blit.tex);
+    int ok = blit_upload_rect(&p->blit, flip + (size_t)(fh - y - h) * fw * 4 + (size_t)x * 4,
+                              x, fh - y - h, w, h);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    return ok;
 }
 
 static void vec_frame(RenderCore *rc, const RcView *v) {
@@ -168,6 +280,7 @@ RenderCore *rc_vec_create(void) {
     w->api.frame = vec_frame;
     w->api.frame_to = vec_frame_to;
     w->api.upload_vector = vec_upload;
+    w->api.upload_vector_rect = vec_upload_rect;
     w->api.fps = vec_fps;
     w->api.shader_reload = core_shader_reload;
     return &w->api;

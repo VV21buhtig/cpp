@@ -29,6 +29,11 @@ void ui_gizmo_viewport(UiGizmo *g, int x, int y, int w, int h);
 // Down-хит стрелков сущности (приоритет выше панелей).
 UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
                       unsigned ent, float x, float y);
+// Точка ручки для тестов/автоматизации: axis 0/1/2, kind 0 стрелка / 1 кольцо,
+// angleDeg вдоль ручки (стрелка: 0 начало 100 конец; кольцо: градусы).
+// Возвращает 1 + экранные x/y.
+int ui_gizmo_handle(UiGizmo *g, ScWorld *scene, const RcView *v, int axis, int kind,
+                    float angleDeg, float *x, float *y);
 // Стрелки выбранного в out (до cap примитивов kind=2 line). Возвращает число.
 int ui_gizmo_build(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
                    UiPrim *out, int cap);

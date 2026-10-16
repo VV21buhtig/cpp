@@ -154,7 +154,7 @@ static void ui_push_dirty(void) {
         }
     }
     if (g_gizmo) ui_gizmo_viewport(g_gizmo, g_vpx, g_vpy, g_vpw, g_vph);
-    ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr); // зовём только когда грязно
+    int panelsDirty = ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr);
     if (fr) {
         for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
             shapes[n].kind = fr->prims[i].kind;
@@ -167,9 +167,11 @@ static void ui_push_dirty(void) {
             memcpy(shapes[n].rgba, fr->prims[i].rgba, sizeof shapes[n].rgba);
         }
     }
+    int ngAll = 0;
     if (g_gizmo) {
         UiPrim gp[96]; // кольца: 3x24 сегмента + запас
-        int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, W, H, gp, 96);
+        int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, g_WW, g_WH, gp, 96);
+        ngAll = ng;
         for (int i = 0; i < ng && n < UI_MAX_PRIMS; i++, n++) {
             shapes[n].kind = gp[i].kind;
             shapes[n].a = gp[i].a;
@@ -182,13 +184,80 @@ static void ui_push_dirty(void) {
         }
     }
     if (!n) return;
-    if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+    // Dirty-rect (инвалидация по-UE): панели редко и целиком, гизмо-драг —
+    // только bbox стрелок (прошлый+нынешний — стереть было). Флаг force —
+    // старт/ресайз (fb только что пересоздан/пуст).
+    {
+        int gx0 = 1 << 30, gy0 = 1 << 30, gx1 = -1, gy1 = -1;
+        for (int i = n - ngAll; i < n; i++) {
+            float x0, y0, x1, y1;
+            if (shapes[i].kind == 0) {
+                x0 = shapes[i].a;
+                y0 = shapes[i].b;
+                x1 = shapes[i].a + shapes[i].c;
+                y1 = shapes[i].b + shapes[i].d;
+            } else if (shapes[i].kind == 1) {
+                x0 = shapes[i].a - shapes[i].c;
+                y0 = shapes[i].b - shapes[i].c;
+                x1 = shapes[i].a + shapes[i].c;
+                y1 = shapes[i].b + shapes[i].c;
+            } else {
+                x0 = x1 = shapes[i].a;
+                y0 = y1 = shapes[i].b;
+                float px[4] = {shapes[i].a, shapes[i].c, shapes[i].e, shapes[i].a};
+                float py[4] = {shapes[i].b, shapes[i].d, shapes[i].f, shapes[i].b};
+                for (int k = 0; k < (shapes[i].kind == 3 ? 3 : 2); k++) {
+                    if (px[k] < x0) x0 = px[k];
+                    if (px[k] > x1) x1 = px[k];
+                    if (py[k] < y0) y0 = py[k];
+                    if (py[k] > y1) y1 = py[k];
+                }
+            }
+            if (x0 < gx0) gx0 = (int)floorf(x0) - 2;
+            if (y0 < gy0) gy0 = (int)floorf(y0) - 2;
+            if (x1 > gx1) gx1 = (int)ceilf(x1) + 2;
+            if (y1 > gy1) gy1 = (int)ceilf(y1) + 2;
+        }
+        int panelsDirtyNow = panelsDirty;
+        if (g_forceFull || panelsDirtyNow) {
+            if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+            g_forceFull = 0;
+            g_lastGx = (ngAll > 0) ? gx0 : 0;
+            g_lastGy = (ngAll > 0) ? gy0 : 0;
+            g_lastGw = (ngAll > 0) ? gx1 - gx0 : 0;
+            g_lastGh = (ngAll > 0) ? gy1 - gy0 : 0;
+        } else if (ngAll > 0) {
+            int rx0 = gx0 < g_lastGx ? gx0 : g_lastGx;
+            int ry0 = gy0 < g_lastGy ? gy0 : g_lastGy;
+            int rx1 = gx1 > g_lastGx + g_lastGw ? gx1 : g_lastGx + g_lastGw;
+            int ry1 = gy1 > g_lastGy + g_lastGh ? gy1 : g_lastGy + g_lastGh;
+            if (g_vec->upload_vector_rect)
+                g_vec->upload_vector_rect(g_vec, shapes, n, rx0, ry0, rx1 - rx0,
+                                          ry1 - ry0);
+            else if (g_vec->upload_vector)
+                g_vec->upload_vector(g_vec, shapes, n);
+            g_lastGx = gx0;
+            g_lastGy = gy0;
+            g_lastGw = gx1 - gx0;
+            g_lastGh = gy1 - gy0;
+        } else if (g_lastGw > 0) {
+            // Гизмо ушло (tool select): стереть былое частичной заливкой.
+            if (g_vec->upload_vector_rect)
+                g_vec->upload_vector_rect(g_vec, shapes, n, g_lastGx, g_lastGy, g_lastGw,
+                                          g_lastGh);
+            else if (g_vec->upload_vector)
+                g_vec->upload_vector(g_vec, shapes, n);
+            g_lastGw = g_lastGh = 0;
+        } else {
+            if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+        }
+    }
 }
 
 static void route_event(const UiEvent *e) {
     // Приоритет как UE/Roblox: гизмо > панели (ручка первее строки под ней).
     // Модальные игнорируют чужие события сами (возврат unhandled).
-    UiReply r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, W, H,
+    UiReply r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, g_WW, g_WH,
                                ui_panels_undo(g_panels), e);
     if (r.handled) {
         g_capture = r.capture;
@@ -780,6 +849,7 @@ int main(int argc, char **argv) {
     }
     // Дефолтный tool: move (стрелки видны сразу; W/E/R переключают).
     // UI_TOOL=2 для пруфа колец без мыши.
+    // FUI_DEMO=drag: скриптованный drag X-стрелки (+100px) для пруфа шлейфа.
     {
         UiEvent ke;
         memset(&ke, 0, sizeof ke);
@@ -861,6 +931,35 @@ int main(int argc, char **argv) {
     ui_gizmo_select(g_gizmo, ui_panels_selected(g_panels));
     ui_gizmo_tool(g_gizmo, ui_panels_tool(g_panels));
     ui_push_dirty(); // первая заливка СО стрелками (гизмо моложе первого push)
+    // FUI_DEMO=drag: скриптованный drag X-стрелки (+100px) для пруфа шлейфа.
+    // (Тут гизмо уже живёт и синхронизировано.)
+    {
+        const char *dd = getenv("FUI_DEMO");
+        if (dd && !strcmp(dd, "drag")) {
+            float hx, hy;
+            if (ui_gizmo_handle(g_gizmo, &g_scene, &g_view, 0, 0, 50.0f, &hx, &hy)) {
+                UiEvent de;
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_DOWN;
+                de.x = hx;
+                de.y = hy;
+                route_event(&de);
+                for (int di = 1; di <= 5; di++) {
+                    memset(&de, 0, sizeof de);
+                    de.kind = UI_EV_MOVE;
+                    de.x = hx + di * 20.0f;
+                    de.y = hy;
+                    route_event(&de);
+                }
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_UP;
+                route_event(&de);
+                printf("ui_test: demo drag done\n");
+            } else {
+                printf("ui_test: demo drag NO HANDLE\n");
+            }
+        }
+    }
     printf("ui_test: RUN (click rects, Esc/close to quit)\n");
     // Доказательство картинкой (как VOX_SHOT): UI_SHOT=shot.ppm UI_SHOT_AT=60.
     const char *shot = getenv("UI_SHOT");

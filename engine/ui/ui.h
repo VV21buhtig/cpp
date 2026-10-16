@@ -18,8 +18,9 @@
 #define UI_EV_KEY 4
 
 typedef struct {
-    int kind; // 0 rect: x,y,w,h
+    int kind; // 0 rect: x,y,w,h; 3 tri: p0=(a,b) p1=(c,d) p2=(e,f)
     float a, b, c, d;
+    float e, f;
     float rgba[4];
 } UiPrim;
 
