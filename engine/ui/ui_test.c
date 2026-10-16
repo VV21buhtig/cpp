@@ -382,6 +382,12 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--selftest")) {
         // Ввод/шов без окна: клик внутри/снаружи, dirty, цвета коммита.
         int bad = 0;
+        // Герметичность: чужую раскладку (layout.json) не читаем и не сносим —
+        // прячем на время теста, возвращаем как было. Иначе тест врёт и рушит
+        // рабочую раскладку пользователя.
+        int laySaved =
+            (rename("engine/assets/layout.json",
+                    "engine/assets/layout.json.selftest-bak") == 0);
         EngUi *ui = eng_ui_create();
         const UiFrame *fr = 0;
         if (!eng_ui_build(ui, W, H, &fr) || fr->n != 3) {
@@ -713,7 +719,6 @@ int main(int argc, char **argv) {
                 pe.kind = UI_EV_KEY;
                 pe.key = 'L';
                 ui_panels_event(pn, &sw, &pe); // EDIT выкл
-                remove("engine/assets/layout.json"); // тест следов не оставляет
             }
             ui_panels_destroy(pn);
         }
@@ -1044,6 +1049,10 @@ int main(int argc, char **argv) {
                 }
             }
         }
+        // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
+        remove("engine/assets/layout.json");
+        if (laySaved)
+            rename("engine/assets/layout.json.selftest-bak", "engine/assets/layout.json");
         printf(bad ? "SELF FAIL\n" : "ui selftest OK\n");
         return bad;
     }

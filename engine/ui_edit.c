@@ -135,6 +135,11 @@ int main(int argc, char **argv) {
         // Без окна/GL: панели в EDIT строят примитивы, вьюпорт — остаток,
         // скриптованный сплиттер двигает hierW. Файлов не пачкаем (remove).
         int bad = 0;
+        // Герметичность: чужую раскладку (layout.json) не читаем и не сносим —
+        // прячем на время теста, возвращаем как было (иначе тест врёт и рушит
+        // рабочую раскладку пользователя).
+        int laySaved = (rename("engine/assets/layout.json",
+                               "engine/assets/layout.json.selftest-bak") == 0);
         ScWorld sw;
         sc_init(&sw);
         Entity a = sc_spawn(&sw, "A");
@@ -322,7 +327,10 @@ int main(int argc, char **argv) {
             remove("/tmp/opencode/widget_bad.json");
         }
         ui_panels_destroy(pn);
-        remove("engine/assets/layout.json"); // тест следов не оставляет
+        // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
+        remove("engine/assets/layout.json");
+        if (laySaved)
+            rename("engine/assets/layout.json.selftest-bak", "engine/assets/layout.json");
         printf(bad ? "SELF FAIL\n" : "edit selftest OK\n");
         return bad;
     }
