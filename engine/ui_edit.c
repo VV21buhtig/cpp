@@ -169,6 +169,14 @@ static void wt_draw_all(RcVecShape *sh, int *n) {
         wt_emit(sh, n, x - 1, y + hh - 1, ww + 2, 2, sel, 0);
         wt_emit(sh, n, x - 1, y, 2, hh, sel, 0);
         wt_emit(sh, n, x + ww - 1, y, 2, hh, sel, 0);
+        // 8 ручек ресайза (визуал «за что тянуть» — юзер просил).
+        float hxs[3] = {x, x + ww * 0.5f, x + ww};
+        float hys[3] = {y, y + hh * 0.5f, y + hh};
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++) {
+                if (i == 1 && j == 1) continue; // центр — не ручка
+                wt_emit(sh, n, hxs[i] - 3, hys[j] - 3, 6, 6, sel, 0);
+            }
     }
 }
 
@@ -186,9 +194,98 @@ static void pal_draw(RcVecShape *sh, int *n) {
     }
 }
 
-// Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор — тут.
+// --- F2b: драг/ресайз (frozen-frame как гизмо: якорь на DOWN) ---
+// Хэндл = битмаска краёв: L=1 R=2 T=4 B=8; 0 = перемещение.
+static int g_dragId = 0;
+static int g_dragHandle = 0;
+static float g_dragMX = 0, g_dragMY = 0;             // мышь на DOWN (px окна)
+static float g_dragX = 0, g_dragY = 0, g_dragW = 0, g_dragH = 0; // rect на DOWN
+
+#define WT_GRAB 7.0f
+#define WT_MIN 8.0f
+
+// Хэндл ресайза под точкой (у выбранного). 0 = не хэндл (тело/мимо).
+static int wt_handle_hit(float px, float py) {
+    const UiWidget *s = widget_cget(&g_wt, g_wtSel);
+    if (!s) return 0;
+    float x, y, w, h;
+    widget_rect_px(s, g_WW, g_WH, &x, &y, &w, &h);
+    int loX = px >= x - 2 && px <= x + w + 2;
+    int loY = py >= y - 2 && py <= y + h + 2;
+    if (!loX || !loY) return 0;
+    int hb = 0;
+    if (px <= x + WT_GRAB) hb |= 1;
+    if (px >= x + w - WT_GRAB) hb |= 2;
+    if (py <= y + WT_GRAB) hb |= 4;
+    if (py >= y + h - WT_GRAB) hb |= 8;
+    return hb;
+}
+
+static void wt_drag_begin(int id, int handle, float mx, float my) {
+    const UiWidget *w = widget_cget(&g_wt, id);
+    if (!w) return;
+    g_dragId = id;
+    g_dragHandle = handle;
+    g_dragMX = mx;
+    g_dragMY = my;
+    widget_rect_px(w, g_WW, g_WH, &g_dragX, &g_dragY, &g_dragW, &g_dragH);
+}
+
+// Обратно из пикселей в якоря (инверсия widget_rect_px).
+static void pt_to_anchor(UiWidget *w, float px, float py, float pw, float ph, int Wpx,
+                         int Hpx) {
+    if (!w) return;
+    w->rect.w = pw;
+    w->rect.h = ph;
+    if (w->rect.anchors & UI_A_LEFT) w->rect.x = px;
+    else if (w->rect.anchors & UI_A_RIGHT) w->rect.x = (float)Wpx - px - pw;
+    else w->rect.x = px - ((float)Wpx - pw) * 0.5f;
+    if (w->rect.anchors & UI_A_TOP) w->rect.y = py;
+    else if (w->rect.anchors & UI_A_BOTTOM) w->rect.y = (float)Hpx - py - ph;
+    else w->rect.y = py - ((float)Hpx - ph) * 0.5f;
+}
+
+static void wt_drag_apply(float mx, float my) {
+    UiWidget *w = widget_get(&g_wt, g_dragId);
+    if (!w) {
+        g_dragId = 0;
+        return;
+    }
+    float dx = mx - g_dragMX, dy = my - g_dragMY;
+    float nx = g_dragX, ny = g_dragY, nw = g_dragW, nh = g_dragH;
+    if (g_dragHandle == 0) {
+        nx += dx;
+        ny += dy;
+    } else {
+        if (g_dragHandle & 1) {
+            nx += dx;
+            nw -= dx;
+        }
+        if (g_dragHandle & 2) nw += dx;
+        if (g_dragHandle & 4) {
+            ny += dy;
+            nh -= dy;
+        }
+        if (g_dragHandle & 8) nh += dy;
+        if (nw < WT_MIN) { // не даём вывернуться: фиксируем левый/верхний край
+            if (g_dragHandle & 1) nx = g_dragX + g_dragW - WT_MIN;
+            nw = WT_MIN;
+        }
+        if (nh < WT_MIN) {
+            if (g_dragHandle & 4) ny = g_dragY + g_dragH - WT_MIN;
+            nh = WT_MIN;
+        }
+    }
+    pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
+}
+
+// Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_MOVE) {
+        if (g_dragId) {
+            wt_drag_apply(e->x, e->y);
+            return 1;
+        }
         int h = pal_hit(e->x, e->y);
         if (h != g_palHot) {
             g_palHot = h;
@@ -196,25 +293,36 @@ static int wt_event(const UiEvent *e) {
         }
         return 0;
     }
+    if (e->kind == UI_EV_UP) {
+        if (g_dragId) {
+            g_dragId = 0;
+            g_dragHandle = 0;
+            return 1;
+        }
+        return 0;
+    }
     if (e->kind != UI_EV_DOWN) return 0;
     int pi = pal_hit(e->x, e->y);
-    if (pi >= 0) {
+    if (pi >= 0) { // палитра поверх всего
         wt_spawn(PAL_TYPE[pi]);
         return 1;
     }
+    int hb = wt_handle_hit(e->x, e->y);
+    if (hb > 0 && g_wtSel) { // ручки выбранного — ресайз
+        wt_drag_begin(g_wtSel, hb, e->x, e->y);
+        return 1;
+    }
     int id = wt_hit(e->x, e->y);
-    if (id) {
+    if (id) { // выбор + сразу готов к драгу
         g_wtSel = id;
+        wt_drag_begin(id, 0, e->x, e->y);
         return 1;
     }
     int inVp = e->x >= g_vpx && e->x < g_vpx + g_vpw && e->y >= g_vpy &&
                e->y < g_vpy + g_vph;
     if (inVp) {
-        if (g_wtSel) {
-            g_wtSel = 0;
-            return 1;
-        }
-        return 1; // пустой клик по холсту — наш (доки не трогаем)
+        g_wtSel = 0;
+        return 1;
     }
     return 0; // доки/меню
 }
@@ -293,6 +401,7 @@ static void on_move(GLFWwindow *win, double x, double y) {
     {
         static int lastHov = -1;
         int hov = g_panels ? ui_panels_hover(g_panels, (float)g_mx, (float)g_my) : 0;
+        if (wt_handle_hit((float)g_mx, (float)g_my) > 0) hov = 1; // ручка = resize
         if (hov != lastHov) {
             lastHov = hov;
             if (g_curArrow && g_curResize) glfwSetCursor(win, hov ? g_curResize : g_curArrow);
@@ -426,6 +535,9 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: wt-select\n");
                 bad = 1;
             }
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_UP;
+            wt_event(&we); // отпускание: клик, а не вечный драг
             // Палитра Button -> второй виджет, тип верный.
             pal_rect(1, &px, &py, &pw, &ph);
             memset(&we, 0, sizeof we);
@@ -469,6 +581,91 @@ int main(int argc, char **argv) {
             }
             widget_tree_init(&g_wt);
             g_wtSel = 0;
+        }
+        // §14 F2b: драг перемещения + ресайз (frozen-frame: якорь на DOWN).
+        {
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_palHot = -1;
+            g_dragId = 0;
+            g_dragHandle = 0;
+            memset(g_wtN, 0, sizeof g_wtN);
+            int id = wt_spawn(UI_W_BUTTON);
+            float x0, y0, w0, h0;
+            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x0, &y0, &w0, &h0);
+            UiEvent we;
+            // DOWN в теле -> move, MOVE +50/+30 -> сдвиг ровно на это, размер тот же.
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = x0 + w0 / 2;
+            we.y = y0 + h0 / 2;
+            wt_event(&we);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = x0 + w0 / 2 + 50;
+            we.y = y0 + h0 / 2 + 30;
+            wt_event(&we);
+            float x1, y1, w1, h1;
+            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x1, &y1, &w1, &h1);
+            if (x1 != x0 + 50 || y1 != y0 + 30 || w1 != w0 || h1 != h0) {
+                printf("SELF FAIL: wt-move %f %f %f %f\n", x1, y1, w1, h1);
+                bad = 1;
+            }
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_UP;
+            wt_event(&we);
+            if (g_dragId) {
+                printf("SELF FAIL: wt-up\n");
+                bad = 1;
+            }
+            // Ресайз правым краем (хэндл R): +40 -> ширина +40, позиция та же.
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = x1 + w1 - 1;
+            we.y = y1 + h1 / 2;
+            wt_event(&we);
+            if (!g_dragId || g_dragHandle != 2) {
+                printf("SELF FAIL: wt-handle-r %d\n", g_dragHandle);
+                bad = 1;
+            }
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = x1 + w1 - 1 + 40;
+            we.y = y1 + h1 / 2;
+            wt_event(&we);
+            float x2, y2, w2, h2;
+            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x2, &y2, &w2, &h2);
+            if (x2 != x1 || y2 != y1 || w2 != w1 + 40 || h2 != h1) {
+                printf("SELF FAIL: wt-resize-r %f\n", w2);
+                bad = 1;
+            }
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_UP;
+            wt_event(&we);
+            // Мин-размер: левый край тянем вправо далеко -> ширина клампится в WT_MIN.
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = x2 + 1;
+            we.y = y2 + h2 / 2;
+            wt_event(&we);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = x2 + 1 + w2 + 100;
+            we.y = y2 + h2 / 2;
+            wt_event(&we);
+            float x3, y3, w3, h3;
+            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x3, &y3, &w3, &h3);
+            if (w3 != WT_MIN) {
+                printf("SELF FAIL: wt-min %f\n", w3);
+                bad = 1;
+            }
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_UP;
+            wt_event(&we);
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_dragId = 0;
+            g_dragHandle = 0;
         }
         // §14 F1: модель виджетов — add/find/reparent/remove + rect-якоря +
         // save/load roundtrip в /tmp (следов не оставляем).
