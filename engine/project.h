@@ -23,6 +23,27 @@ char *eng_scene_json(const ScWorld *w);
 // ничего не меняет). mass обязана быть >0, follow обязан жить.
 char *eng_scene_entity_json(const ScWorld *w, Entity e);
 int eng_scene_entity_parse(ScWorld *w, Entity e, const char *js);
+// Этап Б2: project.db (SQLite). Хендл на каталог проекта (project.db внутри).
+// entities — снимок мира (soft delete флагом), journal — транзакции + undo/redo
+// (rev=1 откачено; новая мутация redo убивает). undo kill = респаун из снимка
+// (id новый — честно); redo kill = по имени (ровно одно совпадение).
+// Связка с EngView — следующим шагом; сейчас хранилище + тесты.
+typedef struct EngDb EngDb;
+EngDb *eng_db_open(const char *dir);
+void eng_db_close(EngDb *db);
+// Мир -> entities одной транзакцией (журнал не трогаем). 1 ок.
+int eng_db_sync(EngDb *db, const ScWorld *w);
+// entities (без deleted) -> мир (родители картой id). 1 ок.
+int eng_db_load(EngDb *db, ScWorld *w);
+// Мутация поля (имя из X-таблицы: pos.x..name/visible/parent) + журнал +
+// зеркало в entities. 1 ок, 0 отказ (поле/значение/сущность).
+int eng_db_set(EngDb *db, ScWorld *w, unsigned ent, const char *field, const char *value);
+// Soft delete + журнал (снимок в before). 1 ок.
+int eng_db_kill(EngDb *db, ScWorld *w, unsigned ent);
+int eng_db_undo(EngDb *db, ScWorld *w); // 1 если было что откатить
+int eng_db_redo(EngDb *db, ScWorld *w); // 1 если было что повторить
+int eng_db_count(EngDb *db, int *nents, int *njournal); // счётчики для тестов
+int eng_db_nfields(void); // число полей таблицы (тест сверяет с X-списками)
 // Создание проекта: root/имя + project.txt + scene.txt по шаблону.
 // tpl: "Empty" (Scene+Camera) или любой другой (Scene+Camera+Light+Mesh).
 // backend 1/2/3 (остальное -> 2). err/errcap — текст отказа (может быть NULL).

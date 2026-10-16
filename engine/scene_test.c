@@ -321,6 +321,143 @@ int main(void) {
             }
         }
     }
+    // Этап Б2: project.db — таблица покрывает X-списки, sync/load, журнал, undo.
+    {
+#define X(t, n) +1
+        int wantN = 9 + 3
+            SC_MATERIAL_FIELDS(X) SC_ANCHOR_FIELDS(X) SC_PHYSICS_FIELDS(X);
+#undef X
+        if (eng_db_nfields() != wantN) {
+            printf("SCENE FAIL: db-fields %d want %d\n", eng_db_nfields(), wantN);
+            bad = 1;
+        }
+        mkdir("/tmp/opencode/dbproj", 0755);
+        remove("/tmp/opencode/dbproj/project.db"); // чистый старт
+        EngDb *db = eng_db_open("/tmp/opencode/dbproj");
+        if (!db) {
+            printf("SCENE FAIL: db-open\n");
+            bad = 1;
+        } else {
+            ScWorld d;
+            sc_init(&d);
+            Entity r = sc_spawn(&d, "R");
+            Entity k = sc_spawn(&d, "K");
+            sc_parent(&d, k, r);
+            if (!eng_db_sync(db, &d)) {
+                printf("SCENE FAIL: db-sync\n");
+                bad = 1;
+            }
+            int ne = 0, nj = 0;
+            eng_db_count(db, &ne, &nj);
+            if (ne != 2 || nj != 0) {
+                printf("SCENE FAIL: db-count %d %d\n", ne, nj);
+                bad = 1;
+            }
+            // set + журнал + undo + redo по каждому типу поля.
+            if (!eng_db_set(db, &d, k, "pos.x", "5.5")) {
+                printf("SCENE FAIL: db-set\n");
+                bad = 1;
+            }
+            if (!eng_db_set(db, &d, k, "dyn", "1") ||
+                !eng_db_set(db, &d, k, "name", "K2")) {
+                printf("SCENE FAIL: db-set2\n");
+                bad = 1;
+            }
+            eng_db_count(db, 0, &nj);
+            if (nj != 3) {
+                printf("SCENE FAIL: db-journal %d\n", nj);
+                bad = 1;
+            }
+            // Битые значения — отказ без журнала.
+            if (eng_db_set(db, &d, k, "mass", "0") ||
+                eng_db_set(db, &d, k, "nope", "1") ||
+                eng_db_set(db, &d, 99999, "pos.x", "1")) {
+                printf("SCENE FAIL: db-set-bad-ok\n");
+                bad = 1;
+            }
+            eng_db_count(db, 0, &nj);
+            if (nj != 3) {
+                printf("SCENE FAIL: db-journal-dirty %d\n", nj);
+                bad = 1;
+            }
+            if (!eng_db_undo(db, &d) || strcmp(sc_name(&d, k), "K") != 0) {
+                printf("SCENE FAIL: db-undo-name\n");
+                bad = 1;
+            }
+            if (!eng_db_undo(db, &d) || sc_phys_get(&d, k).dyn != 0) {
+                printf("SCENE FAIL: db-undo-dyn\n");
+                bad = 1;
+            }
+            // Redo строго LIFO: сначала имя, потом dyn.
+            if (!eng_db_redo(db, &d) || strcmp(sc_name(&d, k), "K2") != 0) {
+                printf("SCENE FAIL: db-redo-name\n");
+                bad = 1;
+            }
+            if (!eng_db_redo(db, &d) || sc_phys_get(&d, k).dyn != 1) {
+                printf("SCENE FAIL: db-redo-dyn\n");
+                bad = 1;
+            }
+            // Новая мутация убивает redo.
+            if (!eng_db_set(db, &d, k, "mass", "3.0")) {
+                printf("SCENE FAIL: db-set3\n");
+                bad = 1;
+            }
+            if (eng_db_redo(db, &d)) {
+                printf("SCENE FAIL: db-redo-alive\n");
+                bad = 1;
+            }
+            if (!eng_db_undo(db, &d) || sc_phys_get(&d, k).mass != 1.0f) {
+                printf("SCENE FAIL: db-undo-mass\n");
+                bad = 1;
+            }
+            // Soft delete: мир пуст, база помечена, undo воскрешает.
+            if (!eng_db_kill(db, &d, k)) {
+                printf("SCENE FAIL: db-kill\n");
+                bad = 1;
+            }
+            eng_db_count(db, &ne, 0);
+            if (sc_alive(&d, k) || ne != 1) {
+                printf("SCENE FAIL: db-killed %d\n", ne);
+                bad = 1;
+            }
+            if (!eng_db_undo(db, &d)) {
+                printf("SCENE FAIL: db-unkill\n");
+                bad = 1;
+            }
+            eng_db_count(db, &ne, 0);
+            Entity lk[16];
+            int ln = sc_list(&d, lk, 16);
+            if (ln != 2 || ne != 2) {
+                printf("SCENE FAIL: db-resurrect %d %d\n", ln, ne);
+                bad = 1;
+            } else {
+                // Данные воскрешённой совпадают со снимком на kill (id новый).
+                Entity res = lk[0] == r ? lk[1] : lk[0];
+                if (strcmp(sc_name(&d, res), "K2") != 0 ||
+                    sc_phys_get(&d, res).dyn != 1) {
+                    printf("SCENE FAIL: db-res-data\n");
+                    bad = 1;
+                }
+            }
+            // load в чистый мир: родители и компоненты на месте.
+            {
+                ScWorld e2;
+                sc_init(&e2);
+                if (!eng_db_load(db, &e2)) {
+                    printf("SCENE FAIL: db-load\n");
+                    bad = 1;
+                } else {
+                    Entity el[16];
+                    int en = sc_list(&e2, el, 16);
+                    if (en != 2) {
+                        printf("SCENE FAIL: db-load-count %d\n", en);
+                        bad = 1;
+                    }
+                }
+            }
+            eng_db_close(db);
+        }
+    }
     printf(bad ? "SCENE FAIL\n" : "SCENE OK\n");
     return bad;
 }

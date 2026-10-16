@@ -5,6 +5,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(glfw3 REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(SQLite3 REQUIRED)
 find_library(VULKAN_LIB vulkan REQUIRED)
 include(FetchContent)
 FetchContent_Declare(webgpu-distribution
@@ -47,6 +48,7 @@ add_library(engine_shared SHARED
   ui/ui_undo.c
   ui/ui_gizmo.c
   wgsl_file.c
+  project_db.c
   ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.2.0 SOVERSION 0)
@@ -57,6 +59,7 @@ target_include_directories(engine_shared PUBLIC
 target_compile_definitions(engine_shared PRIVATE
   VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
 target_link_libraries(engine_shared PUBLIC glfw OpenGL::GL ${VULKAN_LIB} webgpu m)
+target_link_libraries(engine_shared PRIVATE SQLite3::SQLite3)
 target_compile_options(engine_shared PRIVATE -Wall -Wextra)
 
 # Тест математики движка (переехал из игры).
