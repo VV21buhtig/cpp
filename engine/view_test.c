@@ -153,6 +153,54 @@ int main(int argc, char **argv) {
         }
         eng_view_close(vw);
     }
+    // Этап Б: шов сущности — get/set JSON на Hero.
+    vw = eng_view_open(1u, 2u);
+    if (!vw) {
+        printf("VIEW FAIL: open entity\n");
+        bad = 1;
+    } else {
+        const char *sj = eng_view_scene(vw);
+        unsigned hero = 0;
+        if (sj) {
+            const char *h = strstr(sj, "\"name\":\"Hero\"");
+            // id идёт раньше имени: {"id":N,"name":"Hero".
+            if (h && h > sj + 20) {
+                const char *ip = h - 1;
+                while (ip > sj && *ip != '{') ip--;
+                if (sscanf(ip, "{\"id\":%u", &hero) != 1) hero = 0;
+            }
+        }
+        if (!hero) {
+            printf("VIEW FAIL: hero id\n");
+            bad = 1;
+        } else {
+            const char *ej = eng_entity_get_json(vw, hero);
+            if (!ej || !strstr(ej, "\"name\":\"Hero\"") || !strstr(ej, "\"mat\"")) {
+                printf("VIEW FAIL: entity-get\n");
+                bad = 1;
+            }
+            if (eng_entity_get_json(vw, 99999)) {
+                printf("VIEW FAIL: entity-get-dead\n");
+                bad = 1;
+            }
+            if (!eng_entity_set_json(vw, hero, "{\"pos\":[7,8,9],\"metal\":0.5}")) {
+                printf("VIEW FAIL: entity-set\n");
+                bad = 1;
+            } else {
+                const char *ej2 = eng_entity_get_json(vw, hero);
+                if (!ej2 || !strstr(ej2, "7.0000") || !strstr(ej2, "\"metal\":0.5000")) {
+                    printf("VIEW FAIL: entity-applied [%s]\n", ej2 ? ej2 : "null");
+                    bad = 1;
+                }
+            }
+            if (eng_entity_set_json(vw, hero, "not json") ||
+                eng_entity_set_json(vw, 99999, "{\"pos\":[1,2,3]}")) {
+                printf("VIEW FAIL: entity-set-bad-ok\n");
+                bad = 1;
+            }
+        }
+        eng_view_close(vw);
+    }
     // Меш GL + пикинг: центр — Hero, угол — мимо, повтор стабилен.
     vw = eng_view_open(16u, 2u);
     if (!vw) {

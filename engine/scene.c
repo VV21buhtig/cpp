@@ -24,6 +24,17 @@ Entity sc_spawn(ScWorld *w, const char *name) {
         w->tr[i].pos = v3(0, 0, 0);
         w->tr[i].rot = v3(0, 0, 0);
         w->tr[i].scale = v3(1, 1, 1);
+        // Этап Б: дефолты компонентов (белый матовый, свободна, статика).
+        w->mat[i].col = v3(1, 1, 1);
+        w->mat[i].a = 1.0f;
+        w->mat[i].rough = 0.8f;
+        w->mat[i].metal = 0.0f;
+        w->anchor[i].mode = 0;
+        w->anchor[i].follow = 0;
+        w->anchor[i].off = v3(0, 0, 0);
+        w->phys[i].vel = v3(0, 0, 0);
+        w->phys[i].mass = 1.0f;
+        w->phys[i].dyn = 0;
         if (name) {
             strncpy(w->name[i], name, SC_NAME - 1);
             w->name[i][SC_NAME - 1] = 0;
@@ -111,6 +122,56 @@ void sc_set(ScWorld *w, Entity e, const ScTransform *t) {
     int i = idx(e);
     if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
     w->tr[i] = *t;
+}
+
+// Этап Б: get на мёртвой — нули (дефолт спавна для scale не повторяем:
+// мёртвой сущности нет, нули честнее единицы). set на мёртвой — игнор.
+ScMaterial sc_mat_get(const ScWorld *w, Entity e) {
+    ScMaterial m;
+    memset(&m, 0, sizeof m);
+    if (!w) return m;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return m;
+    return w->mat[i];
+}
+
+void sc_mat_set(ScWorld *w, Entity e, const ScMaterial *m) {
+    if (!w || !m) return;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
+    w->mat[i] = *m;
+}
+
+ScAnchor sc_anchor_get(const ScWorld *w, Entity e) {
+    ScAnchor a;
+    memset(&a, 0, sizeof a);
+    if (!w) return a;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return a;
+    return w->anchor[i];
+}
+
+void sc_anchor_set(ScWorld *w, Entity e, const ScAnchor *a) {
+    if (!w || !a) return;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
+    w->anchor[i] = *a;
+}
+
+ScPhysics sc_phys_get(const ScWorld *w, Entity e) {
+    ScPhysics p;
+    memset(&p, 0, sizeof p);
+    if (!w) return p;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return p;
+    return w->phys[i];
+}
+
+void sc_phys_set(ScWorld *w, Entity e, const ScPhysics *p) {
+    if (!w || !p) return;
+    int i = idx(e);
+    if (i < 0 || i >= SC_MAX || !w->alive[i]) return;
+    w->phys[i] = *p;
 }
 
 int sc_visible(const ScWorld *w, Entity e) {

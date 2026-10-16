@@ -29,6 +29,13 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h);
 // Дерево сцены для клиента: JSON (eng_scene_json), живёт до следующего
 // вызова или close. Не free().
 const char *eng_view_scene(EngView *vw);
+// Этап Б: сущность целиком (тот же JSON что сцена, одна запись).
+// get: внутренняя строка (живёт как scene, не free). NULL если нет сущности.
+// set: частичное обновление present-ключами (pos/rot/scale/mat/alpha/rough/
+// metal/anchor/follow/off/dyn/mass/vel/visible/name). Атомарно: битый JSON
+// ничего не меняет. 1 ок, 0 отказ.
+const char *eng_entity_get_json(EngView *vw, unsigned ent);
+int eng_entity_set_json(EngView *vw, unsigned ent, const char *js);
 // Кадров отрисовано (кадр растёт только при рендере — для вердиктов).
 int eng_view_frames(const EngView *vw);
 // Пикинг (только MESH-домен GL v1): сущность под пикселем (x,y) кадра

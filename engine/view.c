@@ -456,6 +456,30 @@ const char *eng_view_scene(EngView *vw) {
     return vw->json;
 }
 
+const char *eng_entity_get_json(EngView *vw, unsigned ent) {
+    if (!vw || !sc_alive(&vw->scene, (Entity)ent)) return 0;
+    char *js = eng_scene_entity_json(&vw->scene, (Entity)ent);
+    if (!js) return 0;
+    size_t n = strlen(js) + 1;
+    if (n > vw->jsonCap) {
+        char *nb = (char *)realloc(vw->json, n);
+        if (!nb) {
+            free(js);
+            return 0;
+        }
+        vw->json = nb;
+        vw->jsonCap = n;
+    }
+    memcpy(vw->json, js, n);
+    free(js);
+    return vw->json;
+}
+
+int eng_entity_set_json(EngView *vw, unsigned ent, const char *js) {
+    if (!vw || !js || !sc_alive(&vw->scene, (Entity)ent)) return 0;
+    return eng_scene_entity_parse(&vw->scene, (Entity)ent, js);
+}
+
 int eng_view_frames(const EngView *vw) {
     return vw ? vw->frame : 0;
 }

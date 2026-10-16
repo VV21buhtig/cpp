@@ -18,6 +18,11 @@ int eng_scene_load(ScWorld *w, const char *dir);
 // Снимок дерева для тонкого клиента (Electron): JSON, строка 0 = верх.
 // Вызыватель free(). NULL если память не дали.
 char *eng_scene_json(const ScWorld *w);
+// Этап Б: одна сущность (тот же набор ключей). free(). 0 аргументы/сущности.
+// Парсер: частичное обновление present-ключами, атомарно (битый JSON = 0,
+// ничего не меняет). mass обязана быть >0, follow обязан жить.
+char *eng_scene_entity_json(const ScWorld *w, Entity e);
+int eng_scene_entity_parse(ScWorld *w, Entity e, const char *js);
 // Создание проекта: root/имя + project.txt + scene.txt по шаблону.
 // tpl: "Empty" (Scene+Camera) или любой другой (Scene+Camera+Light+Mesh).
 // backend 1/2/3 (остальное -> 2). err/errcap — текст отказа (может быть NULL).
