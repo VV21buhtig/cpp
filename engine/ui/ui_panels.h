@@ -24,6 +24,8 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h);
 
 unsigned ui_panels_selected(const UiPanels *p);
 int ui_panels_tool(const UiPanels *p); // 0 select 1 move 2 rotate 3 scale
+// Прямоугольник вьюпорта (док-модель UE: остаток после панелей).
+void ui_panels_viewport(const UiPanels *p, int W, int H, int *x, int *y, int *w, int *h);
 // Общий стек undo (туда же коммитит гизмо).
 UiUndo *ui_panels_undo(UiPanels *p);
 // Трансформ трогали скрабом (тесту надо перекачать суп). Сбрасывается чтением.

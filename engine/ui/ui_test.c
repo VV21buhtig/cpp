@@ -31,6 +31,11 @@ static ScWorld g_scene;
 static RcView g_view; // камера кадра (гизмо проецирует тем же PV что ядра)
 static double g_mx = 0, g_my = 0;
 static int g_capture = 0; // захват мыши модальным виджетом (FReply::CaptureMouse)
+// Док-раскладка (как UE: панели отъедают место сплиттерами, вьюпорту остаток).
+// 3D рисуется ТОЛЬКО в rect (цель вьюпорта), панели — вокруг, не поверх 3D.
+static int g_vpx = 220, g_vpy = 58, g_vpw = 840, g_vph = 636;
+static RcTarget g_vp; // цель вьюпорта (пересоздаётся одна — не ядро/окно/мир)
+static int g_vpOk = 0;
 
 // Тестовый куб: ЛОКАЛЬНЫЙ (центр 0, h=3). Мир = TRS сущности (см. ниже).
 // Грани P + idx 0,1,2/0,2,3, нормали наружу (проверено скриптом).
@@ -115,6 +120,31 @@ static void ui_push_dirty(void) {
         ui_gizmo_select(g_gizmo, ui_panels_selected(g_panels));
         ui_gizmo_tool(g_gizmo, ui_panels_tool(g_panels));
     }
+    // Док-раскладка: вьюпорт = остаток после панелей. Смена layout —
+    // пересоздать ТОЛЬКО цель (как UE UpdateViewportRHI, не ядро/окно).
+    {
+        int x, y, w, h;
+        ui_panels_viewport(g_panels, W, H, &x, &y, &w, &h);
+        if (w < 64) w = 64;
+        if (h < 64) h = 64;
+        if (!g_vpOk || x != g_vpx || y != g_vpy || w != g_vpw || h != g_vph) {
+            if (g_vpOk) comp_target_gl_free(&g_vp);
+            memset(&g_vp, 0, sizeof g_vp);
+            if (comp_target_gl_new(&g_vp, w, h)) {
+                g_vpx = x;
+                g_vpy = y;
+                g_vpw = w;
+                g_vph = h;
+                g_vpOk = 1;
+                g_view.resW = w; // камера с аспектом вьюпорта, не окна
+                g_view.resH = h;
+            } else {
+                memset(&g_vp, 0, sizeof g_vp);
+                g_vpOk = 0;
+            }
+        }
+    }
+    if (g_gizmo) ui_gizmo_viewport(g_gizmo, g_vpx, g_vpy, g_vpw, g_vph);
     ui_panels_build(g_panels, &g_scene, W, H, &fr); // зовём только когда грязно
     if (fr) {
         for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
@@ -194,11 +224,11 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     (void)mods;
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_Q || key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_R ||
-        key == GLFW_KEY_Z || key == GLFW_KEY_Y) {
+        key == GLFW_KEY_Z || key == GLFW_KEY_Y || key == GLFW_KEY_TAB) {
         UiEvent e;
         memset(&e, 0, sizeof e);
         e.kind = UI_EV_KEY;
-        e.key = key; // GLFW_KEY_Q.. совпадают с ASCII
+        e.key = key; // GLFW_KEY_Q.. совпадают с ASCII; TAB=258 (см. панели)
         e.mods = mods; // 1 shift 2 ctrl 4 alt (для Ctrl+Z/Y)
         route_event(&e);
     }
@@ -274,16 +304,17 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             // Скраб: DOWN на поле pos.x + MOVE +40px + UP => +2.0 в сцену.
+            // Сетка инспектора: x=W-220+4, строки с y=116 (заголовок+26px ряды).
             ui_panels_build(pn, &sw, 1280, 720, &pf);
             memset(&pe, 0, sizeof pe);
             pe.kind = UI_EV_DOWN;
-            pe.x = 1280 - 246 + 10;
-            pe.y = 84 + 12;
+            pe.x = 1280 - 220 + 4 + 10;
+            pe.y = 116 + 12;
             ui_panels_event(pn, &sw, &pe);
             memset(&pe, 0, sizeof pe);
             pe.kind = UI_EV_MOVE;
-            pe.x = 1280 - 246 + 50;
-            pe.y = 84 + 12;
+            pe.x = 1280 - 220 + 4 + 50;
+            pe.y = 116 + 12;
             ui_panels_event(pn, &sw, &pe);
             memset(&pe, 0, sizeof pe);
             pe.kind = UI_EV_UP;
@@ -309,6 +340,28 @@ int main(int argc, char **argv) {
                 if (g_cube[0] != g_base[0] + 10.0f || g_cube[1] != g_base[1] ||
                     g_cube[2] != g_base[2]) {
                     printf("SELF FAIL: soup pose %f %f %f\n", g_cube[0], g_cube[1], g_cube[2]);
+                    bad = 1;
+                }
+            }
+            // Док-раскладка: вьюпорт = остаток (220,58,840,636); коллапс/Tab.
+            {
+                int x, y, w, h;
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 220 || y != 58 || w != 840 || h != 636) {
+                    printf("SELF FAIL: viewport %d %d %d %d\n", x, y, w, h);
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 206;
+                pe.y = 70; // кнопка коллапса иерархии
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: collapse miss\n");
+                    bad = 1;
+                }
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 28 || w != 1032) {
+                    printf("SELF FAIL: collapsed viewport %d %d %d %d\n", x, y, w, h);
                     bad = 1;
                 }
             }
@@ -651,11 +704,33 @@ int main(int argc, char **argv) {
                 if (mesh->upload_mesh) mesh->upload_mesh(mesh, &mm);
             }
         }
-        t.noClear = 0;
-        if (mesh->frame_to) mesh->frame_to(mesh, &v, &t);
+        g_view.resW = g_vpOk ? g_vpw : W; // аспект вьюпорта (или окна при отказе)
+        g_view.resH = g_vpOk ? g_vph : H;
+        // Чистим общую цель (3D теперь в своей, раньше чистил mesh-проход).
+        glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+        glViewport(0, 0, W, H);
+        glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        t.noClear = 1; // уже чистили сами (vec поверх без чистки)
+        if (g_vpOk) {
+            // 3D ТОЛЬКО во вьюпорт (своя цель, свой аспект)...
+            g_vp.noClear = 0;
+            if (mesh->frame_to) mesh->frame_to(mesh, &g_view, &g_vp);
+            // ...затем GPU-блит в общую цель на место rect (0 копий CPU).
+            // GL y-вверх: dst перевёрнут относительно UI y-вниз.
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, g_vp.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, t.fbo);
+            glBlitFramebuffer(0, 0, g_vpw, g_vph, g_vpx, H - (g_vpy + g_vph),
+                              g_vpx + g_vpw, H - g_vpy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        } else {
+            if (mesh->frame_to) mesh->frame_to(mesh, &g_view, &t);
+        }
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
         if (text) {
-            // Панели: текст (имена/режимы/статус) + живой fps.
+            // Панели: текст (имена/режимы/статус). fps — оверлеем ВНУТРИ
+            // вьюпорта (как UE viewport stats), не отдельной полосой.
             // В ЦЕЛЬ (fbo), до презента — иначе презент перекроет.
             double now = glfwGetTime();
             if (now - tPrev >= 0.5) {
@@ -663,7 +738,7 @@ int main(int argc, char **argv) {
                 snprintf(fpsBuf, sizeof fpsBuf, "ui_test %d", frames);
             }
             ui_panels_text(g_panels, &g_scene, text, W, H);
-            ui_text_quad(text, 14.0f, 700.0f, fpsBuf, white);
+            ui_text_quad(text, (float)(g_vpx + 10), (float)(g_vpy + 8), fpsBuf, white);
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, W, H);
             ui_text_flush(text, W, H);

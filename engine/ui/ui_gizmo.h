@@ -22,6 +22,10 @@ UiReply ui_gizmo_event(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H
                        UiUndo *undo, const UiEvent *e);
 // Какая сущность под гизмо (ставит вызывающий из panels-selected).
 void ui_gizmo_select(UiGizmo *g, unsigned ent);
+// Прямоугольник вьюпорта в пикселях окна (y вниз, как UE-документ): проекция
+// NDC маппится ВНУТРЬ rect (док-панели отъедают место сплиттерами, вьюпорту —
+// остаток). По умолчанию весь кадр (вызывать до build/event).
+void ui_gizmo_viewport(UiGizmo *g, int x, int y, int w, int h);
 // Down-хит стрелков сущности (приоритет выше панелей).
 UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
                       unsigned ent, float x, float y);

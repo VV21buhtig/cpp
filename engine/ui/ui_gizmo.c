@@ -16,6 +16,7 @@
 struct UiGizmo {
     int tool;
     unsigned sel; // сущность под гизмо (ставит вызывающий)
+    int vpx, vpy, vpw, vph; // rect вьюпорта (док-модель UE; 0,0,0,0 = весь кадр)
     int axis; // -1 нет захвата, 0/1/2 ось
     unsigned ent;
     float grabT; // t точки DOWN вдоль оси (в долях длины)
@@ -45,6 +46,14 @@ void ui_gizmo_select(UiGizmo *g, unsigned ent) {
         g->sel = ent;
         g->axis = -1; // смена цели сбрасывает захват
     }
+}
+
+void ui_gizmo_viewport(UiGizmo *g, int x, int y, int w, int h) {
+    if (!g) return;
+    g->vpx = x;
+    g->vpy = y;
+    g->vpw = w;
+    g->vph = h;
 }
 
 int ui_gizmo_posed(UiGizmo *g) {
@@ -84,6 +93,35 @@ int ui_gizmo_project(const RcView *v, int W, int H, const float w[3], float *sx,
     return 1;
 }
 
+// Проекция ВНУТРЬ rect вьюпорта (док-модель): аспект = размер rect (камера
+// рендерит с тем же аспектом), NDC маппится в rect. Пустой rect = весь кадр.
+static int vp_project(const UiGizmo *g, const RcView *v, const float w[3], float *sx,
+                      float *sy) {
+    int vpx = g->vpx, vpy = g->vpy, vpw = g->vpw, vph = g->vph;
+    if (vpw <= 0 || vph <= 0) { // весь кадр
+        vpx = 0;
+        vpy = 0;
+        vpw = 1280;
+        vph = 720;
+    }
+    float fx, fy; // 0..1
+    {
+        Mat4 pv;
+        gizmo_pv(v, vpw, vph, &pv); // аспект вьюпорта, не окна
+        float x = w[0], y = w[1], z = w[2];
+        const float *m = pv.m;
+        float cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+        float cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+        float cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if (cw <= 0.0f) return 0;
+        fx = cx / cw * 0.5f + 0.5f;
+        fy = 1.0f - (cy / cw * 0.5f + 0.5f); // y вниз
+    }
+    if (sx) *sx = vpx + fx * vpw;
+    if (sy) *sy = vpy + fy * vph;
+    return 1;
+}
+
 static float seg_dist(float px, float py, float ax, float ay, float bx, float by, float *t) {
     float dx = bx - ax, dy = by - ay;
     float l2 = dx * dx + dy * dy;
@@ -96,6 +134,8 @@ static float seg_dist(float px, float py, float ax, float ay, float bx, float by
 
 UiReply ui_gizmo_event(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
                        UiUndo *undo, const UiEvent *e) {
+    (void)W;
+    (void)H; // геометрия из g->vp* (док-модель), не из окна
     if (!g || !e) return ui_unhandled();
     // Модальный drag вдоль оси.
     if (g->axis >= 0) {
@@ -109,8 +149,8 @@ UiReply ui_gizmo_event(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H
             float o[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
             float tip[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
             tip[g->axis] += GIZMO_LEN;
-            if (!ui_gizmo_project(v, W, H, o, &ox, &oy) ||
-                !ui_gizmo_project(v, W, H, tip, &axx, &ayy))
+            if (!vp_project(g, v, o, &ox, &oy) ||
+                !vp_project(g, v, tip, &axx, &ayy))
                 return ui_handled(0, 1);
             float t = 0;
             seg_dist(e->x, e->y, ox, oy, axx, ayy, &t);
@@ -141,17 +181,19 @@ UiReply ui_gizmo_event(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H
 // DOWN-хит по конкретной сущности (вызывающий знает selected из панелей).
 UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H, unsigned ent,
                       float x, float y) {
+    (void)W;
+    (void)H; // см. event
     if (!g || g->tool != 1 || !scene || !sc_alive(scene, ent)) return ui_unhandled();
     ScTransform tr = sc_get(scene, ent);
     float o[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
     float ox, oy;
-    if (!ui_gizmo_project(v, W, H, o, &ox, &oy)) return ui_unhandled();
+    if (!vp_project(g, v, o, &ox, &oy)) return ui_unhandled();
     static const float AX[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     for (int a = 0; a < 3; a++) {
         float tip[3] = {o[0] + AX[a][0] * GIZMO_LEN, o[1] + AX[a][1] * GIZMO_LEN,
                         o[2] + AX[a][2] * GIZMO_LEN};
         float tx, ty;
-        if (!ui_gizmo_project(v, W, H, tip, &tx, &ty)) continue;
+        if (!vp_project(g, v, tip, &tx, &ty)) continue;
         float dx = tx - ox, dy = ty - oy;
         if (dx * dx + dy * dy < GIZMO_MINPX * GIZMO_MINPX) continue; // ось в камеру
         float t = 0;
@@ -169,13 +211,15 @@ UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
 
 int ui_gizmo_build(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H, UiPrim *out,
                    int cap) {
+    (void)W;
+    (void)H; // см. выше
     if (!g || g->tool != 1 || !scene || !out || cap <= 0) return 0;
     // Рисуем для selected (ставит вызывающий).
     if (!g->sel || !sc_alive(scene, g->sel)) return 0;
     ScTransform tr = sc_get(scene, g->sel);
     float o[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
     float ox, oy;
-    if (!ui_gizmo_project(v, W, H, o, &ox, &oy)) return 0;
+    if (!vp_project(g, v, o, &ox, &oy)) return 0;
     static const float AX[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     static const float COL[3][4] = {{1, 0.15f, 0.1f, 1}, {0.15f, 0.75f, 0.15f, 1},
                                     {0.2f, 0.4f, 1, 1}};
@@ -184,7 +228,7 @@ int ui_gizmo_build(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H, Ui
         float tip[3] = {o[0] + AX[a][0] * GIZMO_LEN, o[1] + AX[a][1] * GIZMO_LEN,
                         o[2] + AX[a][2] * GIZMO_LEN};
         float tx, ty;
-        if (!ui_gizmo_project(v, W, H, tip, &tx, &ty)) continue;
+        if (!vp_project(g, v, tip, &tx, &ty)) continue;
         float dx = tx - ox, dy = ty - oy;
         float len = sqrtf(dx * dx + dy * dy);
         if (len < GIZMO_MINPX) continue;
