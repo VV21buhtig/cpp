@@ -168,7 +168,7 @@ static void ui_push_dirty(void) {
         }
     }
     int ngAll = 0;
-    if (g_gizmo) {
+    if (g_gizmo && !ui_panels_edit(g_panels)) {
         UiPrim gp[96]; // кольца: 3x24 сегмента + запас
         int ng = ui_gizmo_build(g_gizmo, &g_scene, &g_view, g_WW, g_WH, gp, 96);
         ngAll = ng;
@@ -287,19 +287,23 @@ static void route_event(const UiEvent *e) {
         }
         g_traceMoves++;
     }
-    UiReply r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, g_WW, g_WH,
-                               ui_panels_undo(g_panels), e);
-    if (r.handled) {
-        g_capture = r.capture;
-        if (r.dirty) ui_push_dirty();
-        if (g_trace && e->kind == UI_EV_KEY) {
-            printf("[trace] KEY %d mods=%d -> gizmo\n", e->key, e->mods);
-        } else if (g_trace && (e->kind != UI_EV_MOVE || logMove)) {
-            printf("[trace] %s %.0f,%.0f -> gizmo%s%s\n", kind, e->x, e->y,
-                   r.capture ? " capture" : "", r.dirty ? " dirty" : "");
+    UiReply r = ui_unhandled();
+    // Ручной режим (§11): гизмо скрыто, все события — панелям.
+    if (!ui_panels_edit(g_panels)) {
+        r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, g_WW, g_WH, ui_panels_undo(g_panels),
+                           e);
+        if (r.handled) {
+            g_capture = r.capture;
+            if (r.dirty) ui_push_dirty();
+            if (g_trace && e->kind == UI_EV_KEY) {
+                printf("[trace] KEY %d mods=%d -> gizmo\n", e->key, e->mods);
+            } else if (g_trace && (e->kind != UI_EV_MOVE || logMove)) {
+                printf("[trace] %s %.0f,%.0f -> gizmo%s%s\n", kind, e->x, e->y,
+                       r.capture ? " capture" : "", r.dirty ? " dirty" : "");
+            }
+            if (g_trace && e->kind == UI_EV_UP) trace_commit();
+            return;
         }
-        if (g_trace && e->kind == UI_EV_UP) trace_commit();
-        return;
     }
     r = ui_panels_event(g_panels, &g_scene, e);
     if (r.handled) g_capture = r.capture;
@@ -353,7 +357,7 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     (void)mods;
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_Q || key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_R ||
-        key == GLFW_KEY_Z || key == GLFW_KEY_Y || key == GLFW_KEY_TAB) {
+        key == GLFW_KEY_Z || key == GLFW_KEY_Y || key == GLFW_KEY_TAB || key == GLFW_KEY_L) {
         UiEvent e;
         memset(&e, 0, sizeof e);
         e.kind = UI_EV_KEY;
@@ -528,6 +532,45 @@ int main(int argc, char **argv) {
                 ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
                 if (x != 0 || w != 1280 || h != 636) {
                     printf("SELF FAIL: tab viewport %d %d %d %d\n", x, y, w, h);
+                    bad = 1;
+                }
+                // Ручной режим (§11): L вкл — строки инертны, сплиттер жив.
+                // (Tab до этого всё спрятал — вернуть панели сначала.)
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 258;
+                ui_panels_event(pn, &sw, &pe);
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 'L';
+                if (!ui_panels_event(pn, &sw, &pe).handled || !ui_panels_edit(pn)) {
+                    printf("SELF FAIL: edit on\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 30;
+                pe.y = 64; // первая строка — в обычном режиме select
+                if (ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: edit row live\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 257;
+                pe.y = 300; // край hierW=260 — сплиттер хватает и в EDIT
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: edit splitter dead\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_UP;
+                ui_panels_event(pn, &sw, &pe);
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 'L';
+                if (!ui_panels_event(pn, &sw, &pe).handled || ui_panels_edit(pn)) {
+                    printf("SELF FAIL: edit off\n");
                     bad = 1;
                 }
             }
@@ -1026,7 +1069,7 @@ int main(int argc, char **argv) {
     // (Тут гизмо уже живёт и синхронизировано.)
     {
         const char *dd = getenv("FUI_DEMO");
-        if (dd && (!strcmp(dd, "drag") || !strcmp(dd, "dragfar"))) {
+        if (dd && (!strcmp(dd, "drag") || !strcmp(dd, "dragfar") || !strcmp(dd, "edit"))) {
             int steps = !strcmp(dd, "dragfar") ? 30 : 5; // far: +600px до бортика
             float hx, hy;
             if (ui_gizmo_handle(g_gizmo, &g_scene, &g_view, 0, 0, 50.0f, &hx, &hy)) {
@@ -1061,6 +1104,25 @@ int main(int argc, char **argv) {
         }
     }
     printf("ui_test: RUN (click rects, Esc/close to quit)\n");
+    // FUI_DEMO=edit: скрипт-пруф ручного режима (§11): L + клик по строке.
+    {
+        const char *de2 = getenv("FUI_DEMO");
+        if (de2 && !strcmp(de2, "edit")) {
+            UiEvent ke2;
+            memset(&ke2, 0, sizeof ke2);
+            ke2.kind = UI_EV_KEY;
+            ke2.key = 'L';
+            route_event(&ke2);
+            printf("ui_test: edit=%d (want 1)\n", ui_panels_edit(g_panels));
+            UiEvent re;
+            memset(&re, 0, sizeof re);
+            re.kind = UI_EV_DOWN;
+            re.x = 30;
+            re.y = 100; // строка иерархии — в EDIT инертна
+            route_event(&re);
+            printf("ui_test: edit=%d sel-stays\n", ui_panels_edit(g_panels));
+        }
+    }
     // Доказательство картинкой (как VOX_SHOT): UI_SHOT=shot.ppm UI_SHOT_AT=60.
     const char *shot = getenv("UI_SHOT");
     int shotAt = 60;

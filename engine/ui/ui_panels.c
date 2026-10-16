@@ -37,10 +37,13 @@ struct UiPanels {
     int tool;
     int dirty;
     int posed; // трансформ сущности меняли (тесту надо перекачать суп)
-    int showHier; // 1 панель иерархии (0 = полоска 28px, вьюпорту больше места)
-    int showInsp; // 1 панель инспектора (0 = полоска)
-    int hierW; // ширина иерархии (220) / полоски (28)
-    int inspW; // ширина инспектора (220) / полоски (28)
+    int showHier; // 1 панель иерархии (0 = 0px, вьюпорту всё место)
+    int showInsp; // 1 панель инспектора (0 = 0px)
+    int hierW; // ширина иерархии (220)
+    int inspW; // ширина инспектора (220)
+    int splitDrag; // 0 нет, 1 тащим край иерархии, 2 край инспектора (SSplitter)
+    float splitX0; // x DOWN
+    int splitW0; // ширина на DOWN
     UiFrame frame;
     char flash[64]; // последняя команда меню (File stub и т.п.)
     PnRow rows[PN_MAXROWS];
@@ -49,6 +52,7 @@ struct UiPanels {
     int scrubField; // -1 нет модального скраба (захват мыши как CaptureMouse)
     float scrubWas; // значение на DOWN (для undo-коммита на UP)
     float scrubX0;
+    int editMode; // 1 ручной режим (§11): строки инертны, живут сплиттер/коллапс
     UiTheme theme; // одна тема (hot-reload по mtime)
     UiUndo undo; // стек команд (Фаза 5)
     UiEcsRef erefs[PN_NF]; // привязки строк инспектора к ECS (TAttribute)
@@ -198,12 +202,54 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
             p->dirty = 1;
             return ui_handled(1, 0);
         }
+        // L: ручной режим (§11, Figma-руками, код 0). Без модов.
+        if (e->key == 'L' && !(e->mods & 6)) {
+            p->editMode = !p->editMode;
+            p->splitDrag = 0; // выход из сплиттера при переключении
+            p->scrubField = -1; // и из скраба
+            p->dirty = 1;
+            return ui_handled(1, 0);
+        }
+        return ui_unhandled();
+    }
+    // Модальный сплиттер раньше контента (тащим границу — едет ширина).
+    if (p->splitDrag) {
+        if (e->kind == UI_EV_MOVE) {
+            int w = p->splitW0 + (int)(p->splitDrag == 1 ? e->x - p->splitX0
+                                                         : p->splitX0 - e->x);
+            if (w < 120) w = 120;
+            if (w > 400) w = 400;
+            if (p->splitDrag == 1) p->hierW = w;
+            else p->inspW = w;
+            p->dirty = 1;
+            return ui_handled(1, 1);
+        }
+        if (e->kind == UI_EV_UP) {
+            p->splitDrag = 0;
+            p->dirty = 1;
+            return ui_handled(1, 0);
+        }
         return ui_unhandled();
     }
     if (e->kind != UI_EV_DOWN || e->button != 0) return ui_unhandled();
     float x = e->x, y = e->y;
     int hx = p->showHier ? p->hierW : 0;
     int ix = p->showInsp ? p->inspW : 0;
+    // Сплиттер раньше строк (SSplitter: тащим край — едет ширина, 120..400).
+    if (y >= 58 && y < p->winH) {
+        if (p->showHier && x >= hx - 6 && x < hx) {
+            p->splitDrag = 1;
+            p->splitX0 = x;
+            p->splitW0 = p->hierW;
+            return ui_handled(0, 1);
+        }
+        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 6) {
+            p->splitDrag = 2;
+            p->splitX0 = x;
+            p->splitW0 = p->inspW;
+            return ui_handled(0, 1);
+        }
+    }
     // Кнопки коллапса раньше контента (хром первее строк).
     // Закрытая панель = 0px (возврат через Tab/View, полосок нет).
     if (y >= 58 && y < 82) {
@@ -221,7 +267,8 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         }
     }
     // Инспектор: DOWN на строке поля = начать скраб через бинд (коммит на UP).
-    if (scene && p->selected && sc_alive(scene, p->selected)) {
+    // В ручном режиме строки инертны (§11): живут только сплиттер/коллапс.
+    if (!p->editMode && scene && p->selected && sc_alive(scene, p->selected)) {
         for (int i = 0; i < PN_NF; i++) {
             if (x >= p->frows[i].x && x < p->frows[i].x + p->frows[i].w &&
                 y >= p->frows[i].y && y < p->frows[i].y + p->frows[i].h) {
@@ -258,7 +305,9 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         return ui_handled(1, 0);
     }
     // Иерархия: строки (смена selection перепривязывает инспектор).
-    for (int i = 0; i < p->nrows; i++) {
+    // В ручном режиме инертны (§11): клик по строке ничего не меняет.
+    if (!p->editMode)
+        for (int i = 0; i < p->nrows; i++) {
         if (x >= p->rows[i].x && x < p->rows[i].x + p->rows[i].w && y >= p->rows[i].y &&
             y < p->rows[i].y + p->rows[i].h) {
             if (p->selected != p->rows[i].id) {
@@ -386,7 +435,8 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
         const char *nm = sc_name(scene, p->selected);
         if (nm && nm[0]) sel = nm;
     }
-    snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels", sel, p->tool);
+    snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels%s", sel, p->tool,
+             p->editMode ? " | EDIT (L)" : "");
     ui_text_quad(text, (float)(hx + 10), (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + группы Position/Rotation/Scale + значения в цветах осей.
     if (p->showInsp) {
@@ -427,4 +477,8 @@ int ui_panels_posed(UiPanels *p) {
 
 int ui_panels_tool(const UiPanels *p) {
     return p ? p->tool : 0;
+}
+
+int ui_panels_edit(const UiPanels *p) {
+    return p ? p->editMode : 0;
 }
