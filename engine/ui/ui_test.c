@@ -560,8 +560,15 @@ int main(int argc, char **argv) {
                 memset(&pe, 0, sizeof pe);
                 pe.kind = UI_EV_DOWN;
                 pe.x = 30;
-                pe.y = 64; // первая строка — в обычном режиме select
-                if (ui_panels_event(pn, &sw, &pe).handled) {
+                pe.y = 64; // шапка в EDIT: начало drag панели (строки инертны)
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: edit header dead\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_UP;
+                ui_panels_event(pn, &sw, &pe);
+                if (ui_panels_selected(pn) != b) {
                     printf("SELF FAIL: edit row live\n");
                     bad = 1;
                 }
@@ -663,6 +670,50 @@ int main(int argc, char **argv) {
                     pe.key = 'L';
                     ui_panels_event(pn, &sw, &pe); // EDIT выкл
                 }
+                // §11 хвост: шапку налево->направо = swap; Ctrl+Z откатывает.
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 'L';
+                ui_panels_event(pn, &sw, &pe); // EDIT вкл
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 30;
+                pe.y = 70; // левая шапка (hierW=260)
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: header grab\n");
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_MOVE;
+                pe.x = 1200;
+                pe.y = 70;
+                ui_panels_event(pn, &sw, &pe);
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_UP;
+                ui_panels_event(pn, &sw, &pe);
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 220) { // слева теперь инспектор (220), не hier (260)
+                    printf("SELF FAIL: swap viewport x=%d\n", x);
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 'Z';
+                pe.mods = 2; // Ctrl+Z в EDIT = откат раскладки
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: layout undo\n");
+                    bad = 1;
+                }
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 260) {
+                    printf("SELF FAIL: unswap viewport x=%d\n", x);
+                    bad = 1;
+                }
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 'L';
+                ui_panels_event(pn, &sw, &pe); // EDIT выкл
+                remove("engine/assets/layout.json"); // тест следов не оставляет
             }
             ui_panels_destroy(pn);
         }
@@ -1181,7 +1232,8 @@ int main(int argc, char **argv) {
     // (Тут гизмо уже живёт и синхронизировано.)
     {
         const char *dd = getenv("FUI_DEMO");
-        if (dd && (!strcmp(dd, "drag") || !strcmp(dd, "dragfar") || !strcmp(dd, "edit"))) {
+        if (dd && (!strcmp(dd, "drag") || !strcmp(dd, "dragfar") || !strcmp(dd, "edit") ||
+                   !strcmp(dd, "swap"))) {
             int steps = !strcmp(dd, "dragfar") ? 30 : 5; // far: +600px до бортика
             float hx, hy;
             if (ui_gizmo_handle(g_gizmo, &g_scene, &g_view, 0, 0, 50.0f, &hx, &hy)) {
@@ -1216,6 +1268,35 @@ int main(int argc, char **argv) {
         }
     }
     printf("ui_test: RUN (click rects, Esc/close to quit)\n");
+    // FUI_DEMO=swap: скрипт-пруф swap доков (§11 хвост): L + шапка направо.
+    {
+        const char *de3 = getenv("FUI_DEMO");
+        if (de3 && !strcmp(de3, "swap")) {
+            UiEvent se3;
+            memset(&se3, 0, sizeof se3);
+            se3.kind = UI_EV_KEY;
+            se3.key = 'L';
+            route_event(&se3);
+            memset(&se3, 0, sizeof se3);
+            se3.kind = UI_EV_DOWN;
+            se3.x = 100;
+            se3.y = 70;
+            route_event(&se3);
+            memset(&se3, 0, sizeof se3);
+            se3.kind = UI_EV_MOVE;
+            se3.x = (float)g_WW - 100;
+            se3.y = 70;
+            route_event(&se3);
+            memset(&se3, 0, sizeof se3);
+            se3.kind = UI_EV_UP;
+            se3.x = (float)g_WW - 100;
+            se3.y = 70;
+            route_event(&se3);
+            int sx, sy, sw2, sh2;
+            ui_panels_viewport(g_panels, g_WW, g_WH, &sx, &sy, &sw2, &sh2);
+            printf("ui_test: swap vp x=%d (want insp left)\n", sx);
+        }
+    }
     // FUI_DEMO=edit: скрипт-пруф ручного режима (§11): L + клик по строке.
     {
         const char *de2 = getenv("FUI_DEMO");

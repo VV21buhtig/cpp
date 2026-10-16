@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "ui_panels.h"
 #include "ui_reflect.h" // дескрипторы Transform: один список на всех
 #include "ui_theme.h" // одна тема + hot-reload по mtime
@@ -40,6 +41,11 @@ typedef struct {
 
 #define PN_NS 4 // style-строк в EDIT (скругление/отступ/альфы)
 
+// Снимок раскладки (§11 хвост).
+typedef struct {
+    int hierW, inspW, showHier, showInsp, swapped;
+} LaySnap;
+
 struct UiPanels {
     unsigned selected;
     int tool;
@@ -49,6 +55,12 @@ struct UiPanels {
     int showInsp; // 1 панель инспектора (0 = 0px)
     int hierW; // ширина иерархии (220)
     int inspW; // ширина инспектора (220)
+    int swapped; // 1 панели менялись местами (§11: инспектор слева)
+    int layDrag; // 0 нет, 1 тащим левую шапку, 2 правую (EDIT, drop=сторона)
+    float layX0; // x DOWN шапки
+    int dropLeft; // 1 дроп слева (подсветка цели в статусе)
+    LaySnap layHist[16]; // история раскладки (Ctrl+Z в EDIT)
+    int layN;
     int splitDrag; // 0 нет, 1 тащим край иерархии, 2 край инспектора (SSplitter)
     float splitX0; // x DOWN
     int splitW0; // ширина на DOWN
@@ -73,6 +85,126 @@ struct UiPanels {
 };
 
 #define THEME_PATH "engine/assets/theme.json"
+#define LAYOUT_PATH "engine/assets/layout.json"
+
+// Снимок раскладки (§11 хвост, дубль верхнего — struct раньше).
+static void dock(const UiPanels *p, int W, int *lw, int *rw, int *hox, int *iox) {
+    int h = p->showHier ? p->hierW : 0;
+    int i = p->showInsp ? p->inspW : 0;
+    int leftHier = !p->swapped;
+    if (lw) *lw = leftHier ? h : i;
+    if (rw) *rw = leftHier ? i : h;
+    if (hox) *hox = leftHier ? 0 : W - h;
+    if (iox) *iox = leftHier ? W - i : 0;
+}
+
+// Снимок раскладки в историю (без дублей подряд).
+static void lay_push(UiPanels *p) {
+    if (!p) return;
+    if (p->layN > 0) {
+        const LaySnap *t = &p->layHist[p->layN - 1];
+        if (t->hierW == p->hierW && t->inspW == p->inspW && t->showHier == p->showHier &&
+            t->showInsp == p->showInsp && t->swapped == p->swapped)
+            return;
+    }
+    if (p->layN >= 16) {
+        memmove(&p->layHist[0], &p->layHist[1], sizeof p->layHist[0] * 15);
+        p->layN = 15;
+    }
+    LaySnap *s = &p->layHist[p->layN++];
+    s->hierW = p->hierW;
+    s->inspW = p->inspW;
+    s->showHier = p->showHier;
+    s->showInsp = p->showInsp;
+    s->swapped = p->swapped;
+}
+
+static long g_layMtime = 0;
+
+static int lay_num(const char *s, const char *key, int *out) {
+    char pat[32];
+    snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *f = strstr(s, pat);
+    if (!f) return 0;
+    f = strchr(f, '[');
+    if (!f) return 0;
+    return sscanf(f, "[%d", out) == 1;
+}
+
+static void lay_load(UiPanels *p, const char *path) {
+    if (!p || !path) return;
+    FILE *ff = fopen(path, "rb");
+    if (!ff) return;
+    fseek(ff, 0, SEEK_END);
+    long sz = ftell(ff);
+    fseek(ff, 0, SEEK_SET);
+    if (sz <= 0 || sz > 4096) {
+        fclose(ff);
+        return;
+    }
+    char s[4096];
+    if (fread(s, 1, (size_t)sz, ff) != (size_t)sz) {
+        fclose(ff);
+        return;
+    }
+    s[sz] = 0;
+    fclose(ff);
+    int v;
+    if (lay_num(s, "hierW", &v) && v >= 120 && v <= 400) p->hierW = v;
+    if (lay_num(s, "inspW", &v) && v >= 120 && v <= 400) p->inspW = v;
+    if (lay_num(s, "showHier", &v)) p->showHier = v ? 1 : 0;
+    if (lay_num(s, "showInsp", &v)) p->showInsp = v ? 1 : 0;
+    if (lay_num(s, "swapped", &v)) p->swapped = v ? 1 : 0;
+    struct stat st;
+    if (stat(path, &st) == 0) g_layMtime = (long)st.st_mtime;
+    p->dirty = 1;
+}
+
+static int lay_save(const UiPanels *p, const char *path) {
+    if (!p || !path) return 0;
+    FILE *ff = fopen(path, "wb");
+    if (!ff) return 0;
+    fprintf(ff,
+            "{\n"
+            "  \"_note\": \"editor layout (§11): widths/visibility/swap. Hot-reload by mtime.\",\n"
+            "  \"hierW\": [%d],\n"
+            "  \"inspW\": [%d],\n"
+            "  \"showHier\": [%d],\n"
+            "  \"showInsp\": [%d],\n"
+            "  \"swapped\": [%d]\n"
+            "}\n",
+            p->hierW, p->inspW, p->showHier, p->showInsp, p->swapped);
+    fclose(ff);
+    struct stat st;
+    if (stat(path, &st) == 0) g_layMtime = (long)st.st_mtime;
+    return 1;
+}
+
+static void lay_commit(UiPanels *p) {
+    // Коммит раскладки: история + файл (§11 хвост).
+    lay_push(p);
+    lay_save(p, LAYOUT_PATH);
+}
+
+static void lay_poll(UiPanels *p, const char *path) {
+    struct stat st;
+    if (!p || !path || stat(path, &st) != 0) return;
+    if ((long)st.st_mtime == g_layMtime) return;
+    lay_load(p, path);
+}
+
+static int lay_undo(UiPanels *p) {
+    if (!p || p->layN <= 1) return 0; // нижний — стартовый, не откатываем
+    p->layN--;
+    const LaySnap *s = &p->layHist[p->layN - 1];
+    p->hierW = s->hierW;
+    p->inspW = s->inspW;
+    p->showHier = s->showHier;
+    p->showInsp = s->showInsp;
+    p->swapped = s->swapped;
+    p->dirty = 1;
+    return 1;
+}
 
 static float theme_get(void *user);
 static void theme_set(void *user, float v);
@@ -88,6 +220,8 @@ UiPanels *ui_panels_create(void) {
     p->inspW = 220;
     ui_theme_dark(&p->theme);
     ui_theme_load(&p->theme, THEME_PATH); // нет файла — дефолт, не ошибка
+    lay_load(p, LAYOUT_PATH); // нет файла — дефолт, не ошибка
+    lay_push(p); // стартовый снимок (дно истории undo)
     for (int i = 0; i < PN_NS; i++) { // style-бинды на тему (§12, живут с панелью)
         p->srefs[i].p = p;
         p->srefs[i].field = i;
@@ -104,11 +238,11 @@ UiPanels *ui_panels_create(void) {
 // Прямоугольник вьюпорта (док-модель UE: остаток после панелей).
 // Пишет x,y,w,h (y вниз). Вызывающий пересоздаёт ТОЛЬКО цель (не ядро/окно).
 void ui_panels_viewport(const UiPanels *p, int W, int H, int *x, int *y, int *w, int *h) {
-    int hx = p && p->showHier ? p->hierW : 0;
-    int ix = p && p->showInsp ? p->inspW : 0;
-    if (x) *x = hx;
+    int lw = 0, rw = 0;
+    if (p) dock(p, W, &lw, &rw, 0, 0);
+    if (x) *x = lw;
     if (y) *y = 58;
-    if (w) *w = W - hx - ix;
+    if (w) *w = W - lw - rw;
     if (h) *h = H - 58 - 26;
 }
 
@@ -240,10 +374,19 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
             p->showHier = any ? 0 : 1;
             p->showInsp = any ? 0 : 1;
             p->dirty = 1;
+            lay_commit(p); // раскладка поменялась — в историю и файл
             return ui_handled(1, 0);
         }
         // Ctrl+Z откат, Ctrl+Shift+Z / Ctrl+Y повтор (как везде).
+        // В EDIT: откат раскладки (§11 хвост), не ECS.
         if ((e->mods & 2) && (e->key == 'Z' || e->key == 'Y')) {
+            if (p->editMode) {
+                if (e->key == 'Z' && !(e->mods & 1) && lay_undo(p)) {
+                    lay_save(p, LAYOUT_PATH);
+                    return ui_handled(1, 0);
+                }
+                return ui_unhandled();
+            }
             int isUndo = (e->key == 'Z' && !(e->mods & 1));
             UiCmd c;
             int ok = isUndo ? ui_undo_undo(&p->undo, &c) : ui_undo_redo(&p->undo, &c);
@@ -272,6 +415,7 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         if (e->key == 'L' && !(e->mods & 6)) {
             p->editMode = !p->editMode;
             p->splitDrag = 0; // выход из сплиттера при переключении
+            p->layDrag = 0; // и из drag шапки
             p->scrubField = -1; // и из скраба
             p->dirty = 1;
             return ui_handled(1, 0);
@@ -279,13 +423,16 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         return ui_unhandled();
     }
     // Модальный сплиттер раньше контента (тащим границу — едет ширина).
+    // 1 = левый край, 2 = правый (панель — кто живёт на стороне, swap-aware).
     if (p->splitDrag) {
+        int leftHier = !p->swapped;
+        int edgeIsHier = (p->splitDrag == 1) ? leftHier : !leftHier;
         if (e->kind == UI_EV_MOVE) {
             int w = p->splitW0 + (int)(p->splitDrag == 1 ? e->x - p->splitX0
                                                          : p->splitX0 - e->x);
             if (w < 120) w = 120;
             if (w > 400) w = 400;
-            if (p->splitDrag == 1) p->hierW = w;
+            if (edgeIsHier) p->hierW = w;
             else p->inspW = w;
             p->dirty = 1;
             return ui_handled(1, 1);
@@ -293,44 +440,82 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         if (e->kind == UI_EV_UP) {
             p->splitDrag = 0;
             p->dirty = 1;
+            lay_commit(p); // ширина — часть раскладки
+            return ui_handled(1, 0);
+        }
+        return ui_unhandled();
+    }
+    // Модальный драг шапки (EDIT): тащим панель на другую сторону (drop).
+    if (p->layDrag) {
+        if (e->kind == UI_EV_MOVE) {
+            p->dropLeft = e->x < p->winW / 2 ? 1 : 0;
+            p->dirty = 1; // статус показывает цель
+            return ui_handled(1, 1);
+        }
+        if (e->kind == UI_EV_UP) {
+            int curLeft = (p->layDrag == 1) ? 1 : 0; // откуда тащили
+            if (curLeft != p->dropLeft) {
+                p->swapped = !p->swapped; // уронили на другую сторону
+                lay_commit(p);
+            }
+            p->layDrag = 0;
+            p->dirty = 1;
             return ui_handled(1, 0);
         }
         return ui_unhandled();
     }
     if (e->kind != UI_EV_DOWN || e->button != 0) return ui_unhandled();
     float x = e->x, y = e->y;
-    int hx = p->showHier ? p->hierW : 0;
-    int ix = p->showInsp ? p->inspW : 0;
+    int lw = 0, rw = 0, hox = 0, iox = 0;
+    dock(p, p->winW, &lw, &rw, &hox, &iox);
+    int leftHier = !p->swapped;
     // Сплиттер раньше строк (SSplitter: тащим край — едет ширина, 120..400).
     // В EDIT захват шире (12px): рукой попасть проще (закон Фиттса).
     if (y >= 58 && y < p->winH) {
         int grab = p->editMode ? 12 : 6;
-        if (p->showHier && x >= hx - grab && x < hx) {
-            p->splitDrag = 1;
+        if (lw > 0 && x >= lw - grab && x < lw) {
+            p->splitDrag = 1; // левый край
             p->splitX0 = x;
-            p->splitW0 = p->hierW;
+            p->splitW0 = leftHier ? p->hierW : p->inspW;
             return ui_handled(0, 1);
         }
-        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + grab) {
-            p->splitDrag = 2;
+        if (rw > 0 && x >= p->winW - rw && x < p->winW - rw + grab) {
+            p->splitDrag = 2; // правый край
             p->splitX0 = x;
-            p->splitW0 = p->inspW;
+            p->splitW0 = leftHier ? p->inspW : p->hierW;
+            return ui_handled(0, 1);
+        }
+    }
+    // Драг шапки (только EDIT): уронить панель на другую сторону.
+    if (p->editMode && y >= 58 && y < 82) {
+        if (lw > 0 && x >= 0 && x < lw - 28) {
+            p->layDrag = 1;
+            p->layX0 = x;
+            p->dropLeft = 1;
+            return ui_handled(0, 1);
+        }
+        if (rw > 0 && x >= p->winW - rw + 28 && x < p->winW) {
+            p->layDrag = 2;
+            p->layX0 = x;
+            p->dropLeft = 0;
             return ui_handled(0, 1);
         }
     }
     // Кнопки коллапса раньше контента (хром первее строк).
     // Закрытая панель = 0px (возврат через Tab/View, полосок нет).
     if (y >= 58 && y < 82) {
-        if (p->showHier && x >= hx - 28 && x < hx) {
-            p->showHier = 0;
+        if (lw > 0 && x >= lw - 28 && x < lw) {
+            if (leftHier) p->showHier = 0;
+            else p->showInsp = 0;
             p->dirty = 1;
+            lay_commit(p);
             return ui_handled(1, 0);
         }
-        // w нужен для правой кнопки: берём из последней сборки через frows? нет —
-        // ширина окна известна вызывающему; храним в панели при build.
-        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 28) {
-            p->showInsp = 0;
+        if (rw > 0 && x >= p->winW - rw && x < p->winW - rw + 28) {
+            if (leftHier) p->showInsp = 0;
+            else p->showHier = 0;
             p->dirty = 1;
+            lay_commit(p);
             return ui_handled(1, 0);
         }
     }
@@ -379,6 +564,7 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
             p->showHier = any ? 0 : 1;
             p->showInsp = any ? 0 : 1;
             p->dirty = 1;
+            lay_commit(p);
             return ui_handled(1, 0);
         }
         const char *m = x < 70 ? "File" : "Edit";
@@ -406,10 +592,15 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
 
 int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **out) {
     if (!p || !out) return 0;
-    // Hot-reload темы по mtime (дешёвый stat, раз в 64 сборки).
+    // Hot-reload темы и раскладки по mtime (дешёвый stat, раз в 64 сборки).
     {
         static unsigned calls = 0;
-        if ((++calls & 63) == 0 && ui_theme_poll(&p->theme, THEME_PATH)) p->dirty = 1;
+        if ((++calls & 63) == 0) {
+            if (ui_theme_poll(&p->theme, THEME_PATH)) p->dirty = 1;
+            long before = g_layMtime;
+            lay_poll(p, LAYOUT_PATH);
+            if (g_layMtime != before) lay_push(p); // внешняя правка — в историю
+        }
     }
     // Новый размер окна = новая геометрия (иначе панели в старом размере).
     if (w != p->winW || h != p->winH) p->dirty = 1;
@@ -425,12 +616,12 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     emit(p, 0, 26, (float)w, 32, p->theme.bg, RD);
     for (int i = 0; i < 4; i++)
         if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, p->theme.tool, 0.0f);
-    int hx = p->showHier ? p->hierW : 0;
-    int ix = p->showInsp ? p->inspW : 0;
+    int hx = 0, ix = 0, hox = 0, iox = 0; // hx=lw, ix=rw; hox/iox начала панелей
+    dock(p, w, &hx, &ix, &hox, &iox);
     // Иерархия: фон + строки + кнопка коллапса («<» прячет полностью, не в полоску).
-    if (hx > 0) {
-        emit(p, 0, 58, (float)hx, (float)(h - 58), p->theme.bg, RD);
-        emit(p, (float)(hx - 28), 58, 28, 24, p->theme.bar, 0.0f);
+    if (p->showHier) {
+        emit(p, (float)hox, 58, (float)p->hierW, (float)(h - 58), p->theme.bg, RD);
+        emit(p, (float)(hox + p->hierW - 28), 58, 28, 24, p->theme.bar, 0.0f);
     }
     p->nrows = 0;
     float pad = p->theme.pad; // отступ строк (§12, 0 = legacy)
@@ -440,13 +631,13 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
         float y = 64;
         for (int i = 0; i < n && p->nrows < PN_MAXROWS && y + 24 < h; i++) {
             int d = depth_of(scene, list[i]);
-            float rx = 8 + (float)(d * 16) + pad;
+            float rx = (float)hox + 8 + (float)(d * 16) + pad;
             if (list[i] == p->selected)
-                emit(p, 4, y, (float)(hx - 8), 24, p->theme.sel, 0.0f);
+                emit(p, (float)hox + 4, y, (float)(p->hierW - 8), 24, p->theme.sel, 0.0f);
             if (p->nrows < PN_MAXROWS) {
                 p->rows[p->nrows].x = rx;
                 p->rows[p->nrows].y = y;
-                p->rows[p->nrows].w = (float)(hx - (int)rx);
+                p->rows[p->nrows].w = (float)(hox + p->hierW) - rx;
                 p->rows[p->nrows].h = 24;
                 p->rows[p->nrows].id = list[i];
                 p->rows[p->nrows].depth = d;
@@ -458,9 +649,9 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     // Статусбар (от иерархии до инспектора).
     emit(p, (float)hx, (float)(h - 26), (float)(w - hx - ix), 26, p->theme.bar, RD);
     // Инспектор: правая панель + 9 строк + коллапс («>» прячет полностью).
-    if (ix > 0) {
-        emit(p, (float)(w - ix), 58, (float)ix, (float)(h - 84), p->theme.bg, RD);
-        emit(p, (float)(w - ix), 58, 28, 24, p->theme.bar, 0.0f);
+    if (p->showInsp) {
+        emit(p, (float)iox, 58, (float)p->inspW, (float)(h - 84), p->theme.bg, RD);
+        emit(p, (float)iox, 58, 28, 24, p->theme.bar, 0.0f);
     }
     for (int i = 0; i < PN_NF; i++) {
         p->frows[i].x = 0;
@@ -475,7 +666,7 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     if (p->showInsp && p->editMode) {
         // EDIT: 4 style-строки вместо transform (§12).
         for (int i = 0; i < PN_NS; i++) {
-            float fx0 = (float)(w - ix + 4);
+            float fx0 = (float)(iox + 4);
             float fy = 116 + (float)(i * 26);
             if (fy + 24 > h - 26) break;
             emit(p, fx0, fy, (float)(ix - 8), 24,
@@ -489,8 +680,8 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     } else if (p->showInsp) {
         // Сетка: заголовок группы (16px) + 3 строки по 26px. Не налезают.
         for (int i = 0; i < PN_NF; i++) {
-            float fx0 = (float)(w - ix + 4) + pad;
-            float fw = (float)(ix - 8) - 2 * pad;
+            float fx0 = (float)(iox + 4) + pad;
+            float fw = (float)(p->inspW - 8) - 2 * pad;
             if (fw < 8) fw = 8;
             float fy = 116 + (float)((i / 3) * 110 + (i % 3) * 26);
             if (fy + 24 > h - 26) break;
@@ -515,8 +706,8 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
 
 void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     if (!p || !text) return;
-    int hx = p->showHier ? p->hierW : 0;
-    int ix = p->showInsp ? p->inspW : 0;
+    int hx = 0, ix = 0, hox = 0, iox = 0;
+    dock(p, w, &hx, &ix, &hox, &iox);
     // Оси в цветах гизмо (x красный, y зелёный, z синий) — цифры читаются.
     static const float AXC[3][4] = {{1.0f, 0.52f, 0.47f, 1.0f},
                                     {0.55f, 1.0f, 0.58f, 1.0f},
@@ -527,8 +718,9 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     for (int i = 0; i < 4; i++)
         ui_text_quad(text, 14 + (float)(i * 64), 32, tools[i], i == p->tool ? p->theme.tool : p->theme.txt);
     // Кнопки коллапса («<» прячет, «>» возвращает).
-    ui_text_quad(text, (float)(hx - 20), 62, p->showHier ? "<" : ">", p->theme.dim);
-    ui_text_quad(text, (float)(w - ix + 8), 62, p->showInsp ? ">" : "<", p->theme.dim);
+    ui_text_quad(text, (float)(hox + (p->showHier ? p->hierW : 0) - 20), 62,
+                 p->showHier ? "<" : ">", p->theme.dim);
+    ui_text_quad(text, (float)(iox + 8), 62, p->showInsp ? ">" : "<", p->theme.dim);
     if (p->showHier) {
         for (int i = 0; i < p->nrows; i++) {
             const char *nm = scene ? sc_name(scene, p->rows[i].id) : "?";
@@ -544,13 +736,14 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
         const char *nm = sc_name(scene, p->selected);
         if (nm && nm[0]) sel = nm;
     }
-    snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels%s", sel, p->tool,
-             p->editMode ? " | EDIT: drag blue edges | L exits" : "");
+    snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels%s%s", sel, p->tool,
+             p->editMode ? " | EDIT: drag blue edges | L exits" : "",
+             p->layDrag ? (p->dropLeft ? " | drop: LEFT" : " | drop: RIGHT") : "");
     ui_text_quad(text, (float)(hx + 10), (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + группы Position/Rotation/Scale + значения в цветах осей.
     // В EDIT — стиль интерфейса (§12): round/pad/alpha руками.
     if (p->showInsp) {
-        float ix0 = (float)(w - ix);
+    float ix0 = (float)iox;
         if (p->editMode) {
             ui_text_quad(text, ix0 + 34, 62, "UI style", p->theme.txt);
             static const char *snames[PN_NS] = {"round", "pad", "bg.a", "bar.a"};
@@ -604,16 +797,16 @@ int ui_panels_edit(const UiPanels *p) {
 // Ховер хрома для курсора (тест/вью: над краем = ресайз-курсор).
 int ui_panels_hover(const UiPanels *p, float x, float y) {
     if (!p) return 0;
-    int hx = p->showHier ? p->hierW : 0;
-    int ix = p->showInsp ? p->inspW : 0;
+    int lw = 0, rw = 0;
+    dock(p, p->winW, &lw, &rw, 0, 0);
     int grab = p->editMode ? 12 : 6;
     if (y >= 58 && y < p->winH) {
-        if (p->showHier && x >= hx - grab && x < hx) return 1;
-        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + grab) return 1;
+        if (lw > 0 && x >= lw - grab && x < lw) return 1;
+        if (rw > 0 && x >= p->winW - rw && x < p->winW - rw + grab) return 1;
     }
     if (y >= 58 && y < 82) {
-        if (p->showHier && x >= hx - 28 && x < hx) return 1;
-        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 28) return 1;
+        if (lw > 0 && x >= lw - 28 && x < lw) return 1;
+        if (rw > 0 && x >= p->winW - rw && x < p->winW - rw + 28) return 1;
     }
     return 0;
 }
