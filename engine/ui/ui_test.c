@@ -38,6 +38,7 @@ static ScWorld g_scene;
 static RcView g_view; // камера кадра (гизмо проецирует тем же PV что ядра)
 static double g_mx = 0, g_my = 0;
 static int g_capture = 0; // захват мыши модальным виджетом (FReply::CaptureMouse)
+static GLFWcursor *g_curArrow = 0, *g_curResize = 0; // курсоры хрома
 // Dirty-rect (инвалидация по-UE): гизмо-драг перезаливает только bbox стрелок
 // (+ прошлый bbox — стереть было), панели — целиком и редко.
 static int g_forceFull = 1; // стартовый/ресайз: полный upload
@@ -340,6 +341,15 @@ static void on_move(GLFWwindow *win, double x, double y) {
     (void)win;
     g_mx = x * g_mouseKx;
     g_my = y * g_mouseKy;
+    // Курсор-резайз над хромом (рука чувствует край до клика).
+    {
+        static int lastHov = -1;
+        int hov = g_panels ? ui_panels_hover(g_panels, (float)g_mx, (float)g_my) : 0;
+        if (hov != lastHov) {
+            lastHov = hov;
+            if (g_curArrow && g_curResize) glfwSetCursor(win, hov ? g_curResize : g_curArrow);
+        }
+    }
     // Модальный скраб/драг едет на MOVE (вне захвата — дешёвый no-op у обоих).
     // Координаты — те же что DOWN/UP (g_mx, масштаб фреймбуфера):
     // гизмо-геометрия живёт в пикселях цели, сырые x/y окна врали у бортиков.
@@ -566,11 +576,25 @@ int main(int argc, char **argv) {
                 memset(&pe, 0, sizeof pe);
                 pe.kind = UI_EV_UP;
                 ui_panels_event(pn, &sw, &pe);
+                // Ховер + широкий захват (Фиттс): 249 = мимо в норме, край в EDIT.
+                if (!ui_panels_hover(pn, 249, 300) || ui_panels_hover(pn, 100, 300)) {
+                    printf("SELF FAIL: edit hover\n");
+                    bad = 1;
+                }
                 memset(&pe, 0, sizeof pe);
                 pe.kind = UI_EV_KEY;
                 pe.key = 'L';
                 if (!ui_panels_event(pn, &sw, &pe).handled || ui_panels_edit(pn)) {
                     printf("SELF FAIL: edit off\n");
+                    bad = 1;
+                }
+                // В норме 249 — мимо (захват 6px): широкий граб только в EDIT.
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_DOWN;
+                pe.x = 249;
+                pe.y = 300;
+                if (ui_panels_event(pn, &sw, &pe).handled || ui_panels_hover(pn, 249, 300)) {
+                    printf("SELF FAIL: normal grab wide\n");
                     bad = 1;
                 }
             }
@@ -993,6 +1017,8 @@ int main(int argc, char **argv) {
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
     glfwSetKeyCallback(win, on_key);
+    g_curArrow = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
+    g_curResize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
     // Полноразмерное окно (как UE: вьюпорт-герой, не окошко 1280x720).
     // Игнор WM = остаёмся 1280x720 (тесты детерминированы).
     glfwShowWindow(win);
@@ -1279,6 +1305,9 @@ int main(int argc, char **argv) {
                    tMesh / frames, tVec / frames, tText / frames, tSwap / frames);
     }
     printf("ui_test: frames=%d DONE\n", frames);
+    if (g_curArrow) glfwDestroyCursor(g_curArrow);
+    if (g_curResize) glfwDestroyCursor(g_curResize);
+    g_curArrow = g_curResize = 0;
     ui_gizmo_destroy(g_gizmo);
     ui_panels_destroy(g_panels);
     ui_text_destroy(text);

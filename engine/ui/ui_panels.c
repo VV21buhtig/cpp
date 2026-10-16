@@ -236,14 +236,16 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
     int hx = p->showHier ? p->hierW : 0;
     int ix = p->showInsp ? p->inspW : 0;
     // Сплиттер раньше строк (SSplitter: тащим край — едет ширина, 120..400).
+    // В EDIT захват шире (12px): рукой попасть проще (закон Фиттса).
     if (y >= 58 && y < p->winH) {
-        if (p->showHier && x >= hx - 6 && x < hx) {
+        int grab = p->editMode ? 12 : 6;
+        if (p->showHier && x >= hx - grab && x < hx) {
             p->splitDrag = 1;
             p->splitX0 = x;
             p->splitW0 = p->hierW;
             return ui_handled(0, 1);
         }
-        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 6) {
+        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + grab) {
             p->splitDrag = 2;
             p->splitX0 = x;
             p->splitW0 = p->inspW;
@@ -399,6 +401,11 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
             p->frows[i].field = i;
         }
     }
+    // Ручки EDIT: видимые полосы на краях (рука видит за что тянуть).
+    if (p->editMode) {
+        if (hx > 0) emit(p, (float)(hx - 3), 58, 6, (float)(h - 84), p->theme.sel);
+        if (ix > 0) emit(p, (float)(w - ix - 3), 58, 6, (float)(h - 84), p->theme.sel);
+    }
     p->dirty = 0;
     *out = &p->frame;
     return 1;
@@ -436,7 +443,7 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
         if (nm && nm[0]) sel = nm;
     }
     snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels%s", sel, p->tool,
-             p->editMode ? " | EDIT (L)" : "");
+             p->editMode ? " | EDIT: drag blue edges | L exits" : "");
     ui_text_quad(text, (float)(hx + 10), (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + группы Position/Rotation/Scale + значения в цветах осей.
     if (p->showInsp) {
@@ -481,4 +488,21 @@ int ui_panels_tool(const UiPanels *p) {
 
 int ui_panels_edit(const UiPanels *p) {
     return p ? p->editMode : 0;
+}
+
+// Ховер хрома для курсора (тест/вью: над краем = ресайз-курсор).
+int ui_panels_hover(const UiPanels *p, float x, float y) {
+    if (!p) return 0;
+    int hx = p->showHier ? p->hierW : 0;
+    int ix = p->showInsp ? p->inspW : 0;
+    int grab = p->editMode ? 12 : 6;
+    if (y >= 58 && y < p->winH) {
+        if (p->showHier && x >= hx - grab && x < hx) return 1;
+        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + grab) return 1;
+    }
+    if (y >= 58 && y < 82) {
+        if (p->showHier && x >= hx - 28 && x < hx) return 1;
+        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 28) return 1;
+    }
+    return 0;
 }
