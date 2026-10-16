@@ -10,7 +10,7 @@
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
-#include "ui/ui_widget.h" // дерево виджетов конструктора (§14 F1: модель)
+#include "ui/ui_widget.h" // дерево виджетов конструктора (§14)
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "rtarget.h"
 #include "comp_gl.h"
@@ -30,6 +30,194 @@ static GLFWcursor *g_curArrow = 0, *g_curResize = 0;
 static int g_quit = 0;
 // Rect плейсхолдера вьюпорта (из последнего push — для подписи).
 static int g_vpx = 0, g_vpy = 0, g_vpw = 0, g_vph = 0;
+
+// --- §14 F2a: дерево виджетов + палитра (tool chrome, не модель) ---
+// Холст = всё окно (WYSIWYG: доки правятся тем же UiPanels). Палитра — поверх
+// вьюпорта. Пока только в памяти: в layout.json не пишем (персист — след. шаг,
+// иначе конфликт писателей layout.json с доками).
+static UiWidgetTree g_wt;
+static int g_wtSel = 0;   // выбранный виджет (id, 0 = нет)
+static int g_palHot = -1; // под палитрой (для подсветки)
+static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
+
+#define PAL_BW 104
+#define PAL_BH 26
+#define PAL_GAP 4
+#define PAL_N 3
+static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL};
+static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label"};
+
+static void pal_rect(int i, float *x, float *y, float *w, float *h) {
+    *x = (float)(g_vpx + 10);
+    *y = (float)(g_vpy + 10 + i * (PAL_BH + PAL_GAP));
+    *w = (float)PAL_BW;
+    *h = (float)PAL_BH;
+}
+
+static int pal_hit(float px, float py) {
+    for (int i = 0; i < PAL_N; i++) {
+        float x, y, w, h;
+        pal_rect(i, &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) return i;
+    }
+    return -1;
+}
+
+// Прямоугольник спавна (якорь L|T, в пикселях окна) — у вьюпорта, каскадом.
+static UiWidgetRect wt_spawn_rect(int type) {
+    UiWidgetRect r;
+    memset(&r, 0, sizeof r);
+    r.anchors = UI_A_LEFT | UI_A_TOP;
+    r.x = (float)(g_vpx + 130);
+    r.y = (float)(g_vpy + 30 + g_wt.count * 34);
+    if (type == UI_W_PANEL) {
+        r.w = 240;
+        r.h = 130;
+    } else if (type == UI_W_BUTTON) {
+        r.w = 120;
+        r.h = 32;
+    } else {
+        r.w = 150;
+        r.h = 22;
+    }
+    return r;
+}
+
+static UiWidgetStyle wt_spawn_style(int type) {
+    UiWidgetStyle s;
+    memset(&s, 0, sizeof s);
+    s.alpha = 1.0f;
+    s.fontSize = 14.0f;
+    if (type == UI_W_PANEL) {
+        s.bg[0] = 0.13f;
+        s.bg[1] = 0.15f;
+        s.bg[2] = 0.19f;
+        s.bg[3] = 1.0f;
+        s.rounding = 6.0f;
+    } else if (type == UI_W_BUTTON) {
+        s.bg[0] = 0.22f;
+        s.bg[1] = 0.34f;
+        s.bg[2] = 0.62f;
+        s.bg[3] = 1.0f;
+        s.rounding = 4.0f;
+    } else { // label: подпись без плашки
+        s.bg[3] = 0.0f;
+    }
+    return s;
+}
+
+static int wt_spawn(int type) {
+    int k = type == UI_W_PANEL ? 0 : type == UI_W_BUTTON ? 1 : 2;
+    g_wtN[k]++;
+    char nm[UI_WIDGET_NAME];
+    snprintf(nm, sizeof nm, "%s%d", k == 0 ? "Panel" : k == 1 ? "Button" : "Label",
+             g_wtN[k]);
+    UiWidgetRect r = wt_spawn_rect(type);
+    UiWidgetStyle s = wt_spawn_style(type);
+    int id = widget_add(&g_wt, type, nm, 0, &r, &s);
+    if (id) g_wtSel = id;
+    return id;
+}
+
+// Верхний (по id — дети выше родителей) под точкой.
+static int wt_hit(float px, float py) {
+    int best = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++) {
+        if (!g_wt.alive[i]) continue;
+        float x, y, w, h;
+        widget_rect_px(&g_wt.items[i], g_WW, g_WH, &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) best = i + 1;
+    }
+    return best;
+}
+
+static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
+                    const float rgba[4], float round) {
+    if (*n >= UI_MAX_PRIMS) return;
+    RcVecShape *s = &sh[(*n)++];
+    s->kind = 0;
+    s->a = x;
+    s->b = y;
+    s->c = w;
+    s->d = h;
+    s->e = round;
+    s->f = 0;
+    memcpy(s->rgba, rgba, sizeof s->rgba);
+}
+
+static void wt_draw_node(RcVecShape *sh, int *n, int id) {
+    const UiWidget *w = widget_cget(&g_wt, id);
+    if (!w) return;
+    float x, y, ww, hh;
+    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    float col[4] = {w->style.bg[0], w->style.bg[1], w->style.bg[2],
+                    w->style.bg[3] * w->style.alpha};
+    if (col[3] > 0.001f) wt_emit(sh, n, x, y, ww, hh, col, w->style.rounding);
+    for (int i = 0; i < w->nchildren; i++) wt_draw_node(sh, n, w->children[i]);
+}
+
+// Виджеты (корни->дети), затем рамка выбора. Палитра — отдельно (поверх).
+static void wt_draw_all(RcVecShape *sh, int *n) {
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (g_wt.alive[i] && g_wt.items[i].parent == 0) wt_draw_node(sh, n, i + 1);
+    const UiWidget *s = widget_cget(&g_wt, g_wtSel);
+    if (s) {
+        float x, y, ww, hh;
+        widget_rect_px(s, g_WW, g_WH, &x, &y, &ww, &hh);
+        static const float sel[4] = {0.25f, 0.55f, 1.0f, 1.0f};
+        wt_emit(sh, n, x - 1, y - 1, ww + 2, 2, sel, 0);
+        wt_emit(sh, n, x - 1, y + hh - 1, ww + 2, 2, sel, 0);
+        wt_emit(sh, n, x - 1, y, 2, hh, sel, 0);
+        wt_emit(sh, n, x + ww - 1, y, 2, hh, sel, 0);
+    }
+}
+
+static void pal_draw(RcVecShape *sh, int *n) {
+    for (int i = 0; i < PAL_N; i++) {
+        float x, y, w, h;
+        pal_rect(i, &x, &y, &w, &h);
+        float c[4] = {0.20f, 0.22f, 0.27f, 1.0f};
+        if (i == g_palHot) {
+            c[0] = 0.30f;
+            c[1] = 0.45f;
+            c[2] = 0.75f;
+        }
+        wt_emit(sh, n, x, y, w, h, c, 4.0f);
+    }
+}
+
+// Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор — тут.
+static int wt_event(const UiEvent *e) {
+    if (e->kind == UI_EV_MOVE) {
+        int h = pal_hit(e->x, e->y);
+        if (h != g_palHot) {
+            g_palHot = h;
+            return 1;
+        }
+        return 0;
+    }
+    if (e->kind != UI_EV_DOWN) return 0;
+    int pi = pal_hit(e->x, e->y);
+    if (pi >= 0) {
+        wt_spawn(PAL_TYPE[pi]);
+        return 1;
+    }
+    int id = wt_hit(e->x, e->y);
+    if (id) {
+        g_wtSel = id;
+        return 1;
+    }
+    int inVp = e->x >= g_vpx && e->x < g_vpx + g_vpw && e->y >= g_vpy &&
+               e->y < g_vpy + g_vph;
+    if (inVp) {
+        if (g_wtSel) {
+            g_wtSel = 0;
+            return 1;
+        }
+        return 1; // пустой клик по холсту — наш (доки не трогаем)
+    }
+    return 0; // доки/меню
+}
 
 // Заливка панелей в vec-ядро (полная, без гизмо/dirty-rect: стрелок нет,
 // панели дёшевы). Плейсхолдер вьюпорта — тёмной плашкой поверх пустоты.
@@ -64,12 +252,21 @@ static void edit_push(void) {
         n++;
     }
     (void)panelsDirty;
+    wt_draw_all(shapes, &n);
+    pal_draw(shapes, &n);
     if (n && g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
 }
 
 static void route_event(const UiEvent *e) {
+    // Порядок §14: виджеты/палитра -> доки. DOWN/UP, съеденный холстом,
+    // в доки не идёт; MOVE форвардим обоим (ховер и там, и там).
+    int mine = wt_event(e);
+    if (mine && e->kind != UI_EV_MOVE) {
+        edit_push();
+        return;
+    }
     UiReply r = ui_panels_event(g_panels, &g_scene, e);
-    if (r.dirty) edit_push();
+    if (mine || r.dirty) edit_push();
 }
 
 static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
@@ -189,6 +386,89 @@ int main(int argc, char **argv) {
         if (x != x0 + 40) {
             printf("SELF FAIL: splitter drag %d want %d\n", x, x0 + 40);
             bad = 1;
+        }
+        // §14 F2a: палитра + холст (создание/выбор) без окна.
+        g_WW = W;
+        g_WH = H;
+        g_vpx = x;
+        g_vpy = y;
+        g_vpw = w;
+        g_vph = h;
+        {
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_palHot = -1;
+            memset(g_wtN, 0, sizeof g_wtN);
+            UiEvent we;
+            float px, py, pw, ph;
+            // DOWN по палитре (Panel) -> виджет создан и выбран.
+            pal_rect(0, &px, &py, &pw, &ph);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = px + 5;
+            we.y = py + 5;
+            if (!wt_event(&we) || g_wt.count != 1 || !g_wtSel ||
+                widget_cget(&g_wt, g_wtSel)->type != UI_W_PANEL) {
+                printf("SELF FAIL: pal-spawn\n");
+                bad = 1;
+            }
+            int p1 = g_wtSel;
+            // Клик по телу виджета -> он же выбран (не сбрасывается).
+            const UiWidget *W1 = widget_cget(&g_wt, p1);
+            float bx, by, bw, bh;
+            widget_rect_px(W1, g_WW, g_WH, &bx, &by, &bw, &bh);
+            g_wtSel = 0; // сброс, чтобы проверить именно выбор кликом
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = bx + bw / 2;
+            we.y = by + bh / 2;
+            if (!wt_event(&we) || g_wtSel != p1) {
+                printf("SELF FAIL: wt-select\n");
+                bad = 1;
+            }
+            // Палитра Button -> второй виджет, тип верный.
+            pal_rect(1, &px, &py, &pw, &ph);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = px + 5;
+            we.y = py + 5;
+            wt_event(&we);
+            if (g_wt.count != 2 || !widget_cget(&g_wt, g_wtSel) ||
+                widget_cget(&g_wt, g_wtSel)->type != UI_W_BUTTON ||
+                widget_cget(&g_wt, p1)->type != UI_W_PANEL) {
+                printf("SELF FAIL: pal-spawn2\n");
+                bad = 1;
+            }
+            // Пустой клик по холсту -> снятие выбора (наш, не доки).
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = (float)(g_vpx + g_vpw - 5);
+            we.y = (float)(g_vpy + g_vph - 5);
+            if (!wt_event(&we) || g_wtSel != 0) {
+                printf("SELF FAIL: wt-deselect\n");
+                bad = 1;
+            }
+            // Клик по доку (вне вьюпорта) -> не наш (доки не крадём).
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = 2;
+            we.y = (float)(g_WH / 2);
+            if (wt_event(&we)) {
+                printf("SELF FAIL: wt-dock-steal\n");
+                bad = 1;
+            }
+            // Ховер палитры: MOVE по кнопке -> подсветка меняется (перерисовка).
+            pal_rect(2, &px, &py, &pw, &ph);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = px + 5;
+            we.y = py + 5;
+            if (!wt_event(&we) || g_palHot != 2) {
+                printf("SELF FAIL: pal-hover\n");
+                bad = 1;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
         }
         // §14 F1: модель виджетов — add/find/reparent/remove + rect-якоря +
         // save/load roundtrip в /tmp (следов не оставляем).
@@ -367,6 +647,7 @@ int main(int argc, char **argv) {
         printf("ui_edit: panels FAIL\n");
         return 1;
     }
+    widget_tree_init(&g_wt); // §14: пусто до создания из палитры
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
     if (!text) printf("ui_edit: text OFF (rects only)\n");
     // Всегда EDIT (L скриптом — как дефолтный select в ui_test).
@@ -399,6 +680,13 @@ int main(int argc, char **argv) {
     glfwMaximizeWindow(win);
     glfwPollEvents();
     edit_push(); // первая заливка
+    // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
+    if (getenv("UI_EDIT_SEED")) {
+        wt_spawn(UI_W_PANEL);
+        wt_spawn(UI_W_BUTTON);
+        wt_spawn(UI_W_LABEL);
+        edit_push();
+    }
     // Доказательство картинкой: UI_EDIT_SHOT=shot.ppm UI_EDIT_SHOT_AT=60.
     const char *shot = getenv("UI_EDIT_SHOT");
     int shotAt = 60;
@@ -451,8 +739,23 @@ int main(int argc, char **argv) {
             ui_panels_text(g_panels, &g_scene, text, g_WW, g_WH);
             ui_text_quad(text, (float)(g_vpx + 10), (float)(g_vpy + 8), "VIEWPORT (3D here)",
                          voidCol);
+            // Подписи виджетов (button/label) + палитры.
+            static const float tcol[4] = {0.85f, 0.87f, 0.92f, 1.0f};
+            for (int i = 0; i < UI_MAX_WIDGETS; i++) {
+                const UiWidget *w = widget_cget(&g_wt, i + 1);
+                if (!w || w->type == UI_W_PANEL) continue;
+                float wx, wy, ww, hh;
+                widget_rect_px(w, g_WW, g_WH, &wx, &wy, &ww, &hh);
+                ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
+            }
+            for (int i = 0; i < PAL_N; i++) {
+                float px, py, pw, ph;
+                pal_rect(i, &px, &py, &pw, &ph);
+                ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
+            }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: drag blue edges | scrub style rows | Tab collapse | Esc quit",
+                         "frontedit: click palette=add | click widget=select | blue edges resize"
+                         " | Tab collapse | Esc quit",
                          hintCol);
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
