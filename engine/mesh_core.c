@@ -166,6 +166,8 @@ static void mesh_frame(RenderCore *rc, const RcView *v) {
 
 // Пикинг: текущий суп плоским id сущности в цель (R=id+1, фон 0).
 // Глубина честная (тот же тест): перекрытое не выберется.
+// Чистки НЕТ (контракт Этапа Б-пик): чистит pick_begin один раз на проход,
+// сюда зовут N раз подряд — nearer выигрывает по глубине, не по порядку.
 static int mesh_pick(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
     if (!t || t->backend != RC_BACKEND_GL || !t->fbo || !c->nverts) return 0;
@@ -178,8 +180,6 @@ static int mesh_pick(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id) 
     Mat4 pv = m4mul(&proj, &view);
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
     glViewport(0, 0, t->w, t->h);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDisable(GL_CULL_FACE); // обе стороны: id важнее лицевой
@@ -190,6 +190,18 @@ static int mesh_pick(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id) 
     glDrawArrays(GL_TRIANGLES, 0, c->nverts);
     glBindVertexArray(0);
     glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return 1;
+}
+
+// Начало прохода пикинга: цель + чистка (цвет под фон, глубина).
+static int mesh_pick_begin(RenderCore *rc, const RcView *v, RcTarget *t) {
+    (void)v;
+    if (!rc || !t || t->backend != RC_BACKEND_GL || !t->fbo) return 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }
@@ -274,6 +286,7 @@ RenderCore *rc_mesh_create(void) {
     w->api.frame_to = mesh_frame_to;
     w->api.upload_mesh = mesh_upload;
     w->api.pick = mesh_pick;
+    w->api.pick_begin = mesh_pick_begin; // однопроход с окклюзией (Б-пик)
     w->api.shader_reload = core_shader_reload;
     w->api.fps = mesh_fps;
     return &w->api;

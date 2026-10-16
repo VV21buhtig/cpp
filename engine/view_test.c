@@ -213,19 +213,47 @@ int main(int argc, char **argv) {
             bad = 1;
         }
     {
-        // id Hero — из JSON дерева (не хардкодим).
+        // id Hero/Sword — из JSON дерева (не хардкодим).
         const char *js = eng_view_scene(vw);
-        int heroId = 0;
-        const char *hp = js ? strstr(js, "\"name\":\"Hero\"") : 0;
-        if (hp) {
-            const char *ip = hp;
-            while (ip > js && strncmp(ip, "\"id\":", 5)) ip--;
-            if (!strncmp(ip, "\"id\":", 5)) heroId = atoi(ip + 5);
+        int heroId = 0, swordId = 0;
+        if (js) {
+            const char *hp = strstr(js, "\"name\":\"Hero\"");
+            if (hp) {
+                const char *ip = hp;
+                while (ip > js && strncmp(ip, "\"id\":", 5)) ip--;
+                if (!strncmp(ip, "\"id\":", 5)) heroId = atoi(ip + 5);
+            }
+            const char *sp = strstr(js, "\"name\":\"Sword\"");
+            if (sp) {
+                const char *ip = sp;
+                while (ip > js && strncmp(ip, "\"id\":", 5)) ip--;
+                if (!strncmp(ip, "\"id\":", 5)) swordId = atoi(ip + 5);
+            }
         }
+        // Окклюзия (Б-пик): Sword concentric 1.5x вокруг Hero — nearer,
+        // побеждает хоть и рисуется позже (глубина, не порядок).
         unsigned hit = eng_view_pick(vw, 640, 360);
-        if (!heroId || hit != (unsigned)heroId) {
-            printf("VIEW FAIL: pick-center got=%u want=%d\n", hit, heroId);
+        if (!swordId || hit != (unsigned)swordId) {
+            printf("VIEW FAIL: pick-occl got=%u want=%d\n", hit, swordId);
             bad = 1;
+        }
+        // Невидимый окклюдер пропускается — снова Hero.
+        if (swordId && heroId) {
+            char cmd[64];
+            snprintf(cmd, sizeof cmd, "{\"visible\":0}");
+            if (!eng_entity_set_json(vw, (unsigned)swordId, cmd)) {
+                printf("VIEW FAIL: hide-sword\n");
+                bad = 1;
+            } else if (eng_view_pick(vw, 640, 360) != (unsigned)heroId) {
+                printf("VIEW FAIL: pick-hidden\n");
+                bad = 1;
+            }
+            snprintf(cmd, sizeof cmd, "{\"visible\":1}");
+            if (!eng_entity_set_json(vw, (unsigned)swordId, cmd) ||
+                eng_view_pick(vw, 640, 360) != (unsigned)swordId) {
+                printf("VIEW FAIL: pick-unhide\n");
+                bad = 1;
+            }
         }
         if (eng_view_pick(vw, 1279, 719)) {
             printf("VIEW FAIL: pick-corner\n");

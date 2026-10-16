@@ -196,6 +196,17 @@ EngView *eng_view_open(unsigned domain, unsigned backend) {
             }
             sc_mesh_set(&vw->scene, hero, hc, 36);
         }
+        // Демо-окклюдер Sword (Этап Б-пик): тот же центр, 1.5x — concentric
+        // куб строго содержит Hero, nearer по любому лучу через центр.
+        if (sword) {
+            static float sc2[36 * 9];
+            static int scMade = 0;
+            if (!scMade) {
+                vw_cube_at(sc2, -24.0f, 56.0f, -16.0f, 4.5f);
+                scMade = 1;
+            }
+            sc_mesh_set(&vw->scene, sword, sc2, 36);
+        }
     }
     return vw;
 }
@@ -488,6 +499,7 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
     if (!vw || !vw->rc || !vw->rc->pick) return 0;
     if (vw->domain != RC_CAP_MESH || vw->backend != 2) return 0;
     if (x < 0 || y < 0 || x >= vw->w || y >= vw->h) return 0;
+    if (!vw->rc->pick_begin) return 0; // без однопрохода окклюзии нет (Б-пик)
     // Цель пикинга на один клик (создать-использовать-снести: клики редки).
     RcTarget pt;
     memset(&pt, 0, sizeof pt);
@@ -496,8 +508,16 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
     vw_view(vw, &v);
     Entity list[1024];
     int n = sc_list(&vw->scene, list, 1024);
-    unsigned hit = 0;
-    for (int i = 0; i < n && !hit; i++) {
+    // Один проход: все супы подряд в одну цель, nearer выигрывает глубиной
+    // (порядок списка НЕ решает — Sword позже Hero, но nearer и побеждает).
+    // Невидимые не кликаются.
+    eng_pass_begin(&pt, 0, 0, 0, 1, 1.0f, 0); // чистку делает pick_begin
+    if (!vw->rc->pick_begin(vw->rc, &v, &pt)) {
+        eng_target_free(&pt);
+        return 0;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!sc_visible(&vw->scene, list[i])) continue;
         int mn = 0;
         const float *mv = sc_mesh_get(&vw->scene, list[i], &mn);
         if (!mv || mn <= 0) continue;
@@ -506,6 +526,10 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
         m.nverts = mn;
         if (!vw->rc->upload_mesh(vw->rc, &m)) continue;
         if (!vw->rc->pick(vw->rc, &v, &pt, (unsigned)list[i])) continue;
+    }
+    eng_pass_end(&pt);
+    unsigned hit = 0;
+    {
         uint8_t px[3] = {0};
         glBindFramebuffer(GL_FRAMEBUFFER, pt.fbo);
         glReadPixels(x, vw->h - 1 - y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, px);
