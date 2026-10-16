@@ -212,7 +212,7 @@ static int depth_vk(void) {
         t.backend = RC_BACKEND_VK;
         t.w = W;
         t.h = H;
-        t.noClear = 0;
+        eng_pass_begin(&t, 0.05f, 0.07f, 0.12f, 1.0f, 1.0f, 1);
         if (!vk->frame_to(vk, &v, &t)) {
             printf("DEPTH FAIL: frame_to\n");
             bad = 1;

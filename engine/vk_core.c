@@ -1299,8 +1299,8 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cb, &bi);
-    vk_draw(c, v, cb, fi, tg->fb, t->noClear ? tg->rpLoad : tg->rpClear, W, H,
-            !t->noClear, 0);
+    vk_draw(c, v, cb, fi, tg->fb, t->passClear ? tg->rpClear : tg->rpLoad, W, H,
+            t->passClear, 0);
     vkEndCommandBuffer(cb);
     if (!vk_submit_wait(c, cb)) return 0;
     return 1;
@@ -1376,7 +1376,7 @@ static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w,
     c->scratch.backend = RC_BACKEND_VK;
     c->scratch.w = w;
     c->scratch.h = h;
-    c->scratch.noClear = 0;
+    c->scratch.passClear = 1;
     if (!core_frame_to(rc, v, &c->scratch)) return 0;
     return core_download(rc, &c->scratch, rgba, w, h);
 }

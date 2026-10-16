@@ -26,6 +26,13 @@ typedef struct {
 // Прогнать проходы по порядку в цель t. Возвращает ENG_COMP_*.
 int eng_comp_frame(const EngPass *passes, int n, RcTarget *t);
 
+// W2: явный проход. begin — ЕДИНСТВЕННЫЙ писатель passClear/цвета
+// (чисто состояние, без GPU — comp_test остаётся безгловым).
+// doClear=1: проход чистит цель этим цветом/глубиной (первый проход, одиночки).
+void eng_pass_begin(RcTarget *t, float r, float g, float b, float a, float depth, int doClear);
+// Проход закрыт: чистка потреблена (следующий кадр снова с begin).
+void eng_pass_end(RcTarget *t);
+
 // W1: lifecycle целей (P1 тёплого ABI). GL — настоящие; VK/WebGPU — 0
 // (целями владеют ядра, см. rtarget.h nobj; доведут в W3/P3).
 int eng_target_new(unsigned backend, int w, int h, RcTarget *t);

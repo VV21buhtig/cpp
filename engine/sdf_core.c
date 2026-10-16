@@ -145,8 +145,8 @@ static int sdf_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     SDFCore *c = &((SDFCoreWrap *)rc->ctx)->core;
     if (!t || t->backend != 2 || !t->fbo) return 0;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    if (!t->noClear) glClear(GL_DEPTH_BUFFER_BIT);
-    sdf_draw(c, v, t->w, t->h, t->noClear ? 1 : 0);
+    if (t->passClear) glClear(GL_DEPTH_BUFFER_BIT);
+    sdf_draw(c, v, t->w, t->h, t->passClear ? 0 : 1);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }

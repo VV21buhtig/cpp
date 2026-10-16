@@ -257,7 +257,7 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     if (!t || t->backend != 2 || !t->fbo) return 0;
     int ww = t->w, hh = t->h;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    draw_scene(c, v, ww, hh, glfwGetTime(), !t->noClear);
+    draw_scene(c, v, ww, hh, glfwGetTime(), t->passClear);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }

@@ -6,10 +6,13 @@
 
 static int order[16];
 static int norder = 0;
+static int sawClear[8];
+static int nclear = 0;
 
 static int null_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
-    (void)v; (void)t;
+    (void)v;
     if (norder < 16) order[norder++] = (int)(rc->caps & 0xFF);
+    if (nclear < 8) sawClear[nclear++] = t ? t->passClear : -1;
     return 1;
 }
 
@@ -24,15 +27,16 @@ static RenderCore mkcore(unsigned caps, unsigned be, int hasTarget) {
 
 int main(void) {
     int bad = 0;
-    static RcTarget fake; // нулевая цель (флаг noClear композитор дёргает по-настоящему)
+    static RcTarget fake; // нулевая цель (begin пишет passClear по-настоящему)
     RcTarget *t = &fake;
-    // 1. Порядок 3 проходов x2 кадра.
+    // 1. Порядок 3 проходов x2 кадра + чистка только у первого.
     {
         RenderCore a = mkcore(1, RC_BACKEND_GL, 1);
         RenderCore b = mkcore(2, RC_BACKEND_GL, 1);
         RenderCore c = mkcore(4, RC_BACKEND_GL, 1);
         EngPass ps[3] = {{&a, 0, 0, 0}, {&b, 0, 0, 0}, {&c, 0, 0, 0}};
         norder = 0;
+        nclear = 0;
         if (eng_comp_frame(ps, 3, t) != ENG_COMP_OK) { printf("COMP FAIL: ok\n"); bad = 1; }
         if (eng_comp_frame(ps, 3, t) != ENG_COMP_OK) { printf("COMP FAIL: ok2\n"); bad = 1; }
         int want[6] = {1, 2, 4, 1, 2, 4};
@@ -40,7 +44,12 @@ int main(void) {
             printf("COMP FAIL: order (got %d)\n", norder);
             bad = 1;
         }
-        if (t->noClear != 0) { printf("COMP FAIL: noclear-stuck\n"); bad = 1; }
+        int wantClear[6] = {1, 0, 0, 1, 0, 0}; // чистит только первый проход
+        if (nclear != 6 || memcmp(sawClear, wantClear, sizeof wantClear)) {
+            printf("COMP FAIL: clear-seq\n");
+            bad = 1;
+        }
+        if (t->passClear != 0) { printf("COMP FAIL: clear-stuck\n"); bad = 1; }
     }
     // 2. Смешанные бэкенды — отказ.
     {

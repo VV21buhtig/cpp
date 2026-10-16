@@ -199,7 +199,7 @@ static int mesh_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     MeshWrap *c = (MeshWrap *)rc->ctx;
     if (!t || t->backend != 2 || !t->fbo) return 0;
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    mesh_draw(c, v, t->w, t->h, !t->noClear);
+    mesh_draw(c, v, t->w, t->h, t->passClear);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return 1;
 }

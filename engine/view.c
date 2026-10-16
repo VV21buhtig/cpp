@@ -390,7 +390,7 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     vw_view(vw, &v);
     int ok = 0;
     if (vw->backend == 2 && vw->hasTarget && vw->rc->frame_to) {
-        vw->target.noClear = 0; // одиночка: каждый кадр с чисток
+        eng_pass_begin(&vw->target, 0.05f, 0.07f, 0.12f, 1.0f, 1.0f, 1);
         if (vw->rc->frame_to(vw->rc, &v, &vw->target)) {
             // Нативный монолит: презент БЕЗ readback (★2: никакого glReadPixels
             // в sink — кадр не покидает GPU вообще).
@@ -432,6 +432,7 @@ int eng_view_frame(EngView *vw, uint8_t *rgba, int w, int h) {
     } else {
         vw->rc->frame(vw->rc, &v);
     }
+    eng_pass_end(&vw->target); // чистка потреблена (даже мимо веток — флаг не висит)
     vw->frame++;
     return ok;
 }

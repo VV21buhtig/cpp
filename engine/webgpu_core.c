@@ -757,7 +757,7 @@ static int core_frame_to(RenderCore *rc, const RcView *v, RcTarget *t) {
     if (!tg) return 0;
     vv.resW = tg->w;
     vv.resH = tg->h;
-    return wg_render(c, &vv, tg->view, tg->dview, tg->w, tg->h, !t->noClear);
+    return wg_render(c, &vv, tg->view, tg->dview, tg->w, tg->h, t->passClear);
 }
 
 // Скачать нативную цель в CPU (RGBA, верх первый). Сразу после рендера.
@@ -777,7 +777,7 @@ static int core_frame_cpu(RenderCore *rc, const RcView *v, uint8_t *rgba, int w,
     c->scratch.backend = RC_BACKEND_WEBGPU;
     c->scratch.w = w;
     c->scratch.h = h;
-    c->scratch.noClear = 0;
+    c->scratch.passClear = 1;
     RcView vv = *v;
     vv.resW = w;
     vv.resH = h;

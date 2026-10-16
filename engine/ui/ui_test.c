@@ -929,19 +929,21 @@ int main(int argc, char **argv) {
         }
         g_view.resW = g_vpOk ? g_vpw : W; // аспект вьюпорта (или окна при отказе)
         g_view.resH = g_vpOk ? g_vph : H;
-        // Чистим общую цель (3D теперь в своей, раньше чистил mesh-проход).
+        // Чистим общую цель САМИ, явно (W2: решение вызывающего, не ядра).
+        // begin помечает passClear=0 (ядрам чистить нечего — уже чисто).
         glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
         glViewport(0, 0, g_WW, g_WH);
         glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        t.noClear = 1; // уже чистили сами (vec поверх без чистки)
+        eng_pass_begin(&t, 0.05f, 0.07f, 0.12f, 1.0f, 1.0f, 0);
         double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
         if (wantTime) s0 = glfwGetTime();
         if (g_vpOk) {
             // 3D ТОЛЬКО во вьюпорт (своя цель, свой аспект)...
-            g_vp.noClear = 0;
+            eng_pass_begin(&g_vp, 0.05f, 0.07f, 0.12f, 1.0f, 1.0f, 1);
             if (mesh->frame_to) mesh->frame_to(mesh, &g_view, &g_vp);
+            eng_pass_end(&g_vp);
             // ...затем GPU-блит в общую цель на место rect (0 копий CPU).
             // GL y-вверх: dst перевёрнут относительно UI y-вниз.
             glBindFramebuffer(GL_READ_FRAMEBUFFER, g_vp.fbo);
