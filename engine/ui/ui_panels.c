@@ -77,8 +77,8 @@ UiPanels *ui_panels_create(void) {
 // Прямоугольник вьюпорта (док-модель UE: остаток после панелей).
 // Пишет x,y,w,h (y вниз). Вызывающий пересоздаёт ТОЛЬКО цель (не ядро/окно).
 void ui_panels_viewport(const UiPanels *p, int W, int H, int *x, int *y, int *w, int *h) {
-    int hx = p ? (p->showHier ? p->hierW : 28) : 0;
-    int ix = p ? (p->showInsp ? p->inspW : 28) : 0;
+    int hx = p && p->showHier ? p->hierW : 0;
+    int ix = p && p->showInsp ? p->inspW : 0;
     if (x) *x = hx;
     if (y) *y = 58;
     if (w) *w = W - hx - ix;
@@ -202,19 +202,20 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
     }
     if (e->kind != UI_EV_DOWN || e->button != 0) return ui_unhandled();
     float x = e->x, y = e->y;
-    int hx = p->showHier ? p->hierW : 28;
-    int ix = p->showInsp ? p->inspW : 28;
+    int hx = p->showHier ? p->hierW : 0;
+    int ix = p->showInsp ? p->inspW : 0;
     // Кнопки коллапса раньше контента (хром первее строк).
+    // Закрытая панель = 0px (возврат через Tab/View, полосок нет).
     if (y >= 58 && y < 82) {
-        if (x >= hx - 28 && x < hx) {
-            p->showHier = !p->showHier;
+        if (p->showHier && x >= hx - 28 && x < hx) {
+            p->showHier = 0;
             p->dirty = 1;
             return ui_handled(1, 0);
         }
         // w нужен для правой кнопки: берём из последней сборки через frows? нет —
         // ширина окна известна вызывающему; храним в панели при build.
-        if (x >= p->winW - ix && x < p->winW - ix + 28) {
-            p->showInsp = !p->showInsp;
+        if (p->showInsp && x >= p->winW - ix && x < p->winW - ix + 28) {
+            p->showInsp = 0;
             p->dirty = 1;
             return ui_handled(1, 0);
         }
@@ -242,9 +243,16 @@ UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e) {
         }
         return ui_unhandled();
     }
-    // Менюбар: File|Edit|View — заглушки с flash (команды позже).
+    // Менюбар: File|Edit — заглушки с flash; View — показать/скрыть панели.
     if (y >= 0 && y < 26 && x >= 8 && x < 200) {
-        const char *m = x < 70 ? "File" : (x < 135 ? "Edit" : "View");
+        if (x >= 135) { // View
+            int any = p->showHier || p->showInsp;
+            p->showHier = any ? 0 : 1;
+            p->showInsp = any ? 0 : 1;
+            p->dirty = 1;
+            return ui_handled(1, 0);
+        }
+        const char *m = x < 70 ? "File" : "Edit";
         snprintf(p->flash, sizeof p->flash, "%s (stub)", m);
         p->dirty = 1;
         return ui_handled(1, 0);
@@ -284,11 +292,13 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     emit(p, 0, 26, (float)w, 32, p->theme.bg);
     for (int i = 0; i < 4; i++)
         if (i == p->tool) emit(p, 8 + (float)(i * 64), 28, 60, 28, p->theme.tool);
-    int hx = p->showHier ? p->hierW : 28;
-    int ix = p->showInsp ? p->inspW : 28;
-    // Иерархия: фон + строки + кнопка коллапса («<» сворачивает в полоску).
-    emit(p, 0, 58, (float)hx, (float)(h - 58), p->theme.bg);
-    emit(p, (float)(hx - 28), 58, 28, 24, p->theme.bar);
+    int hx = p->showHier ? p->hierW : 0;
+    int ix = p->showInsp ? p->inspW : 0;
+    // Иерархия: фон + строки + кнопка коллапса («<» прячет полностью, не в полоску).
+    if (hx > 0) {
+        emit(p, 0, 58, (float)hx, (float)(h - 58), p->theme.bg);
+        emit(p, (float)(hx - 28), 58, 28, 24, p->theme.bar);
+    }
     p->nrows = 0;
     if (scene && p->showHier) {
         Entity list[SC_MAX];
@@ -313,9 +323,11 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
     }
     // Статусбар (от иерархии до инспектора).
     emit(p, (float)hx, (float)(h - 26), (float)(w - hx - ix), 26, p->theme.bar);
-    // Инспектор: правая панель + 9 строк Transform выбранного + коллапс («>»).
-    emit(p, (float)(w - ix), 58, (float)ix, (float)(h - 84), p->theme.bg);
-    emit(p, (float)(w - ix), 58, 28, 24, p->theme.bar);
+    // Инспектор: правая панель + 9 строк + коллапс («>» прячет полностью).
+    if (ix > 0) {
+        emit(p, (float)(w - ix), 58, (float)ix, (float)(h - 84), p->theme.bg);
+        emit(p, (float)(w - ix), 58, 28, 24, p->theme.bar);
+    }
     for (int i = 0; i < PN_NF; i++) {
         p->frows[i].x = 0;
         p->frows[i].w = 0; // нет строк без панели (хит выключен)
@@ -343,8 +355,8 @@ int ui_panels_build(UiPanels *p, ScWorld *scene, int w, int h, const UiFrame **o
 
 void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
     if (!p || !text) return;
-    int hx = p->showHier ? p->hierW : 28;
-    int ix = p->showInsp ? p->inspW : 28;
+    int hx = p->showHier ? p->hierW : 0;
+    int ix = p->showInsp ? p->inspW : 0;
     // Оси в цветах гизмо (x красный, y зелёный, z синий) — цифры читаются.
     static const float AXC[3][4] = {{1.0f, 0.52f, 0.47f, 1.0f},
                                     {0.55f, 1.0f, 0.58f, 1.0f},
@@ -372,7 +384,7 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h) {
         const char *nm = sc_name(scene, p->selected);
         if (nm && nm[0]) sel = nm;
     }
-    snprintf(st, sizeof st, "sel: %s | tool: %d", sel, p->tool);
+    snprintf(st, sizeof st, "sel: %s | tool: %d | Tab: panels", sel, p->tool);
     ui_text_quad(text, (float)(hx + 10), (float)(h - 22), st, p->theme.dim);
     // Инспектор: имя + группы Position/Rotation/Scale + значения в цветах осей.
     if (p->showInsp) {

@@ -360,8 +360,21 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
-                if (x != 28 || w != 1032) {
+                if (x != 0 || w != 1060) {
                     printf("SELF FAIL: collapsed viewport %d %d %d %d\n", x, y, w, h);
+                    bad = 1;
+                }
+                // Tab: всё спрятать (фулскрин) и вернуть.
+                memset(&pe, 0, sizeof pe);
+                pe.kind = UI_EV_KEY;
+                pe.key = 258; // TAB (не ASCII!)
+                if (!ui_panels_event(pn, &sw, &pe).handled) {
+                    printf("SELF FAIL: tab miss\n");
+                    bad = 1;
+                }
+                ui_panels_viewport(pn, 1280, 720, &x, &y, &w, &h);
+                if (x != 0 || w != 1280 || h != 636) {
+                    printf("SELF FAIL: tab viewport %d %d %d %d\n", x, y, w, h);
                     bad = 1;
                 }
             }
