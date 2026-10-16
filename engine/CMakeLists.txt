@@ -21,16 +21,7 @@ target_include_directories(engine_test PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine_test PRIVATE engine_shared)
 target_compile_options(engine_test PRIVATE -Wall -Wextra)
-# WGSL-канон вшивается в заголовок при каждой правке шейдеров.
-file(GLOB SDF_WGSL_PARTS
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sdf/*.wgsl"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky/*.wgsl")
-add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
-  COMMAND ${CMAKE_COMMAND} -DSRCDIR=${CMAKE_CURRENT_SOURCE_DIR}/shaders
-    -DDST=${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
-  DEPENDS ${SDF_WGSL_PARTS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_wgsl.cmake
-  COMMENT "embed shaders (sdf+sky)")
+# WGSL-канон читается из файлов в рантайме (Этап 3.1, baked sdf_wgsl.h убит).
 # SPIR-V для vk-ядра из наших shaders/vk (glslc).
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/spv_vk)
 foreach(SH vk_mesh.vert vk_mesh.frag vk_sky.vert vk_sky.frag)
@@ -55,15 +46,14 @@ add_library(engine_shared SHARED
   ui/ui_theme.c
   ui/ui_undo.c
   ui/ui_gizmo.c
-  ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
+  wgsl_file.c
+  ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
   OUTPUT_NAME engine VERSION 0.2.0 SOVERSION 0)
 target_include_directories(engine_shared PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/Vulkan-Headers)
-target_include_directories(engine_shared PRIVATE
-  ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_compile_definitions(engine_shared PRIVATE
   VK_SPV_DIR="${CMAKE_CURRENT_BINARY_DIR}/spv_vk")
 target_link_libraries(engine_shared PUBLIC glfw OpenGL::GL ${VULKAN_LIB} webgpu m)

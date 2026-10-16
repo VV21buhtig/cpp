@@ -17,7 +17,7 @@
 #include "sky_lut.h"
 #include "vox/vox_chunk.h"
 #include "vox/vox_tex.h"
-#include "sdf_wgsl.h"
+#include "wgsl_file.h" // WGSL из файлов (Этап 3.1, baked убит)
 
 #define FRAMES_IN_FLIGHT 2
 #define VOX_STREAM_CH 11
@@ -132,27 +132,50 @@ static int core_upload_tiles(RenderCore *rc, const uint8_t *rgba, int tile, int 
     return 1;
 }
 
-static void core_build_all(VoxCore *c, const RcView *v) {
-    // Вызывается один раз, когда device готов. Значения юниформов придут с кадрами.
-    // Поверхность — через RHI (там же COPY_SRC под VOX_SHOT, Mailbox).
-    core_reconf(c, v->resW > 0 ? v->resW : 1280, v->resH > 0 ? v->resH : 720);
+// Набор "от модуля" (Этап 3.1: пересборка при reload): модуль + оба пайпа +
+// лейаут 0 + группы кадра. Строит в локалы; коммит только если всё живое
+// (старое продолжает рисовать при отказе). Буферы/текстуры дольше живут.
+static void pipes_release(VoxCore *c) {
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        if (c->bind[i]) wgpuBindGroupRelease(c->bind[i]);
+        c->bind[i] = 0;
+        if (c->dbind[i]) wgpuBindGroupRelease(c->dbind[i]);
+        c->dbind[i] = 0;
+    }
+    if (c->bgl) wgpuBindGroupLayoutRelease(c->bgl);
+    c->bgl = 0;
+    if (c->dbgl) wgpuBindGroupLayoutRelease(c->dbgl);
+    c->dbgl = 0;
+    if (c->pipeline) wgpuRenderPipelineRelease(c->pipeline);
+    c->pipeline = 0;
+    if (c->pipeDepth) wgpuRenderPipelineRelease(c->pipeDepth);
+    c->pipeDepth = 0;
+    if (c->mod) wgpuShaderModuleRelease(c->mod);
+    c->mod = 0;
+    if (c->skyBind) wgpuBindGroupRelease(c->skyBind);
+    c->skyBind = 0;
+    if (c->skyBindDepth) wgpuBindGroupRelease(c->skyBindDepth);
+    c->skyBindDepth = 0;
+}
 
-    c->mod = make_module(c->rhi.device, SDF_WGSL);
-    for (int i = 0; i < FRAMES_IN_FLIGHT; i++)
-        c->ubo[i] = ubo_buf(c->rhi.device, 64);
+static int core_build_pipes(VoxCore *c, const char *src) {
+    if (!c || !src || !src[0]) return 0;
+    WGPUDevice dev = c->rhi.device;
+    WGPUShaderModule mod = make_module(dev, src);
+    if (!mod) return 0;
     WGPUColorTargetState color;
     memset(&color, 0, sizeof color);
     color.format = c->fmt;
     color.writeMask = WGPUColorWriteMask_All;
     WGPUFragmentState frag;
     memset(&frag, 0, sizeof frag);
-    frag.module = c->mod;
+    frag.module = mod;
     frag.entryPoint = (WGPUStringView){"fs", 2};
     frag.targetCount = 1;
     frag.targets = &color;
     WGPUVertexState vert;
     memset(&vert, 0, sizeof vert);
-    vert.module = c->mod;
+    vert.module = mod;
     vert.entryPoint = (WGPUStringView){"vs", 2};
     WGPURenderPipelineDescriptor pipe;
     memset(&pipe, 0, sizeof pipe);
@@ -163,58 +186,187 @@ static void core_build_all(VoxCore *c, const RcView *v) {
     pipe.primitive.cullMode = WGPUCullMode_None;
     pipe.multisample.count = 1;
     pipe.multisample.mask = 0xFFFFFFFFu;
-    c->pipeline = wgpuDeviceCreateRenderPipeline(c->rhi.device, &pipe);
-    c->bgl = wgpuRenderPipelineGetBindGroupLayout(c->pipeline, 0);
+    WGPURenderPipeline pl = wgpuDeviceCreateRenderPipeline(dev, &pipe);
+    if (!pl) {
+        wgpuShaderModuleRelease(mod);
+        return 0;
+    }
+    WGPUBindGroupLayout bgl = wgpuRenderPipelineGetBindGroupLayout(pl, 0);
     // Дубль под offscreen-цель с глубиной: тот же шейдер, тест Always
     // (DDA глубину не пишет — в WGSL нет gl_FragDepth; WG-mesh придёт позже).
-    {
-        WGPUDepthStencilState ds;
-        memset(&ds, 0, sizeof ds);
-        ds.format = WGPUTextureFormat_Depth32Float;
-        ds.depthWriteEnabled = WGPUOptionalBool_False;
-        ds.depthCompare = WGPUCompareFunction_Always;
-        pipe.depthStencil = &ds;
-        c->pipeDepth = wgpuDeviceCreateRenderPipeline(c->rhi.device, &pipe);
+    WGPUDepthStencilState ds;
+    memset(&ds, 0, sizeof ds);
+    ds.format = WGPUTextureFormat_Depth32Float;
+    ds.depthWriteEnabled = WGPUOptionalBool_False;
+    ds.depthCompare = WGPUCompareFunction_Always;
+    pipe.depthStencil = &ds;
+    WGPURenderPipeline pld = wgpuDeviceCreateRenderPipeline(dev, &pipe);
+    if (!pld || !bgl) {
+        if (pld) wgpuRenderPipelineRelease(pld);
+        if (bgl) wgpuBindGroupLayoutRelease(bgl);
+        wgpuRenderPipelineRelease(pl);
+        wgpuShaderModuleRelease(mod);
+        return 0;
     }
+    WGPUBindGroupLayout dbgl = wgpuRenderPipelineGetBindGroupLayout(pld, 0);
+    if (!dbgl) {
+        wgpuBindGroupLayoutRelease(bgl);
+        wgpuRenderPipelineRelease(pld);
+        wgpuRenderPipelineRelease(pl);
+        wgpuShaderModuleRelease(mod);
+        return 0;
+    }
+    WGPUBindGroup bg[FRAMES_IN_FLIGHT];
+    WGPUBindGroup dbg[FRAMES_IN_FLIGHT];
+    memset(bg, 0, sizeof bg);
+    memset(dbg, 0, sizeof dbg);
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        WGPUBindGroupEntry be[5];
+        memset(be, 0, sizeof be);
+        be[0].binding = 0; be[0].buffer = c->ubo[i]; be[0].size = 64;
+        be[1].binding = 1; be[1].buffer = c->tagsBuf; be[1].size = sizeof c->tags;
+        be[2].binding = 2; be[2].buffer = c->gradeBuf; be[2].size = 16;
+        be[3].binding = 3; be[3].buffer = c->viewBuf; be[3].size = 16;
+        be[4].binding = 4; be[4].buffer = c->frustumBuf; be[4].size = 64;
+        WGPUBindGroupDescriptor bgdef;
+        memset(&bgdef, 0, sizeof bgdef);
+        bgdef.entryCount = 5;
+        bgdef.entries = be;
+        // Основная группа под свой лейаут...
+        bgdef.layout = bgl;
+        bg[i] = wgpuDeviceCreateBindGroup(dev, &bgdef);
+        if (!bg[i]) break;
+        // ...дубль под второй лейаут pipeDepth (те же буферы: чужой лейаут
+        // с теми же handles не катит — exclusive pipelines).
+        bgdef.layout = dbgl;
+        dbg[i] = wgpuDeviceCreateBindGroup(dev, &bgdef);
+        if (!dbg[i]) break;
+    }
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        if (!bg[i] || !dbg[i]) {
+            for (int k = 0; k < FRAMES_IN_FLIGHT; k++) {
+                if (bg[k]) wgpuBindGroupRelease(bg[k]);
+                if (dbg[k]) wgpuBindGroupRelease(dbg[k]);
+            }
+            wgpuBindGroupLayoutRelease(dbgl);
+            wgpuBindGroupLayoutRelease(bgl);
+            wgpuRenderPipelineRelease(pld);
+            wgpuRenderPipelineRelease(pl);
+            wgpuShaderModuleRelease(mod);
+            return 0;
+        }
+    }
+    pipes_release(c); // коммит: старое снесли только после успеха
+    c->mod = mod;
+    c->pipeline = pl;
+    c->pipeDepth = pld;
+    c->bgl = bgl;
+    c->dbgl = dbgl;
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        c->bind[i] = bg[i];
+        c->dbind[i] = dbg[i];
+    }
+    return 1;
+}
 
+// Небесные группы (layout 1 обоих пайпов) из живых вьюх.
+// Нужны пайпы + текстуры + sky (зовём после них; и при reload).
+static int core_build_skybinds(VoxCore *c) {
+    if (!c || !c->pipeline || !c->pipeDepth) return 0;
+    WGPUDevice dev = c->rhi.device;
+    WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(c->pipeline, 1);
+    WGPUBindGroupEntry e[6];
+    memset(e, 0, sizeof e);
+    e[0].binding = 0; e[0].textureView = c->sky.sunView;
+    e[1].binding = 1; e[1].textureView = c->sky.moonView;
+    e[2].binding = 2; e[2].sampler = c->sky.smp;
+    e[3].binding = 3; e[3].textureView = c->voxView;
+    e[4].binding = 4; e[4].textureView = c->tileView;
+    e[5].binding = 5; e[5].sampler = c->tileSmp;
+    WGPUBindGroupDescriptor d;
+    memset(&d, 0, sizeof d);
+    d.layout = l;
+    d.entryCount = 6;
+    d.entries = e;
+    WGPUBindGroup sb = wgpuDeviceCreateBindGroup(dev, &d);
+    wgpuBindGroupLayoutRelease(l);
+    // Небесная группа под второй лейаут (те же вьюхи).
+    WGPUBindGroupLayout l2 = wgpuRenderPipelineGetBindGroupLayout(c->pipeDepth, 1);
+    d.layout = l2;
+    WGPUBindGroup sbd = wgpuDeviceCreateBindGroup(dev, &d);
+    wgpuBindGroupLayoutRelease(l2);
+    if (!sb || !sbd) {
+        if (sb) wgpuBindGroupRelease(sb);
+        if (sbd) wgpuBindGroupRelease(sbd);
+        return 0;
+    }
+    if (c->skyBind) wgpuBindGroupRelease(c->skyBind);
+    c->skyBind = sb;
+    if (c->skyBindDepth) wgpuBindGroupRelease(c->skyBindDepth);
+    c->skyBindDepth = sbd;
+    return 1;
+}
+
+// Горячая замена модуля (Monaco): id "sdf"; code NULL/пусто = из файлов.
+// Пересборка пайпов при reload (Этап 3.1). Отказ = старое живо + лог.
+// Ограничение Dawn: ошибки компиляции асинхронны — битый WGSL даст
+// error-пайп, а не отказ тут (раньше валидации не было вообще).
+static int core_shader_reload(RenderCore *rc, const char *id, const char *code, char *log,
+                              int logcap) {
+    VoxCore *c = &((VoxCoreWrap *)rc->ctx)->core;
+    if (!c->ready) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "wg: not ready");
+        return 0;
+    }
+    if (!id || strcmp(id, "sdf")) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "wg: unknown id (want sdf)");
+        return 0;
+    }
+    char *owned = 0;
+    const char *src = code;
+    if (!src || !src[0]) {
+        owned = wgsl_sdf();
+        if (!owned) {
+            if (log && logcap > 0) snprintf(log, (size_t)logcap, "wg: no files");
+            return 0;
+        }
+        src = owned;
+    }
+    int ok = core_build_pipes(c, src) && core_build_skybinds(c);
+    free(owned);
+    if (log && logcap > 0)
+        snprintf(log, (size_t)logcap, ok ? "wg: sdf rebuilt" : "wg: rebuild fail, old live");
+    return ok;
+}
+
+static void core_build_all(VoxCore *c, const RcView *v) {
+    // Вызывается один раз, когда device готов. Значения юниформов придут с кадрами.
+    // Поверхность — через RHI (там же COPY_SRC под VOX_SHOT, Mailbox).
+    core_reconf(c, v->resW > 0 ? v->resW : 1280, v->resH > 0 ? v->resH : 720);
+
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++)
+        c->ubo[i] = ubo_buf(c->rhi.device, 64);
     c->tagsBuf = ubo_buf(c->rhi.device, sizeof c->tags);
     for (int i = 0; i < 484; i++) c->tags[i] = INT32_MAX;
     wgpuQueueWriteBuffer(c->rhi.queue, c->tagsBuf, 0, c->tags, sizeof c->tags);
     c->gradeBuf = ubo_buf(c->rhi.device, 16);
     c->viewBuf = ubo_buf(c->rhi.device, 16);
     c->frustumBuf = ubo_buf(c->rhi.device, 64);
-    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        WGPUBindGroupEntry be[5];
-        memset(be, 0, sizeof be);
-        be[0].binding = 0; be[0].buffer = c->ubo[i]; be[0].size = 64;
-        be[1].binding = 1; be[1].buffer = c->tagsBuf; be[1].size = sizeof c->tags;
-        be[2].binding = 2; be[2].buffer = c->gradeBuf; be[2].size = 16;
-        be[3].binding = 3; be[3].buffer = c->viewBuf; be[3].size = 16;
-        be[4].binding = 4; be[4].buffer = c->frustumBuf; be[4].size = 64;
-        WGPUBindGroupDescriptor bgdef;
-        memset(&bgdef, 0, sizeof bgdef);
-        bgdef.layout = c->bgl;
-        bgdef.entryCount = 5;
-        bgdef.entries = be;
-        c->bind[i] = wgpuDeviceCreateBindGroup(c->rhi.device, &bgdef);
-    }
-    // Бинд-группы под второй лейаут pipeDepth (те же буферы: чужой лейаут
-    // с теми же handles не катит — exclusive pipelines).
-    c->dbgl = wgpuRenderPipelineGetBindGroupLayout(c->pipeDepth, 0);
-    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        WGPUBindGroupEntry be[5];
-        memset(be, 0, sizeof be);
-        be[0].binding = 0; be[0].buffer = c->ubo[i]; be[0].size = 64;
-        be[1].binding = 1; be[1].buffer = c->tagsBuf; be[1].size = sizeof c->tags;
-        be[2].binding = 2; be[2].buffer = c->gradeBuf; be[2].size = 16;
-        be[3].binding = 3; be[3].buffer = c->viewBuf; be[3].size = 16;
-        be[4].binding = 4; be[4].buffer = c->frustumBuf; be[4].size = 64;
-        WGPUBindGroupDescriptor bgdef;
-        memset(&bgdef, 0, sizeof bgdef);
-        bgdef.layout = c->dbgl;
-        bgdef.entryCount = 5;
-        bgdef.entries = be;
-        c->dbind[i] = wgpuDeviceCreateBindGroup(c->rhi.device, &bgdef);
+    // Модуль из файлов + пайпы + группы (Этап 3.1, baked убит).
+    {
+        char *src = wgsl_sdf();
+        int ok = src && core_build_pipes(c, src);
+        free(src);
+        if (!ok) {
+            printf("wgpu: pipes FAIL (no wgsl files?)\n");
+            for (int i = 0; i < FRAMES_IN_FLIGHT; i++)
+                if (c->ubo[i]) wgpuBufferRelease(c->ubo[i]);
+            if (c->tagsBuf) wgpuBufferRelease(c->tagsBuf);
+            if (c->gradeBuf) wgpuBufferRelease(c->gradeBuf);
+            if (c->viewBuf) wgpuBufferRelease(c->viewBuf);
+            if (c->frustumBuf) wgpuBufferRelease(c->frustumBuf);
+            return; // ready=0: shutdown гасит только RHI
+        }
     }
 
     // Тороидальная 3D-текстура вокселей.
@@ -278,42 +430,9 @@ static void core_build_all(VoxCore *c, const RcView *v) {
         wgpu_tile_pixels(c, white16);
     }
     sky_luts_init(&c->sky, c->rhi.device, c->rhi.queue);
-    {
-        WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(c->pipeline, 1);
-        WGPUBindGroupEntry e[6];
-        memset(e, 0, sizeof e);
-        e[0].binding = 0; e[0].textureView = c->sky.sunView;
-        e[1].binding = 1; e[1].textureView = c->sky.moonView;
-        e[2].binding = 2; e[2].sampler = c->sky.smp;
-        e[3].binding = 3; e[3].textureView = c->voxView;
-        e[4].binding = 4; e[4].textureView = c->tileView;
-        e[5].binding = 5; e[5].sampler = c->tileSmp;
-        WGPUBindGroupDescriptor d;
-        memset(&d, 0, sizeof d);
-        d.layout = l;
-        d.entryCount = 6;
-        d.entries = e;
-        c->skyBind = wgpuDeviceCreateBindGroup(c->rhi.device, &d);
-        wgpuBindGroupLayoutRelease(l);
-    }
-    // Небесная группа под второй лейаут (те же вьюхи).
-    {
-        WGPUBindGroupLayout l = wgpuRenderPipelineGetBindGroupLayout(c->pipeDepth, 1);
-        WGPUBindGroupEntry e[6];
-        memset(e, 0, sizeof e);
-        e[0].binding = 0; e[0].textureView = c->sky.sunView;
-        e[1].binding = 1; e[1].textureView = c->sky.moonView;
-        e[2].binding = 2; e[2].sampler = c->sky.smp;
-        e[3].binding = 3; e[3].textureView = c->voxView;
-        e[4].binding = 4; e[4].textureView = c->tileView;
-        e[5].binding = 5; e[5].sampler = c->tileSmp;
-        WGPUBindGroupDescriptor d;
-        memset(&d, 0, sizeof d);
-        d.layout = l;
-        d.entryCount = 6;
-        d.entries = e;
-        c->skyBindDepth = wgpuDeviceCreateBindGroup(c->rhi.device, &d);
-        wgpuBindGroupLayoutRelease(l);
+    if (!core_build_skybinds(c)) {
+        printf("wgpu: skybinds FAIL\n");
+        return;
     }
     c->ready = 1;
     printf("pipe OK: core ready\n");
@@ -801,21 +920,9 @@ static void core_shutdown(RenderCore *rc) {
     // Ядро могли не построить (ни одного кадра: build ленивый) — тогда
     // хендлы NULL, а wgpu-native на release(NULL) паникует. Гасим только RHI.
     if (c->ready) {
-        for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            wgpuBindGroupRelease(c->bind[i]);
+        for (int i = 0; i < FRAMES_IN_FLIGHT; i++)
             wgpuBufferRelease(c->ubo[i]);
-            if (c->dbind[i]) wgpuBindGroupRelease(c->dbind[i]);
-            c->dbind[i] = 0;
-        }
-        if (c->skyBindDepth) wgpuBindGroupRelease(c->skyBindDepth);
-        c->skyBindDepth = 0;
-        wgpuBindGroupLayoutRelease(c->bgl);
-        if (c->dbgl) wgpuBindGroupLayoutRelease(c->dbgl);
-        c->dbgl = 0;
-        wgpuRenderPipelineRelease(c->pipeline);
-        if (c->pipeDepth) wgpuRenderPipelineRelease(c->pipeDepth);
-        c->pipeDepth = 0;
-        wgpuShaderModuleRelease(c->mod);
+        pipes_release(c); // модуль/пайпы/группы (NULL-безопасно)
         c->ready = 0;
     }
     // Живые offscreen-цели (создавало ядро; RHI ещё жив — порядок важен).
@@ -860,6 +967,7 @@ RenderCore *rc_webgpu_create(void) {
     w->api.frame_cpu = core_frame_cpu;
     w->api.frame_to = core_frame_to; // нативный offscreen-таргет (композитор)
     w->api.download = core_download;
+    w->api.shader_reload = core_shader_reload; // Этап 3.1: пересборка пайпов
     w->api.fps = core_fps;
     return &w->api;
 }

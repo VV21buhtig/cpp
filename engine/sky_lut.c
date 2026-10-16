@@ -1,6 +1,7 @@
 // Печка неба: см. sky_lut.h. Все проходы — фулскрин-треугольник, draw(3).
 #include "sky_lut.h"
-#include "sdf_wgsl.h"
+#include "wgsl_file.h" // небо из файлов (Этап 3.1, baked убит)
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -176,10 +177,29 @@ void sky_luts_init(SkyLuts *s, WGPUDevice dev, WGPUQueue q) {
     s->moonView = layer_view(s->moonTex);
     s->ambView = layer_view(s->ambTex);
 
-    s->transMod = bake_mod(dev, SKY_TRANS_WGSL);
-    s->msMod = bake_mod(dev, SKY_MS_WGSL);
-    s->viewMod = bake_mod(dev, SKY_VIEW_WGSL);
-    s->ambMod = bake_mod(dev, SKY_AMB_WGSL);
+    // Модули неба из файлов (Этап 3.1). Строки живут только до bake.
+    {
+        char *st = wgsl_sky("TRANS");
+        char *sm = wgsl_sky("MS");
+        char *sv = wgsl_sky("VIEW");
+        char *sa = wgsl_sky("AMB");
+        if (st) {
+            s->transMod = bake_mod(dev, st);
+            free(st);
+        }
+        if (sm) {
+            s->msMod = bake_mod(dev, sm);
+            free(sm);
+        }
+        if (sv) {
+            s->viewMod = bake_mod(dev, sv);
+            free(sv);
+        }
+        if (sa) {
+            s->ambMod = bake_mod(dev, sa);
+            free(sa);
+        }
+    }
     s->transPipe = bake_pipe(dev, s->transMod);
     s->msPipe = bake_pipe(dev, s->msMod);
     s->viewPipe = bake_pipe(dev, s->viewMod);

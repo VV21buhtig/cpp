@@ -497,8 +497,13 @@ unsigned eng_view_pick(EngView *vw, int x, int y) {
 
 int eng_view_shader(EngView *vw, const char *id, const char *code, char *log, int logcap) {
     if (log && logcap > 0) log[0] = 0;
-    if (!vw || !vw->rc || !id || !code) {
-        if (log && logcap > 0) snprintf(log, (size_t)logcap, "нет вида/ядра/id/кода");
+    // code NULL = из файлов (WG Этап 3.1); id обязателен всегда.
+    if (!vw || !vw->rc || !id) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "нет вида/ядра/id");
+        return 0;
+    }
+    if (!code && vw->backend != RC_BACKEND_WEBGPU) {
+        if (log && logcap > 0) snprintf(log, (size_t)logcap, "нет кода (только WG умеет из файлов)");
         return 0;
     }
     if (!vw->rc->shader_reload) {

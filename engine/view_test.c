@@ -127,6 +127,32 @@ int main(int argc, char **argv) {
         bad = 1;
     }
     eng_view_close(vw);
+    // Воксель WebGPU: пайпы из файлов (Этап 3.1) + reload пересборка.
+    vw = eng_view_open(1u, 1u);
+    if (!vw) {
+        printf("VIEW FAIL: open voxel-wg\n");
+        bad = 1;
+    } else {
+        if (!eng_view_frame(vw, px, 1280, 720) || brightness(px) <= 36) {
+            printf("VIEW FAIL: wg frame (files?)\n");
+            bad = 1;
+        } else {
+            char log[2048] = {0};
+            if (!eng_view_shader(vw, "sdf", 0, log, sizeof log)) {
+                printf("VIEW FAIL: wg reload-files [%s]\n", log);
+                bad = 1;
+            }
+            if (eng_view_shader(vw, "nope", "x", log, sizeof log)) {
+                printf("VIEW FAIL: wg reload-unknown-ok\n");
+                bad = 1;
+            }
+            if (!eng_view_frame(vw, px, 1280, 720) || brightness(px) <= 36) {
+                printf("VIEW FAIL: wg frame-after-reload\n");
+                bad = 1;
+            }
+        }
+        eng_view_close(vw);
+    }
     // Меш GL + пикинг: центр — Hero, угол — мимо, повтор стабилен.
     vw = eng_view_open(16u, 2u);
     if (!vw) {
