@@ -12,6 +12,9 @@ for be in 2 3 1; do
     ./engine/build/view_test "$be" || fail=1
 done
 if [ "$fail" = 0 ]; then
+    ./tools/abicheck.sh || fail=1
+fi
+if [ "$fail" = 0 ]; then
     echo "matrix DONE"
 else
     echo "matrix FAIL"

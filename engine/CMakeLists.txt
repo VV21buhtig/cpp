@@ -44,7 +44,7 @@ endforeach()
 # libengine.so: ВЕСЬ движок одной shared-библиотекой (встраивание редактора).
 # Демо и тесты линкуют её, а не объекты напрямую — доказываем ship-артефакт.
 add_library(engine_shared SHARED
-  corelib.c engine.c comp.c
+  corelib.c engine.c comp.c comp_target.c
   rhi_gl.c rhi_vk.c rhi_webgpu.c
   vec_core.c pix_core.c sdf_core.c mesh_core.c gl_core.c vk_core.c webgpu_core.c
   vox/vox_gen.c vox/vox_mesh.c vox/vox_tex.c vox_feed.c
@@ -57,7 +57,7 @@ add_library(engine_shared SHARED
   ui/ui_gizmo.c
   ${CMAKE_CURRENT_BINARY_DIR}/gen/sdf_wgsl.h ${VK_SPV})
 set_target_properties(engine_shared PROPERTIES
-  OUTPUT_NAME engine VERSION 0.1.0 SOVERSION 0)
+  OUTPUT_NAME engine VERSION 0.2.0 SOVERSION 0)
 target_include_directories(engine_shared PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad

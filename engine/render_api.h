@@ -56,10 +56,13 @@ typedef struct {
 } RcMesh;
 
 // 2D-примитив (домен RC_CAP_VECTOR). a,b,c,d — параметры фигуры:
-// rect: x,y,w,h; circle: cx,cy,r,-; line: x0,y0,x1,y1.
+// rect: x,y,w,h; circle: cx,cy,r,-; line: x0,y0,x1,y1;
+// tri: p0=(a,b), p1=(c,d), p2=(e,f). Расширение e,f обратно совместимо
+// (читатели kind<=2 новых полей не касаются; сборка атомарна).
 typedef struct {
-    int kind; // 0 rect, 1 circle, 2 line
+    int kind; // 0 rect, 1 circle, 2 line, 3 tri
     float a, b, c, d;
+    float e, f;
     float rgba[4];
 } RcVecShape;
 
@@ -85,7 +88,9 @@ struct RenderCore {
     // NULL = только свой экран (такие ядра в композицию не берём).
     // Цель создаёт композитор под бэкенд (GL: FBO; VK: позже).
     int (*frame_to)(RenderCore *rc, const RcView *v, RcTarget *t);
-    // Кадр сразу в CPU-буфер (встраивание в чужое окно: Qt-вьюпорт редактора).
+    // Кадр сразу в CPU-буфер (КАРАНТИН W4: только тесты/скриншоты и фолбэк
+    // view.c для VK/WebGPU до нативных целей. Интерактивный GL-путь НЕ вызывает:
+    // frame_to + download покрывают всё. Gate: tools/abicheck.sh в матрице.)
     // rgba: w*h*4 байт, строка 0 = ВЕРХ кадра, порядок RGBA. Ядро само рендерит
     // и скачивает своим путём (VK: staging-буфер; WebGPU: map+poll).
     // Возвращает 1 если залил, 0 если размер чужой/не готово/нет пути.
@@ -97,7 +102,8 @@ struct RenderCore {
     int (*pick)(RenderCore *rc, const RcView *v, RcTarget *t, unsigned id);
     // Скачать ЦЕЛЬ в CPU (RGBA, строка 0 = верх): цель создана этим же ядром
     // (его натив в RcTarget), последний рендер — frame_to/comp (картинка уже
-    // в читаемом лейауте). Для comp->canvas и тестов. NULL = не умеет.
+    // в читаемом лейауте). КАРАНТИН W4: тесты/скриншоты и frame_cpu-фолбэк;
+    // интерактив скачивать не должен (gate: tools/abicheck.sh). NULL = не умеет.
     int (*download)(RenderCore *rc, RcTarget *t, uint8_t *rgba, int w, int h);
     // Горячая замена шейдера (Monaco/VFS): id — путь файла (полностью или
     // basename), code — новый текст стороны. Перекомпиляция БЕЗ пересоздания
@@ -134,6 +140,10 @@ struct RenderCore {
     int (*upload_sdf)(RenderCore *rc, const RcSdfObj *objs, int n);
     // --- Домен VECTOR (NULL если нет RC_CAP_VECTOR). Кадр примитивов. ---
     int (*upload_vector)(RenderCore *rc, const RcVecShape *shapes, int n);
+    // Частичная заливка (dirty-rect, инвалидация по-UE): перерисовать регион
+    // (x,y,w,h, UI y-вниз), остальное не трогать. NULL = только полный путь.
+    int (*upload_vector_rect)(RenderCore *rc, const RcVecShape *shapes, int n, int x, int y,
+                              int w, int h);
     // --- Домен PIXEL (NULL если нет RC_CAP_PIXEL). CPU-кадр на весь экран. ---
     // Строка 0 = ВЕРХ кадра (натурально для CPU-буферов; ядро флипает под GPU).
     int (*upload_pixels)(RenderCore *rc, const uint8_t *rgba, int w, int h);
@@ -154,7 +164,7 @@ RenderCore *rc_create(const char *name);
 // Выбор по двум осям: домен (RC_CAP_*, один бит) + бэкенд (RC_BACKEND_*).
 // NULL если такой ячейки нет. Это и есть таблица «домен × бэкенд».
 RenderCore *rc_create_by(unsigned domain, unsigned backend);
-// Версия движка для проверки совместимости оболочкой ("0.1.0").
+// Версия движка для проверки совместимости оболочкой ("0.2.0", W4).
 // Редактор сверяет мажор прежде чем дёргать остальное.
 const char *eng_version(void);
 // Саморегистрация ядра (дергает конструктор ядра, не человек).

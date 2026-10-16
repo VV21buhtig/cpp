@@ -40,7 +40,7 @@ RenderCore *rc_create_by(unsigned domain, unsigned backend) {
 }
 
 const char *eng_version(void) {
-    return "0.1.0";
+    return "0.2.0";
 }
 
 void rc_destroy(RenderCore *rc) {
