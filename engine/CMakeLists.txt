@@ -151,6 +151,11 @@ add_executable(ui_test ui/ui_test.c)
 target_include_directories(ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ui_test PRIVATE engine_shared m)
 target_compile_options(ui_test PRIVATE -Wall -Wextra)
+# Отдельный правщик фронта (§13): своё окно, без 3D, всегда EDIT.
+add_executable(ui_edit ui_edit.c)
+target_include_directories(ui_edit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(ui_edit PRIVATE engine_shared m)
+target_compile_options(ui_edit PRIVATE -Wall -Wextra)
 # Прямой вьювер (схема Roblox/UE5): отдельный процесс, своё окно, GPU->GPU.
 add_executable(direct_view direct_view.c)
 target_include_directories(direct_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
