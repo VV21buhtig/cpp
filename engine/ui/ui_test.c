@@ -254,19 +254,64 @@ static void ui_push_dirty(void) {
     }
 }
 
+static int g_trace = 0; // UI_TRACE=1: лог ручных действий (только тест)
+static int g_traceMoves = 0;
+static double g_traceT = 0;
+
+static void trace_commit(void) {
+    // Что изменилось коммитом: selected + его transform (итог drag/скраба).
+    unsigned sel = ui_panels_selected(g_panels);
+    if (!sel || !sc_alive(&g_scene, sel)) return;
+    const char *nm = sc_name(&g_scene, sel);
+    ScTransform t = sc_get(&g_scene, sel);
+    printf("[trace] commit %s pos=(%.2f,%.2f,%.2f) rot=(%.2f,%.2f,%.2f)\n",
+           nm && nm[0] ? nm : "?", t.pos.x, t.pos.y, t.pos.z, t.rot.x, t.rot.y, t.rot.z);
+}
+
 static void route_event(const UiEvent *e) {
     // Приоритет как UE/Roblox: гизмо > панели (ручка первее строки под ней).
     // Модальные игнорируют чужие события сами (возврат unhandled).
+    const char *kind = e->kind == UI_EV_DOWN ? "DOWN" : e->kind == UI_EV_UP ? "UP"
+                         : e->kind == UI_EV_MOVE                            ? "MOVE"
+                         : e->kind == UI_EV_KEY                             ? "KEY"
+                         : e->kind == UI_EV_WHEEL                           ? "WHEEL"
+                                                                            : "?";
+    int logMove = 0;
+    if (g_trace && e->kind == UI_EV_DOWN) g_traceMoves = 0; // новый жест — сначала лог
+    if (g_trace && e->kind == UI_EV_MOVE) {
+        // MOVE без спама: первое + раз в 200мс (drag виден, лог читаем).
+        double now = glfwGetTime();
+        if (g_traceMoves == 0 || now - g_traceT >= 0.2) {
+            g_traceT = now;
+            logMove = 1;
+        }
+        g_traceMoves++;
+    }
     UiReply r = ui_gizmo_event(g_gizmo, &g_scene, &g_view, g_WW, g_WH,
                                ui_panels_undo(g_panels), e);
     if (r.handled) {
         g_capture = r.capture;
         if (r.dirty) ui_push_dirty();
+        if (g_trace && e->kind == UI_EV_KEY) {
+            printf("[trace] KEY %d mods=%d -> gizmo\n", e->key, e->mods);
+        } else if (g_trace && (e->kind != UI_EV_MOVE || logMove)) {
+            printf("[trace] %s %.0f,%.0f -> gizmo%s%s\n", kind, e->x, e->y,
+                   r.capture ? " capture" : "", r.dirty ? " dirty" : "");
+        }
+        if (g_trace && e->kind == UI_EV_UP) trace_commit();
         return;
     }
     r = ui_panels_event(g_panels, &g_scene, e);
     if (r.handled) g_capture = r.capture;
     if (r.dirty) ui_push_dirty();
+    if (g_trace && e->kind == UI_EV_KEY) {
+        printf("[trace] KEY %d mods=%d -> %s\n", e->key, e->mods,
+               r.handled ? "handled" : "miss");
+    } else if (g_trace && (e->kind != UI_EV_MOVE || logMove)) {
+        printf("[trace] %s %.0f,%.0f -> panels%s%s\n", kind, e->x, e->y,
+               r.handled ? "" : " (miss)", r.dirty ? " dirty" : "");
+    }
+    if (g_trace && e->kind == UI_EV_UP) trace_commit();
 }
 
 static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
@@ -292,11 +337,13 @@ static void on_move(GLFWwindow *win, double x, double y) {
     g_mx = x * g_mouseKx;
     g_my = y * g_mouseKy;
     // Модальный скраб/драг едет на MOVE (вне захвата — дешёвый no-op у обоих).
+    // Координаты — те же что DOWN/UP (g_mx, масштаб фреймбуфера):
+    // гизмо-геометрия живёт в пикселях цели, сырые x/y окна врали у бортиков.
     UiEvent e;
     memset(&e, 0, sizeof e);
     e.kind = UI_EV_MOVE;
-    e.x = (float)x;
-    e.y = (float)y;
+    e.x = (float)g_mx;
+    e.y = (float)g_my;
     route_event(&e);
 }
 
@@ -597,6 +644,44 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
             }
+            // Frozen frame: ещё 5 шагов по +20px — дельты равны, монотонно
+            // (ловит feedback-разнос: раньше позиция осциллировала с ростом).
+            {
+                float dx = tx - ox, dy = ty - oy;
+                float dl = sqrtf(dx * dx + dy * dy);
+                dx /= dl;
+                dy /= dl;
+                float px = (ox + tx) * 0.5f + dx * 60.0f;
+                float py = (oy + ty) * 0.5f + dy * 60.0f;
+                float prev = sc_get(&gw, ge).pos.x;
+                float d0 = 0;
+                for (int si = 1; si <= 5; si++) {
+                    memset(&ge2, 0, sizeof ge2);
+                    ge2.kind = UI_EV_MOVE;
+                    ge2.x = px + dx * 20.0f * si;
+                    ge2.y = py + dy * 20.0f * si;
+                    gr = ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
+                    if (!gr.handled) {
+                        printf("SELF FAIL: gizmo drag step %d\n", si);
+                        bad = 1;
+                        break;
+                    }
+                    float cur = sc_get(&gw, ge).pos.x;
+                    float dd = cur - prev;
+                    prev = cur;
+                    if (si == 1) {
+                        d0 = dd;
+                        if (d0 <= 0) {
+                            printf("SELF FAIL: gizmo drag dir %f\n", d0);
+                            bad = 1;
+                        }
+                    } else if (fabsf(dd - d0) > 1e-3f) {
+                        printf("SELF FAIL: gizmo drag not linear step %d (%f vs %f)\n",
+                               si, dd, d0);
+                        bad = 1;
+                    }
+                }
+            }
             memset(&ge2, 0, sizeof ge2);
             ge2.kind = UI_EV_UP;
             gr = ui_gizmo_event(gz, &gw, &gv, 1280, 720, &gu, &ge2);
@@ -870,6 +955,12 @@ int main(int argc, char **argv) {
     glfwShowWindow(win);
     glfwMaximizeWindow(win);
     glfwPollEvents();
+    // UI_TRACE=1: лог ручных действий (только ui_test, в библиотеке нет).
+    {
+        const char *tr = getenv("UI_TRACE");
+        g_trace = (tr && tr[0] != '0') ? 1 : 0;
+        if (g_trace) printf("[trace] on (DOWN/UP + MOVE/200ms + commit)\n");
+    }
     // Замер без vsync (FUI_NOVSYNC=1): uncapped throughput + цена push.
     // FUI_PUSH=N: N лишних полных push+upload в кадр (модель drag-нагрузки).
     if (getenv("FUI_NOVSYNC") && getenv("FUI_NOVSYNC")[0] != '0') glfwSwapInterval(0);
@@ -891,7 +982,7 @@ int main(int argc, char **argv) {
                 g_mouseKy = (float)fh / (float)wh;
             }
         }
-        printf("ui_test: window %dx%d\n", g_WW, g_WH);
+        printf("ui_test: window %dx%d K=%.3f/%.3f\n", g_WW, g_WH, g_mouseKx, g_mouseKy);
     }
     // Статичная камера на куб (как vw_view mesh, orbA=-2.2).
     RcView v;
@@ -935,7 +1026,8 @@ int main(int argc, char **argv) {
     // (Тут гизмо уже живёт и синхронизировано.)
     {
         const char *dd = getenv("FUI_DEMO");
-        if (dd && !strcmp(dd, "drag")) {
+        if (dd && (!strcmp(dd, "drag") || !strcmp(dd, "dragfar"))) {
+            int steps = !strcmp(dd, "dragfar") ? 30 : 5; // far: +600px до бортика
             float hx, hy;
             if (ui_gizmo_handle(g_gizmo, &g_scene, &g_view, 0, 0, 50.0f, &hx, &hy)) {
                 UiEvent de;
@@ -944,15 +1036,23 @@ int main(int argc, char **argv) {
                 de.x = hx;
                 de.y = hy;
                 route_event(&de);
-                for (int di = 1; di <= 5; di++) {
+                for (int di = 1; di <= steps; di++) {
                     memset(&de, 0, sizeof de);
                     de.kind = UI_EV_MOVE;
                     de.x = hx + di * 20.0f;
                     de.y = hy;
                     route_event(&de);
+                    if (g_trace) {
+                        unsigned se = ui_panels_selected(g_panels);
+                        ScTransform st = sc_get(&g_scene, se);
+                        printf("[trace] step %d mouse=%.0f pos=(%.2f,%.2f,%.2f)\n",
+                               di, hx + di * 20.0f, st.pos.x, st.pos.y, st.pos.z);
+                    }
                 }
                 memset(&de, 0, sizeof de);
                 de.kind = UI_EV_UP;
+                de.x = hx + 5 * 20.0f;
+                de.y = hy;
                 route_event(&de);
                 printf("ui_test: demo drag done\n");
             } else {

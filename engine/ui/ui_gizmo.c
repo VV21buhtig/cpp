@@ -35,10 +35,19 @@ struct UiGizmo {
     float grabCoord; // координата/угол сущности на DOWN
     float grabCoord2; // вторая координата (плоскость: 2 оси)
     float grabU; // доля s точки DOWN в базисе плоскости
+    // Frozen frame драга (фикс на DOWN — иначе feedback: проекция против уже
+    // сдвинутой стрелки даёт усиление >1 и разнос у бортиков).
+    float frz_ox, frz_oy; // origin экрана на DOWN (общий для оси/плоскости)
+    float frz_ux, frz_uy; // направление оси на экране, unit (стрелка)
+    float frz_wpp; // мировых на пиксель вдоль оси (стрелка)
+    float frz_grab; // проекция точки DOWN в px от origin (стрелка)
+    float frz_dux, frz_duy, frz_dvx, frz_dvy; // экранный базис (плоскость)
+    float frz_det; // det базиса (плоскость)
+    float frz_s; // мировой масштаб S на DOWN (плоскость)
     float rotSign; // знак экранного угла -> мировых радиан (калибровка на DOWN)
     float was, was2; // значения для undo-коммита (плоскость: два поля)
     int posed;
-    int snap; // снеп вкл (шаги как в UE: move 1.0, rot 10°); Ctrl инвертирует
+    int snap; // снеп (шаги: move 1.0, rot 10°); выкл по умолчанию, Ctrl инвертирует
 };
 
 UiGizmo *ui_gizmo_create(void) {
@@ -48,7 +57,7 @@ UiGizmo *ui_gizmo_create(void) {
     g->dragKind = -1;
     g->hoverKind = -1;
     g->hoverAxis = -1;
-    g->snap = 1; // как в UE: снеп вкл по умолчанию, Ctrl инвертирует
+    g->snap = 0; // выкл по умолчанию: драг плавный; Ctrl даёт снеп (инверсия)
     return g;
 }
 
@@ -341,55 +350,35 @@ UiReply ui_gizmo_event(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H
                 return ui_handled(1, 1);
             }
             if (g->dragKind == 2) {
-                // Плоскость: решаем мышь в экранном базисе (du,dv), мир = доли*S.
-                ScTransform trp = sc_get(scene, g->ent);
-                float op[3] = {trp.pos.x, trp.pos.y, trp.pos.z};
-                float S = gizmo_len(g, v, op) * GIZMO_PLANE_K;
-                float u[3], vv[3];
-                ring_basis(g->axis, u, vv);
-                float pu[3] = {op[0] + u[0] * S, op[1] + u[1] * S, op[2] + u[2] * S};
-                float pv[3] = {op[0] + vv[0] * S, op[1] + vv[1] * S, op[2] + vv[2] * S};
-                float ox, oy, ux, uy, vx, vy;
-                if (!vp_project(g, v, op, &ox, &oy) ||
-                    !vp_project(g, v, pu, &ux, &uy) ||
-                    !vp_project(g, v, pv, &vx, &vy))
-                    return ui_handled(0, 1);
-                float dux = ux - ox, duy = uy - oy, dvx = vx - ox, dvy = vy - oy;
-                float det = dux * dvy - duy * dvx;
-                if (det > -1e-6f && det < 1e-6f) return ui_handled(0, 1);
-                float mx = e->x - ox, my = e->y - oy;
-                float s = (mx * dvy - my * dvx) / det;
-                float t2 = (dux * my - duy * mx) / det;
+                // Плоскость: мышь в ЗАМОРОЖЕННОМ экранном базисе (с DOWN).
+                // Живой пересчёт давал feedback (стрелка уезжает из-под мыши).
+                float mx = e->x - g->frz_ox, my = e->y - g->frz_oy;
+                float s = (mx * g->frz_dvy - my * g->frz_dvx) / g->frz_det;
+                float t2 = (g->frz_dux * my - g->frz_duy * mx) / g->frz_det;
                 int f0 = PLANE_FIELDS[g->axis][0], f1 = PLANE_FIELDS[g->axis][1];
-                float w0 = gizmo_snap(g, g->grabCoord + (s - g->grabT) * S, GIZMO_SNAP_MOVE,
-                                      e->mods);
-                float w1 = gizmo_snap(g, g->grabCoord2 + (t2 - g->grabU) * S, GIZMO_SNAP_MOVE,
-                                      e->mods);
-                trp = sc_get(scene, g->ent);
+                float w0 = gizmo_snap(g, g->grabCoord + (s - g->grabT) * g->frz_s,
+                                      GIZMO_SNAP_MOVE, e->mods);
+                float w1 = gizmo_snap(g, g->grabCoord2 + (t2 - g->grabU) * g->frz_s,
+                                      GIZMO_SNAP_MOVE, e->mods);
+                ScTransform trp = sc_get(scene, g->ent);
                 ui_field_set_f(&trp, &transform_fields[f0], w0);
                 ui_field_set_f(&trp, &transform_fields[f1], w1);
                 sc_set(scene, g->ent, &trp);
                 g->posed = 1;
                 return ui_handled(1, 1);
             }
-            float ox, oy, axx, ayy;
-            ScTransform tr = sc_get(scene, g->ent);
-            float o[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
-            float tip[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
-            float glen0 = gizmo_len(g, v, o);
-            tip[g->axis] += glen0;
-            if (!vp_project(g, v, o, &ox, &oy) ||
-                !vp_project(g, v, tip, &axx, &ayy))
-                return ui_handled(0, 1);
-            float t = 0;
-            seg_dist(e->x, e->y, ox, oy, axx, ayy, &t);
-            float glen1 = gizmo_len(g, v, o);
-            float coord = gizmo_snap(g, g->grabCoord + (t - g->grabT) * glen1, GIZMO_SNAP_MOVE, e->mods);
-            tr = sc_get(scene, g->ent);
-            ui_field_set_f(&tr, &transform_fields[g->axis], coord);
-            sc_set(scene, g->ent, &tr);
-            g->posed = 1;
-            return ui_handled(1, 1); // держим захват; стрелки едут за сущностью
+            // Стрелка: дельта мыши в ЗАМОРОЖЕННОМ кадре (origin+ось+wpp с DOWN).
+            {
+                float tpx = (e->x - g->frz_ox) * g->frz_ux + (e->y - g->frz_oy) * g->frz_uy;
+                float coord = gizmo_snap(g,
+                                         g->grabCoord + (tpx - g->frz_grab) * g->frz_wpp,
+                                         GIZMO_SNAP_MOVE, e->mods);
+                ScTransform tr = sc_get(scene, g->ent);
+                ui_field_set_f(&tr, &transform_fields[g->axis], coord);
+                sc_set(scene, g->ent, &tr);
+                g->posed = 1;
+                return ui_handled(1, 1); // держим захват; стрелки едут за сущностью
+            }
         }
         if (e->kind == UI_EV_UP) {
             if (scene && sc_alive(scene, g->ent)) {
@@ -499,6 +488,27 @@ UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
         g->grabCoord2 = ui_field_get_f(&tr, &transform_fields[PLANE_FIELDS[pa][1]]);
         g->was = g->grabCoord;
         g->was2 = g->grabCoord2;
+        // Заморозить экранный базис (тот же что видел plane_hit).
+        {
+            float S = gl * GIZMO_PLANE_K;
+            float uu[3], vvv[3];
+            ring_basis(pa, uu, vvv);
+            float q0[3] = {o[0], o[1], o[2]};
+            float qu[3] = {o[0] + uu[0] * S, o[1] + uu[1] * S, o[2] + uu[2] * S};
+            float qv[3] = {o[0] + vvv[0] * S, o[1] + vvv[1] * S, o[2] + vvv[2] * S};
+            float ox, oy, ux, uy, vx, vy;
+            if (!vp_project(g, v, q0, &ox, &oy) || !vp_project(g, v, qu, &ux, &uy) ||
+                !vp_project(g, v, qv, &vx, &vy))
+                return ui_unhandled();
+            g->frz_ox = ox;
+            g->frz_oy = oy;
+            g->frz_dux = ux - ox;
+            g->frz_duy = uy - oy;
+            g->frz_dvx = vx - ox;
+            g->frz_dvy = vy - oy;
+            g->frz_det = g->frz_dux * g->frz_dvy - g->frz_duy * g->frz_dvx;
+            g->frz_s = S;
+        }
         return ui_handled(0, 1);
     }
     int a = arrow_hit(g, v, o, gl, x, y);
@@ -516,6 +526,22 @@ UiReply ui_gizmo_pick(UiGizmo *g, ScWorld *scene, const RcView *v, int W, int H,
     g->grabT = t;
     g->grabCoord = o[a];
     g->was = o[a];
+    // Заморозить кадр: origin + направление + мировых/px (с этого DOWN).
+    {
+        float dx = tx - ox, dy = ty - oy;
+        float alen = sqrtf(dx * dx + dy * dy);
+        if (alen < 1.0f) { // ось в точку (смотрит в камеру) — драг по X экрана
+            dx = 1.0f;
+            dy = 0.0f;
+            alen = 1.0f;
+        }
+        g->frz_ox = ox;
+        g->frz_oy = oy;
+        g->frz_ux = dx / alen;
+        g->frz_uy = dy / alen;
+        g->frz_wpp = gl / alen;
+        g->frz_grab = t * alen;
+    }
     return ui_handled(0, 1); // захват; грязь будет на MOVE
 }
 
