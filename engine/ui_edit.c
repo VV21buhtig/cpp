@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h> // F5h: access() — герметичность selftest (бэкап раскладки)
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
@@ -346,10 +347,20 @@ static void pal_draw(RcVecShape *sh, int *n) {
 #define TREE_HDR 22
 #define TREE_PATH 18
 static void tree_path_rect(float *x, float *y, float *w, float *h); // F5d (ниже)
+static float tree_seg_w(const char *s); // F5h: ширина призрака (ниже)
 static int g_treeN = 0;
 static int g_treeId[UI_MAX_WIDGETS];
 static int g_treeDepth[UI_MAX_WIDGETS];
 static int g_treeScroll = 0; // первая видимая строка: панель — окно со скроллом
+// --- §14 F5h: drag&drop строк дерева (reparent/порядок) ---
+// Тестер: «не могу добавить/вытащить ветку из дерева — дерево бесполезно».
+static int g_mouseDown = 0;   // ЛКМ нажата (MOVE приходит без состояния кнопки)
+static int g_treePress = 0;   // строка под ЛКМ: ждём смещения, чтобы начать драг
+static float g_treePressY = 0;
+static int g_treeDrag = 0;    // id перетаскиваемой ветки
+static int g_treeDropId = -1; // строка-цель броска (-1 = мимо)
+static int g_treeDropMode = 0; // 0 = ВНУТРЬ, 1 = ПЕРЕД строкой, 2 = ПОСЛЕ
+static float g_treeDragX = 0, g_treeDragY = 0; // курсор (призрак подписи)
 
 // Сколько строк влезает в панель дерева (высота — из хром-виджета).
 static int tree_rows_fit(void) {
@@ -431,12 +442,61 @@ static void tree_draw(RcVecShape *sh, int *n) {
         const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
         if (!wd) continue;
         int sel = g_treeId[i] == g_wtSel;
-        float c[4] = {0.15f, 0.16f, 0.20f, 1.0f};
+        float c[4] = {0.145f, 0.155f, 0.195f, 1.0f};
+        if ((i - g_treeScroll) & 1) { // ЗЕБРА: ветви/строки не сливаются в кашу
+            c[0] = 0.175f;
+            c[1] = 0.19f;
+            c[2] = 0.235f;
+        }
         if (sel) { c[0] = 0.22f; c[1] = 0.34f; c[2] = 0.62f; }
         wt_emit(sh, n, x, y, w, h, c, 3.0f);
+        // НАПРАВЛЯЮЩИЕ отступов: видно, какая строка чей ребёнок (Unity/VS Code).
+        for (int d = 0; d < g_treeDepth[i]; d++) {
+            float gc[4] = {0.34f, 0.37f, 0.45f, 0.65f};
+            wt_emit(sh, n, x + 8 + (float)(d * 10), y, 1.0f, h, gc, 0.0f);
+        }
         float tc[4];
         type_col(wd->type, tc);
         wt_emit(sh, n, x + 4 + (float)(g_treeDepth[i] * 10), y + 4, 4, h - 8, tc, 0);
+    }
+    // F5h: индикатор БРОСКА — рамка («внутрь») или линия вставки (перед/после).
+    if (g_treeDrag && g_treeDropId >= 0) {
+        float cc[4] = {0.95f, 0.75f, 0.25f, 1.0f};
+        if (g_treeDropId == 0) { // крошка Scene = бросить в корень
+            float x, y, w, h;
+            tree_path_rect(&x, &y, &w, &h);
+            wt_emit(sh, n, x - 2, y, w + 4, 2.0f, cc, 0.0f);
+            wt_emit(sh, n, x - 2, y + h - 2, w + 4, 2.0f, cc, 0.0f);
+        } else {
+            int row = -1;
+            for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++)
+                if (g_treeId[i] == g_treeDropId) {
+                    row = i;
+                    break;
+                }
+            if (row >= 0) {
+                float x, y, w, h;
+                tree_rect(row - g_treeScroll, &x, &y, &w, &h);
+                if (g_treeDropMode == 0) {
+                    wt_emit(sh, n, x, y, w, 2.0f, cc, 0.0f);
+                    wt_emit(sh, n, x, y + h - 2, w, 2.0f, cc, 0.0f);
+                    wt_emit(sh, n, x, y, 2.0f, h, cc, 0.0f);
+                    wt_emit(sh, n, x + w - 2, y, 2.0f, h, cc, 0.0f);
+                } else {
+                    float ly = g_treeDropMode == 1 ? y : y + h - 2;
+                    wt_emit(sh, n, x, ly, w, 2.0f, cc, 0.0f);
+                }
+            }
+        }
+    }
+    // F5h: ПРИЗРАК подписи под курсором (что именно тащим).
+    if (g_treeDrag) {
+        const UiWidget *dw = widget_cget(g_act, g_treeDrag);
+        if (dw) {
+            float gw = tree_seg_w(dw->name) + 12.0f;
+            float bg[4] = {0.17f, 0.21f, 0.36f, 0.95f};
+            wt_emit(sh, n, g_treeDragX + 10, g_treeDragY + 2, gw, 20.0f, bg, 3.0f);
+        }
     }
     // Индикатор прокрутки (UE/Blender): сразу видно, что список — окно и где мы
     // в нём. Без него «не листается» неотличимо от «листать нечего».
@@ -1102,6 +1162,50 @@ static int tree_path_hit_at(float px, float py) {
     return -1;
 }
 
+// --- §14 F5h: цель броска строки дерева ---
+// mode: 0 = ВНУТРЬ (стать ребёнком), 1 = ПЕРЕД строкой, 2 = ПОСЛЕ. Возврат: id
+// цели, 0 = «в корень» (брошено на крошку Scene), -1 = мимо (бросок отменяется).
+static int tree_drop_at(float px, float py, int *mode) {
+    float tx, ty, tw, th;
+    tree_path_rect(&tx, &ty, &tw, &th);
+    if (px >= tx - 2 && px < tx + tw + 2 && py >= ty && py < ty + th) {
+        *mode = 0;
+        return 0; // Scene = бросить в КОРЕНЬ (id 0)
+    }
+    float px0, py0, pw0, ph0;
+    ed_rect(g_edTree, &px0, &py0, &pw0, &ph0);
+    if (px < px0 || px >= px0 + pw0 || py < py0 || py >= py0 + ph0) return -1;
+    tree_build();
+    int rows = tree_rows_fit();
+    for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
+        float x, y, w, h;
+        tree_rect(i - g_treeScroll, &x, &y, &w, &h);
+        if (py < y || py >= y + h) continue;
+        float rel = (py - y) / (h > 0 ? h : 1.0f); // треть сверху/снизу = порядок
+        *mode = rel < 0.3f ? 1 : rel > 0.7f ? 2 : 0;
+        return g_treeId[i];
+    }
+    return -1;
+}
+// Применить бросок: reparent ИЛИ порядок — одним вызовом модели (Move To).
+static int tree_drop_apply(int drag, int tgt, int mode) {
+    if (!drag || drag == tgt) return 0;
+    if (tgt == 0) return widget_move_before(g_act, drag, 0, 0); // Scene: вынуть в корень
+    if (mode == 0) return widget_move_before(g_act, drag, tgt, 0); // внутрь, в конец
+    const UiWidget *tw = widget_cget(g_act, tgt);
+    if (!tw) return 0;
+    if (mode == 1) return widget_move_before(g_act, drag, tw->parent, tgt); // перед
+    int sib[UI_MAX_WIDGETS];
+    int n = wt_sib_sorted(tw->parent, sib);
+    int next = 0;
+    for (int i = 0; i < n; i++)
+        if (sib[i] == tgt) {
+            next = (i + 1 < n) ? sib[i + 1] : 0;
+            break;
+        }
+    return widget_move_before(g_act, drag, tw->parent, next); // после
+}
+
 // Удаление выбранного (вместе с поддеревом). Выбор уходит на родителя — как в
 // UE/Unity: после удаления «активен» контейнер, а не пустота. Хром редактора не
 // удаляем: панели EdPalette/EdHierarchy/EdInspector — сам инструмент, не документ.
@@ -1136,6 +1240,22 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind == UI_EV_MOVE) {
+        if (g_treeDrag) { // F5h: тянем строку — цель/индикатор броска под курсором
+            g_treeDragX = e->x;
+            g_treeDragY = e->y;
+            g_treeDropId = tree_drop_at(e->x, e->y, &g_treeDropMode);
+            edit_push(); // призрак + линия вставки (драг короткий — полный кадр)
+            return 1;
+        }
+        if (g_treePress && g_mouseDown &&
+            (e->y - g_treePressY > 5.0f || g_treePressY - e->y > 5.0f)) {
+            g_treeDrag = g_treePress; // F5h: порог пройден — тащим ветку
+            g_treeDragX = e->x;
+            g_treeDragY = e->y;
+            g_treeDropId = tree_drop_at(e->x, e->y, &g_treeDropMode);
+            edit_push();
+            return 1;
+        }
         if (g_insField >= 0) { // F3b: scrub поля инспектора (правит АКТИВНОЕ дерево)
             UiWidget *w = widget_get(g_act, g_wtSel);
             float *slot = w ? ins_slot(w, g_insField) : 0;
@@ -1173,6 +1293,23 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind == UI_EV_UP) {
+        if (g_treeDrag) { // F5h: БРОСОК ветки — reparent/порядок одним действием
+            int drag = g_treeDrag, tgt = g_treeDropId, mode = g_treeDropMode;
+            g_treeDrag = 0;
+            g_treePress = 0;
+            g_treeDropId = -1;
+            const UiWidget *dw = widget_cget(g_act, drag);
+            int oldp = dw ? dw->parent : 0;
+            if (tgt >= 0 && drag && drag != tgt && tree_drop_apply(drag, tgt, mode)) {
+                const UiWidget *nw = widget_cget(g_act, drag);
+                g_wtSel = drag; // тащим — значит выбрали его же
+                wt_persist();
+                undo_commit((nw ? nw->parent : 0) != oldp ? "reparent" : "reorder");
+            }
+            edit_push();
+            return 1;
+        }
+        g_treePress = 0; // клик без движения = просто выбор
         if (g_insField >= 0) { // F3b: конец scrub
             g_insField = -1;
             wt_persist();
@@ -1191,6 +1328,7 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind != UI_EV_DOWN) return 0;
+    g_treePress = 0; // F5h: пресс живёт только до этого DOWN (иначе залипнет)
     // F5a: клик ВНЕ поля имени = коммит правки текста (как в любом редакторе),
     // после чего клик обрабатывается как обычно (выбор/драг по месту).
     if (g_nameEdit && !ins_head_hit(e->x, e->y)) name_edit_end(1);
@@ -1235,6 +1373,8 @@ static int wt_event(const UiEvent *e) {
     int ti = tree_hit(e->x, e->y);
     if (ti) { // F3: выбор виджета из дерева
         g_wtSel = ti;
+        g_treePress = ti; // F5h: если мышь поедет — начнётся драг ветки
+        g_treePressY = e->y;
         return 1;
     }
     if (ins_head_hit(e->x, e->y)) { // F5a: имя выбранного = поле правки текста
@@ -1417,9 +1557,11 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     e.x = (float)g_mx;
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
+        g_mouseDown = 1; // F5h: драг строки дерева начинается только при ЛКМ
         e.kind = UI_EV_DOWN;
         push_ev(&e);
     } else if (action == GLFW_RELEASE) {
+        g_mouseDown = 0;
         e.kind = UI_EV_UP;
         push_ev(&e);
     }
@@ -1480,6 +1622,13 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     // Esc выходил из программы и т.п.). Поле забирает клавишу целиком.
     if (g_nameEdit && name_edit_key(key, mods)) return;
     if (key == GLFW_KEY_ESCAPE) {
+        if (g_treeDrag || g_treePress) { // F5h: Esc = отмена броска ветки
+            g_treeDrag = 0;
+            g_treePress = 0;
+            g_treeDropId = -1;
+            edit_push();
+            return;
+        }
         g_quit = 1;
         return;
     }
@@ -1530,6 +1679,12 @@ int main(int argc, char **argv) {
         // Герметичность: чужую раскладку (layout.json) не читаем и не сносим —
         // прячем на время теста, возвращаем как было (иначе тест врёт и рушит
         // рабочую раскладку пользователя).
+        // Упавший прогон оставляет бэкап: сначала ВОЗВРАЩАЕМ его, иначе следующий
+        // прогон перезапишет бэкап своим «пустым» layout.json — файл потерян.
+        if (access("engine/assets/layout.json.selftest-bak", F_OK) == 0) {
+            rename("engine/assets/layout.json.selftest-bak", "engine/assets/layout.json");
+            printf("ui_edit: selftest вернул бэкап раскладки (прошлый прогон упал)\n");
+        }
         int laySaved = (rename("engine/assets/layout.json",
                                "engine/assets/layout.json.selftest-bak") == 0);
         ScWorld sw;
@@ -2617,6 +2772,188 @@ int main(int argc, char **argv) {
             widget_tree_init(&pt);
             g_act = &g_wt;
         }
+        // §14 F5h: ДЕРЕВО — drag&drop. Тестер: «не могу добавить/вытащить ветку
+        // из дерева, дерево бесполезно». Бросок НА строку = внутрь (стать
+        // ребёнком), в ВЕРХ/НИЗ строки = перед/после (порядок = слой), на крошку
+        // Scene = в корень. Родитель и порядок меняются ОДНИМ действием модели.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            g_treeScroll = 0;
+            g_treePress = 0;
+            g_treeDrag = 0;
+            g_treeDropId = -1;
+            ed_chrome_sync();
+            int a = wt_spawn(UI_W_PANEL);
+            int b = wt_spawn(UI_W_BUTTON);
+            int c = wt_spawn(UI_W_LABEL);
+            int kid = wt_spawn(UI_W_BUTTON);
+            widget_move_before(&g_wt, kid, a, 0); // ребёнок панели
+            if (g_wt.count != 4 || widget_cget(&g_wt, kid)->parent != a) {
+                printf("SELF FAIL: tdd-setup %d\n", g_wt.count);
+                bad = 1;
+            }
+            tree_build();
+            if (g_treeN != 4 || g_treeId[1] != kid) { // порядок = как рисуем
+                printf("SELF FAIL: tdd-order n=%d id1=%d want %d\n", g_treeN, g_treeId[1],
+                       kid);
+                bad = 1;
+            }
+            // Геометрия цели: середина = ВНУТРЬ, верх/низ = порядок, мимо панели
+            // = отмена, крошка Scene = в корень.
+            float x, y, w, h;
+            tree_rect(2, &x, &y, &w, &h); // строка b
+            int md = -9;
+            int tg = tree_drop_at(x + w * 0.5f, y + h * 0.5f, &md);
+            if (tg != b || md != 0) {
+                printf("SELF FAIL: tdd-at-inside %d %d\n", tg, md);
+                bad = 1;
+            }
+            tg = tree_drop_at(x + w * 0.5f, y + 2.0f, &md);
+            if (tg != b || md != 1) {
+                printf("SELF FAIL: tdd-at-before %d %d\n", tg, md);
+                bad = 1;
+            }
+            tg = tree_drop_at(x + w * 0.5f, y + h - 2.0f, &md);
+            if (tg != b || md != 2) {
+                printf("SELF FAIL: tdd-at-after %d %d\n", tg, md);
+                bad = 1;
+            }
+            md = -9;
+            if (tree_drop_at((float)(g_vpx + 5), (float)(g_vpy + 5), &md) != -1 || md != -9) {
+                printf("SELF FAIL: tdd-at-out %d\n", md);
+                bad = 1;
+            }
+            {
+                float scx, scy, scw, sch;
+                tree_path_rect(&scx, &scy, &scw, &sch);
+                if (tree_drop_at(scx + 2, scy + sch * 0.5f, &md) != 0 || md != 0) {
+                    printf("SELF FAIL: tdd-at-scene %d\n", md);
+                    bad = 1;
+                }
+            }
+            // ВНУТРЬ: c становится ребёнком b.
+            if (!tree_drop_apply(c, b, 0) || widget_cget(&g_wt, c)->parent != b) {
+                printf("SELF FAIL: tdd-inside\n");
+                bad = 1;
+            }
+            // ПЕРЕД: корень b перед корнем a (порядок корней живёт в z).
+            if (!tree_drop_apply(b, a, 1)) {
+                printf("SELF FAIL: tdd-before\n");
+                bad = 1;
+            }
+            int sib[UI_MAX_WIDGETS];
+            int ns = wt_sib_sorted(0, sib);
+            if (ns < 2 || sib[0] != b || sib[1] != a) {
+                printf("SELF FAIL: tdd-before-order %d %d\n", ns >= 1 ? sib[0] : 0,
+                       ns >= 2 ? sib[1] : 0);
+                bad = 1;
+            }
+            // ПОСЛЕ: a после b — он уже там: порядок не должен поехать.
+            (void)tree_drop_apply(a, b, 2);
+            ns = wt_sib_sorted(0, sib);
+            if (ns < 2 || sib[0] != b || sib[1] != a) {
+                printf("SELF FAIL: tdd-after-order %d %d\n", ns >= 1 ? sib[0] : 0,
+                       ns >= 2 ? sib[1] : 0);
+                bad = 1;
+            }
+            // ЦИКЛ: a нельзя сунуть в собственного ребёнка kid (модель отказывает).
+            if (tree_drop_apply(a, kid, 0) || widget_cget(&g_wt, a)->parent != 0 ||
+                widget_cget(&g_wt, kid)->parent != a) {
+                printf("SELF FAIL: tdd-cycle\n");
+                bad = 1;
+            }
+            // В КОРЕНЬ: c (внутри b) на крошку Scene -> снова корень.
+            if (!tree_drop_apply(c, 0, 0) || widget_cget(&g_wt, c)->parent != 0) {
+                printf("SELF FAIL: tdd-unparent\n");
+                bad = 1;
+            }
+            // ПОЛНЫЙ ПУТЬ СОБЫТИЯМИ: DOWN по строке + MOVE + UP на другой строке =
+            // reparent + шаг истории. Клик без движения ветку НЕ тащит.
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_treeScroll = 0;
+            g_treePress = 0;
+            g_treeDrag = 0;
+            ui_wundo_init(&g_undo);
+            undo_commit("load");
+            int r1 = wt_spawn(UI_W_PANEL);
+            int r2 = wt_spawn(UI_W_BUTTON);
+            undo_commit("add"); // снапшот ДО броска: откат вернёт оба корня
+            tree_build();
+            UiEvent te;
+            float x1, y1, w1, h1, x2, y2, w2, h2;
+            tree_rect(0, &x1, &y1, &w1, &h1);
+            tree_rect(1, &x2, &y2, &w2, &h2);
+            memset(&te, 0, sizeof te);
+            te.kind = UI_EV_DOWN;
+            te.x = x1 + w1 * 0.5f;
+            te.y = y1 + h1 * 0.5f;
+            g_mouseDown = 1;
+            wt_event(&te);
+            if (g_treePress != r1 || g_wtSel != r1) {
+                printf("SELF FAIL: tdd-press %d sel %d\n", g_treePress, g_wtSel);
+                bad = 1;
+            }
+            memset(&te, 0, sizeof te);
+            te.kind = UI_EV_MOVE; // сдвиг 2px — порога драга нет
+            te.x = x1 + w1 * 0.5f;
+            te.y = y1 + h1 * 0.5f + 2.0f;
+            wt_event(&te);
+            if (g_treeDrag) {
+                printf("SELF FAIL: tdd-thresh %d\n", g_treeDrag);
+                bad = 1;
+            }
+            memset(&te, 0, sizeof te);
+            te.kind = UI_EV_MOVE; // поехали: цель = строка r2, середина = внутрь
+            te.x = x2 + w2 * 0.5f;
+            te.y = y2 + h2 * 0.5f;
+            wt_event(&te);
+            if (g_treeDrag != r1 || g_treeDropId != r2 || g_treeDropMode != 0) {
+                printf("SELF FAIL: tdd-drag %d %d %d\n", g_treeDrag, g_treeDropId,
+                       g_treeDropMode);
+                bad = 1;
+            }
+            int d0 = ui_wundo_depth(&g_undo);
+            memset(&te, 0, sizeof te);
+            te.kind = UI_EV_UP;
+            te.x = x2 + w2 * 0.5f;
+            te.y = y2 + h2 * 0.5f;
+            g_mouseDown = 0;
+            wt_event(&te);
+            if (g_treeDrag || g_treeDropId != -1 || !widget_cget(&g_wt, r1) ||
+                widget_cget(&g_wt, r1)->parent != r2 || g_wtSel != r1 ||
+                ui_wundo_depth(&g_undo) != d0 + 1) {
+                printf("SELF FAIL: tdd-drop drag=%d tgt=%d p=%d d=%d\n", g_treeDrag,
+                       g_treeDropId, widget_cget(&g_wt, r1) ? widget_cget(&g_wt, r1)->parent
+                                                            : -1,
+                       ui_wundo_depth(&g_undo));
+                bad = 1;
+            }
+            if (!wt_undo_apply(0) || widget_cget(&g_wt, r1)->parent != 0) {
+                printf("SELF FAIL: tdd-undo\n");
+                bad = 1;
+            }
+            // Esc во время драга: отмена — модель и история не тронуты.
+            g_treePress = r2;
+            g_treeDrag = r2;
+            g_treeDropId = r1;
+            int cnt0 = g_wt.count;
+            int par0 = widget_cget(&g_wt, r2)->parent;
+            int d1 = ui_wundo_depth(&g_undo);
+            on_key(0, GLFW_KEY_ESCAPE, 0, GLFW_PRESS, 0);
+            if (g_treeDrag || g_treePress || g_treeDropId != -1 || g_quit ||
+                g_wt.count != cnt0 || widget_cget(&g_wt, r2)->parent != par0 ||
+                ui_wundo_depth(&g_undo) != d1) {
+                printf("SELF FAIL: tdd-esc drag=%d quit=%d\n", g_treeDrag, g_quit);
+                bad = 1;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_treeScroll = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -2844,6 +3181,13 @@ int main(int argc, char **argv) {
         if (sa && sa[0]) shotAt = atoi(sa);
     }
     int frames = 0;
+    // §14 F5h: сценарии для снимка/проверки (общее с тестером):
+    //   UI_EDIT_TDRAG=<строка>     — начать драг строки дерева (призрак+индикатор);
+    //   UI_EDIT_TDROP=<s>:<t>:<m>  — применить бросок (строки дерева, m 0/1/2).
+    // Выполняем на 3-м кадре (УЖЕ после ресайза окна — координаты настоящие).
+    const char *tdEnv = getenv("UI_EDIT_TDRAG");
+    const char *tdpEnv = getenv("UI_EDIT_TDROP");
+    int tdcnt = 0;
     static const float hintCol[4] = {0.55f, 0.55f, 0.58f, 1.0f};
     while (!glfwWindowShouldClose(win) && !g_quit) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
@@ -2891,6 +3235,48 @@ int main(int argc, char **argv) {
                 printf("ui_edit: resize %dx%d\n", g_WW, g_WH);
             }
         }
+        tdcnt++; // кадр: синтетика F5h ждёт ресайза окна (координаты настоящие)
+        if ((tdEnv || tdpEnv) && tdcnt >= 3) {
+            ed_chrome_sync();
+            tree_build();
+            if (tdpEnv && tdpEnv[0] >= '0' && tdcnt == 3) { // бросок — один раз
+                int sr = -1, tr = -1, md2 = 0;
+                if (sscanf(tdpEnv, "%d:%d:%d", &sr, &tr, &md2) >= 2 && sr >= 0 &&
+                    sr < g_treeN) {
+                    int drag = g_treeId[sr];
+                    int tgt = (tr >= 0 && tr < g_treeN) ? g_treeId[tr] : 0;
+                    const UiWidget *dw = widget_cget(g_act, drag);
+                    int oldp = dw ? dw->parent : 0;
+                    if (tree_drop_apply(drag, tgt, md2)) {
+                        const UiWidget *nw = widget_cget(g_act, drag);
+                        g_wtSel = drag;
+                        wt_persist();
+                        undo_commit((nw ? nw->parent : 0) != oldp ? "reparent" : "reorder");
+                        printf("ui_edit: tdrop id=%d -> %d mode=%d ok parent=%d\n",
+                               drag, tgt, md2, nw ? nw->parent : -1);
+                    } else {
+                        printf("ui_edit: tdrop id=%d -> %d mode=%d FAIL\n", drag, tgt,
+                               md2);
+                    }
+                }
+            }
+            if (tdEnv && tdEnv[0] >= '0') {
+                int row = atoi(tdEnv);
+                if (row >= 0 && row < g_treeN) {
+                    int trow = row + 1 < g_treeN ? row + 1 : row - 1;
+                    g_treeDrag = g_treeId[row];
+                    float x, y, w, h;
+                    tree_rect(trow - g_treeScroll, &x, &y, &w, &h);
+                    g_treeDragX = x + w * 0.55f;
+                    g_treeDragY = y + h * 0.5f;
+                    g_treeDropId = tree_drop_at(g_treeDragX, g_treeDragY, &g_treeDropMode);
+                    if (tdcnt == 3)
+                        printf("ui_edit: tdrag row=%d id=%d -> %d mode=%d\n", row,
+                               g_treeDrag, g_treeDropId, g_treeDropMode);
+                }
+            }
+            if ((tdpEnv && tdpEnv[0] >= '0') || (tdEnv && tdEnv[0] >= '0')) edit_push();
+        }
         if (!eng_target_resize(&t, g_WW, g_WH)) {
             printf("ui_edit: target FAIL\n");
             return 1;
@@ -2933,6 +3319,10 @@ int main(int argc, char **argv) {
             }
             // F3: подписи дерева виджетов (только видимые строки).
             tree_build();
+            if (g_treeDrag) { // F5h: подпись призрака (что тащим)
+                const UiWidget *dw = widget_cget(g_act, g_treeDrag);
+                if (dw) ui_text_quad(text, g_treeDragX + 16, g_treeDragY + 4, dw->name, tcol);
+            }
             { // F5d: крошки предков (клик по сегменту = выбрать предка)
                 tree_path_layout();
                 float px, py, pw, ph;
@@ -3012,8 +3402,8 @@ int main(int argc, char **argv) {
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
                          "frontedit: click=select | Ctrl+click=under | drag=move |"
-                         " edges=resize | F2=rename | Del | Ctrl+Z/Y undo | F7 self |"
-                         " Esc",
+                         " edges=resize | tree-row drag=reparent/order | F2=rename |"
+                         " Del | Ctrl+Z/Y undo | F7 self | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
                 char hud[64];

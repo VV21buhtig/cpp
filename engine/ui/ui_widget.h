@@ -74,6 +74,11 @@ int widget_find(const UiWidgetTree *t, const char *name);
 void widget_name_unique(UiWidgetTree *t, int id, char *name);
 // Перевесить к новому родителю (0 = корень). Циклы/чужие/переполнение = 0.
 int widget_reparent(UiWidgetTree *t, int id, int newParent);
+// Переставить виджет ОДНИМ действием: новый родитель + позиция ПЕРЕД ref среди
+// его детей (ref = 0 -> в конец). Это и reparent, и смена слоя (UE/Unity «Move
+// To»): z пересчитывается 0..n-1 у старого и нового родителя. 1 ок, 0 = цикл/
+// переполнение/нет виджета. Так работает drag&drop в дереве редактора.
+int widget_move_before(UiWidgetTree *t, int id, int newParent, int ref);
 // Слой: сдвинуть id на dir (+1 выше, -1 ниже) среди соседей (тот же parent).
 // 1 = изменилось (z пересчитан 0..n-1), 0 = уже край/нет виджета.
 int widget_layer(UiWidgetTree *t, int id, int dir);

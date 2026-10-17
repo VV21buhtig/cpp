@@ -178,23 +178,88 @@ int widget_reparent(UiWidgetTree *t, int id, int newParent) {
     UiWidget *w = widget_get(t, id);
     if (!w) return 0;
     if (newParent == id) return 0;
+    if (w->parent == newParent) return 1; // уже там (порядок не меняем)
+    return widget_move_before(t, id, newParent, 0);
+}
+
+// Порядок корней живёт в z (массива детей у корня нет): перенумеровать так,
+// чтобы id встал ПЕРЕД ref (ref = 0 -> в конец), порядок остальных = (z, id).
+static void roots_renumber(UiWidgetTree *t, int id, int ref) {
+    int ids[UI_MAX_WIDGETS];
+    int n = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (t->alive[i] && t->items[i].parent == 0 && i + 1 != id) ids[n++] = i + 1;
+    for (int i = 1; i < n; i++) { // сортировка вставками по (z, id)
+        int k = ids[i], j = i - 1;
+        while (j >= 0) {
+            const UiWidget *a = widget_cget(t, ids[j]);
+            const UiWidget *b = widget_cget(t, k);
+            if (a->z > b->z || (a->z == b->z && ids[j] > k)) {
+                ids[j + 1] = ids[j];
+                j--;
+            } else
+                break;
+        }
+        ids[j + 1] = k;
+    }
+    int ins = n;
+    if (ref)
+        for (int i = 0; i < n; i++)
+            if (ids[i] == ref) {
+                ins = i;
+                break;
+            }
+    for (int i = n; i > ins; i--) ids[i] = ids[i - 1];
+    ids[ins] = id;
+    n++;
+    for (int i = 0; i < n; i++) widget_get(t, ids[i])->z = i;
+}
+
+int widget_move_before(UiWidgetTree *t, int id, int newParent, int ref) {
+    UiWidget *w = widget_get(t, id);
+    if (!t || !w || ref == id || newParent == id) return 0;
     if (newParent) {
         UiWidget *np = widget_get(t, newParent);
-        if (!np || np->nchildren >= UI_MAX_WIDGET_KIDS) return 0;
+        if (!np) return 0;
         // Цикл: новый родитель не может быть нашим потомком (идём вверх).
-        for (int cur = newParent; cur; ) {
+        for (int cur = newParent; cur;) {
             if (cur == id) return 0;
             const UiWidget *cw = widget_cget(t, cur);
             if (!cw) break;
             cur = cw->parent;
         }
     }
-    if (w->parent == newParent) return 1; // уже там (порядок не меняем)
+    int oldParent = w->parent;
+    if (newParent && newParent != oldParent) {
+        UiWidget *np = widget_get(t, newParent);
+        if (np && np->nchildren >= UI_MAX_WIDGET_KIDS) return 0; // переполнение
+    }
+    if (newParent == oldParent && oldParent == 0) {
+        roots_renumber(t, id, ref);
+        return 1;
+    }
     detach(t, id);
     w->parent = newParent;
     if (newParent) {
         UiWidget *np = widget_get(t, newParent);
-        np->children[np->nchildren++] = id;
+        int ins = np->nchildren;
+        if (ref)
+            for (int i = 0; i < np->nchildren; i++)
+                if (np->children[i] == ref) {
+                    ins = i;
+                    break;
+                }
+        for (int i = np->nchildren; i > ins; i--) np->children[i] = np->children[i - 1];
+        np->children[ins] = id;
+        np->nchildren++;
+        for (int i = 0; i < np->nchildren; i++) widget_get(t, np->children[i])->z = i;
+    } else {
+        roots_renumber(t, id, ref);
+    }
+    if (oldParent && oldParent != newParent) {
+        UiWidget *op = widget_get(t, oldParent);
+        if (op)
+            for (int i = 0; i < op->nchildren; i++) widget_get(t, op->children[i])->z = i;
     }
     return 1;
 }

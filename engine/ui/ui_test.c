@@ -1192,6 +1192,75 @@ int main(int argc, char **argv) {
                 }
                 widget_tree_init(&nt);
             }
+            // §14 F5h: ПЕРЕСТАНОВКА (то, чем живёт drag&drop дерева): родитель и
+            // порядок меняются ОДНИМ действием, порядок детей = z 0..n-1 (как
+            // рисуем), у корней порядок тоже в z (массива детей у корня нет).
+            {
+                static UiWidgetTree mt;
+                widget_tree_init(&mt);
+                UiWidgetRect r3;
+                UiWidgetStyle s3;
+                memset(&r3, 0, sizeof r3);
+                memset(&s3, 0, sizeof s3);
+                r3.anchors = UI_A_LEFT | UI_A_TOP;
+                r3.w = 10;
+                r3.h = 10;
+                s3.alpha = 1.0f;
+                int ma = widget_add(&mt, UI_W_PANEL, "A", 0, &r3, &s3);
+                int mb = widget_add(&mt, UI_W_BUTTON, "B", 0, &r3, &s3);
+                int mc = widget_add(&mt, UI_W_LABEL, "C", 0, &r3, &s3);
+                if (!ma || !mb || !mc) {
+                    printf("SELF FAIL: wmove-add\n");
+                    bad = 1;
+                }
+                // Корни A,B,C (z 0,1,2): C ПЕРЕД A -> C,A,B.
+                if (!widget_move_before(&mt, mc, 0, ma) || widget_cget(&mt, mc)->z != 0 ||
+                    widget_cget(&mt, ma)->z != 1 || widget_cget(&mt, mb)->z != 2) {
+                    printf("SELF FAIL: wmove-root-before %d %d %d\n",
+                           widget_cget(&mt, mc) ? widget_cget(&mt, mc)->z : -1,
+                           widget_cget(&mt, ma) ? widget_cget(&mt, ma)->z : -1,
+                           widget_cget(&mt, mb) ? widget_cget(&mt, mb)->z : -1);
+                    bad = 1;
+                }
+                // Тот же родитель, ПЕРЕД B: C -> A,C,B (перестановка в корнях).
+                if (!widget_move_before(&mt, mc, 0, mb) || widget_cget(&mt, ma)->z != 0 ||
+                    widget_cget(&mt, mc)->z != 1 || widget_cget(&mt, mb)->z != 2) {
+                    printf("SELF FAIL: wmove-root-swap\n");
+                    bad = 1;
+                }
+                // ВНУТРЬ: B ребёнком A (в конец), у A первый ребёнок = z 0.
+                if (!widget_move_before(&mt, mb, ma, 0) ||
+                    widget_cget(&mt, mb)->parent != ma || widget_cget(&mt, mb)->z != 0) {
+                    printf("SELF FAIL: wmove-inside %d\n",
+                           widget_cget(&mt, mb) ? widget_cget(&mt, mb)->parent : -1);
+                    bad = 1;
+                }
+                // C в A и ПЕРЕД B -> порядок внутри A: C,B.
+                if (!widget_move_before(&mt, mc, ma, mb) || widget_cget(&mt, mc)->z != 0 ||
+                    widget_cget(&mt, mb)->z != 1) {
+                    printf("SELF FAIL: wmove-sib-before\n");
+                    bad = 1;
+                }
+                // ЦИКЛ: A внутрь B (B — ребёнок A) -> отказ, дерево не поехало.
+                if (widget_move_before(&mt, ma, mb, 0) || widget_cget(&mt, ma)->parent != 0 ||
+                    widget_cget(&mt, mb)->parent != ma) {
+                    printf("SELF FAIL: wmove-cycle\n");
+                    bad = 1;
+                }
+                // Себя перед собой и мёртвый id — отказ без порчи дерева.
+                if (widget_move_before(&mt, mc, ma, mc) || widget_move_before(&mt, 999, ma, 0)) {
+                    printf("SELF FAIL: wmove-bad\n");
+                    bad = 1;
+                }
+                // ВЫНУТЬ в корень: B наверх (в конец корней), у A остался C.
+                if (!widget_move_before(&mt, mb, 0, 0) || widget_cget(&mt, mb)->parent != 0 ||
+                    widget_cget(&mt, ma)->nchildren != 1 || widget_cget(&mt, mc)->z != 0) {
+                    printf("SELF FAIL: wmove-unparent %d\n",
+                           widget_cget(&mt, ma)->nchildren);
+                    bad = 1;
+                }
+                widget_tree_init(&mt);
+            }
             widget_tree_init(&t);
         }
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
