@@ -64,7 +64,8 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define PAL_BW 104
 #define PAL_BH 26
 #define PAL_GAP 4
-#define PAL_N 4
+// Ряды палитры больше НЕ список-константа: палитра — ВИД реестра действий
+// (ed_pal_n/ed_pal_act ниже). Числа строк здесь нет — оно вычисляется.
 #define PAL_PAD 8    // внутренние поля хром-панели
 #define PAL_TITLE 22 // строка заголовка панели
 // Верх легаси-хрома редактора (ui_panels): меню 0..26, тулбар 26..58, строка
@@ -81,9 +82,15 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define ED_TABS_H 26
 #define ED_TAB_W 96
 #define ED_TAB_GAP 4
-// PAL_TYPE > 0 — тип для спавна; < 0 — ДЕЙСТВИЕ над выбранным (сейчас: удалить).
-static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL, -1};
-static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label", "Delete"};
+// Строки палитры и имена типов виджетов берутся ИЗ РЕЕСТРА ДЕЙСТВИЙ (§14
+// F5l(2) ниже): ed_pal_* дают строку палитры, wt_type_name — имя типа. Раньше
+// здесь лежал ВТОРОЙ список тех же строк («Panel/Button/Label/Delete») — дубль
+// реестра, который мог с ним разойтись.
+static int ed_pal_n(void);
+static int ed_pal_act(int row);
+static const char *ed_pal_label(int row);
+static int ed_pal_is_action(int row);
+static const char *wt_type_name(int type);
 
 // --- §14 F3c(1b): ХРОМ РЕДАКТОРА = ВИДЖЕТЫ (self-host) ---
 // Свой UI правщика живёт ВТОРЫМ деревом (g_edWt): палитра/дерево/инспектор — это
@@ -132,12 +139,15 @@ static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, floa
 // ленты. Кнопки строятся из РЕЕСТРА ДЕЙСТВИЙ (одна таблица = лента + шпаргалка
 // клавиш + тултипы + горячие клавиши). В UE 4.22 это TCommands/FUICommandInfo:
 // объявил действие один раз — получил команду, клавишу и подсказку.
-#define ED_TABS_N 5
+#define ED_TABS_N 3
 #define ED_RIBBON_H 40      // высота полосы кнопок активной ленты
 #define ED_RIBBON_ITEM_H 20 // высота кнопки ленты
 #define ED_RIBBON_GAP 4
 #define ED_RIBBON_SEP 8 // зазор между группами
-static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "MODEL", "UI", "SCRIPT", "VIEW"};
+// Ленты/вкладки ленты. MODEL и SCRIPT появятся вместе со СВОИМИ инструментами
+// (трансформ/снап, запуск) — пустых вкладок-заглушек не держим: в ленте нет ни
+// одной кнопки без действия (правило «нет мёртвых кнопок»).
+static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "UI", "VIEW"};
 static int g_edTab = 0;      // активная лента (0..ED_TABS_N-1)
 static int g_edShowKeys = 0; // F5l(2): шпаргалка клавиш (F1) поверх всего
 static int g_rbHot = -1;     // id действия под курсором (тултип), -1 = нет
@@ -260,7 +270,7 @@ static void pal_rect(int i, float *x, float *y, float *w, float *h) {
 
 static int pal_hit(float px, float py) {
     if (!ed_live(0)) return -1; // закрытая панель не ловит клик (rect 0x0)
-    for (int i = 0; i < PAL_N; i++) {
+    for (int i = 0; i < ed_pal_n(); i++) {
         float x, y, w, h;
         pal_rect(i, &x, &y, &w, &h);
         if (px >= x && px < x + w && py >= y && py < y + h) return i;
@@ -553,11 +563,11 @@ static void wt_draw_sel(RcVecShape *sh, int *n) {
 
 static void pal_draw(RcVecShape *sh, int *n) {
     if (!ed_live(0)) return; // F5l(5): закрытая палитра — ни одной фигуры
-    for (int i = 0; i < PAL_N; i++) {
+    for (int i = 0; i < ed_pal_n(); i++) {
         float x, y, w, h;
         pal_rect(i, &x, &y, &w, &h);
         float c[4] = {0.20f, 0.22f, 0.27f, 1.0f};
-        if (PAL_TYPE[i] < 0) { // строка-действие (удаление) — краснее
+        if (ed_pal_is_action(i)) { // строка-ДЕЙСТВИЕ (Delete) — краснее
             c[0] = 0.34f;
             c[1] = 0.16f;
             c[2] = 0.19f;
@@ -806,7 +816,8 @@ static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
     // §14 F5l(4): панели стоят в СВОИХ полосах дока, а не поверх экрана игры:
     // левый док — от левого края ОКНА, правый — от правого, вьюпорт = середина.
     float palW = (float)ED_DOCK_W;
-    float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
+    float palH =
+        (float)(PAL_PAD * 2 + PAL_TITLE + ed_pal_n() * (PAL_BH + PAL_GAP) - PAL_GAP);
     float x0 = (float)PAL_PAD;
     float y0 = (float)ed_top(); // под полосой лент (F5l(2): одна точка правды)
     if (i == 0) { // палитра: верх левого дока
@@ -949,78 +960,58 @@ static void tabs_toggle(int i) {
 // (никаких «работающих» кнопок-пустышек). key2 — второй аккорд той же команды
 // (Ctrl+Shift+Z для Redo), поэтому клавиша и команда не разъезжаются.
 // ============================================================================
-enum {
-    ED_WHEN_ALWAYS = 0,
-    ED_WHEN_SEL = 1,
-    ED_WHEN_UNDO = 2,
-    ED_WHEN_REDO = 3,
-    ED_WHEN_NEVER = 4
-};
+enum { ED_WHEN_ALWAYS = 0, ED_WHEN_SEL = 1, ED_WHEN_UNDO = 2, ED_WHEN_REDO = 3 };
 enum { ED_K_CMD = 0, ED_K_SPAWN = 1, ED_K_TOGGLE = 2 };
-enum {
-    ED_CMD_NONE = 0,
-    ED_CMD_RENAME = 1,
-    ED_CMD_DELETE = 2,
-    ED_CMD_UNDO = 3,
-    ED_CMD_REDO = 4,
-    ED_CMD_SELF = 5,
-    ED_CMD_KEYS = 6,
-    ED_CMD_SAVE = 7
-};
+enum { ED_CMD_RENAME = 1, ED_CMD_DELETE = 2, ED_CMD_UNDO = 3, ED_CMD_REDO = 4, ED_CMD_KEYS = 5 };
+// Запись реестра, которая живёт ещё и в ПАНЕЛИ-ПАЛИТРЕ: палитра — второй ВИД той
+// же таблицы (как Place Actors и меню во UE), а не второй список строк.
+#define ED_V_PALETTE 1u
+#define ED_TOG_SELF 3 // arg тумблера: 0..2 = панель, 3 = «правим хром редактора»
 typedef struct {
     const char *id;    // машинный id (тесты/персист), уникален
-    const char *label; // человеческая метка (лента/шпаргалка/тултип)
+    const char *label; // человеческая метка (лента/палитра/тултип/шпаргалка)
     const char *group; // группа на ленте (подложка + подпись)
     unsigned char tab; // 0..ED_TABS_N-1
     unsigned char when;
     unsigned char kind;
-    short arg; // spawn-тип / индекс панели / ED_CMD_*
+    unsigned char views; // ED_V_PALETTE
+    short arg;           // spawn-тип / индекс панели / ED_TOG_SELF / ED_CMD_*
     int key, mods, key2, mods2;
 } EdAction;
 #define ED_MOD_CTRL GLFW_MOD_CONTROL
 #define ED_MOD_CTRLSHIFT (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
 #define ED_MOD_MASK (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
-// Порядок строк = порядок кнопок на ленте (смена группы = новая подложка).
+// Порядок строк = порядок кнопок на ленте (смена группы = новая подложка) И
+// порядок строк ПАЛИТРЫ (у кого вид ED_V_PALETTE). Здесь только то, что РАБОТАЕТ:
+// заглушек-пустышек нет — действие попадает сюда вместе со своим исполнением.
 static const EdAction ED_ACT[] = {
-    // HOME: правка выделения + история + файл
-    {"edit.rename", "Rename", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_CMD_RENAME,
-     GLFW_KEY_F2, 0, 0, 0},
-    {"edit.delete", "Delete", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_CMD_DELETE,
+    // UI: чем правим интерфейс (лента UI + строки палитры Panel/Button/Label)
+    {"ui.spawn.panel", "Panel", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_PANEL, 0, 0, 0, 0},
+    {"ui.spawn.button", "Button", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_BUTTON, 0, 0, 0, 0},
+    {"ui.spawn.label", "Label", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_LABEL, 0, 0, 0, 0},
+    // HOME: правка выделения + история + инструменты
+    {"edit.rename", "Rename", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, 0, ED_CMD_RENAME, GLFW_KEY_F2,
+     0, 0, 0},
+    {"edit.delete", "Delete", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_V_PALETTE, ED_CMD_DELETE,
      GLFW_KEY_DELETE, 0, 0, 0},
-    {"hist.undo", "Undo", "History", 0, ED_WHEN_UNDO, ED_K_CMD, ED_CMD_UNDO,
-     GLFW_KEY_Z, ED_MOD_CTRL, 0, 0},
-    {"hist.redo", "Redo", "History", 0, ED_WHEN_REDO, ED_K_CMD, ED_CMD_REDO,
-     GLFW_KEY_Y, ED_MOD_CTRL, GLFW_KEY_Z, ED_MOD_CTRLSHIFT},
-    {"file.save", "Save layout", "File", 0, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_SAVE, 0, 0, 0, 0},
-    // MODEL: инструменты сцены (ещё не сделаны — честно выключены)
-    {"model.move", "Move", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"model.rotate", "Rotate", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"model.scale", "Scale", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"model.snap", "Snap", "Snap", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    // UI: то, чем правим сам интерфейс (наша главная лента)
-    {"ui.spawn.panel", "Panel", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_PANEL, 0, 0, 0, 0},
-    {"ui.spawn.button", "Button", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_BUTTON, 0, 0, 0,
-     0},
-    {"ui.spawn.label", "Label", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_LABEL, 0, 0, 0, 0},
-    {"ui.arrange.dup", "Duplicate", "Arrange", 2, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0,
-     0},
-    {"ui.arrange.wrap", "Wrap", "Arrange", 2, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    // SCRIPT: запуск/самоправка инструмента
-    {"script.run", "Run", "Script", 3, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"script.reload", "Reload", "Script", 3, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"tools.self", "Editor UI", "Tools", 3, ED_WHEN_ALWAYS, ED_K_CMD, ED_CMD_SELF, GLFW_KEY_F7,
-     0, 0, 0},
-    {"tools.keys", "Cheatsheet", "Tools", 3, ED_WHEN_ALWAYS, ED_K_CMD, ED_CMD_KEYS, GLFW_KEY_F1,
-     0, 0, 0},
+    {"hist.undo", "Undo", "History", 0, ED_WHEN_UNDO, ED_K_CMD, 0, ED_CMD_UNDO, GLFW_KEY_Z,
+     ED_MOD_CTRL, 0, 0},
+    {"hist.redo", "Redo", "History", 0, ED_WHEN_REDO, ED_K_CMD, 0, ED_CMD_REDO, GLFW_KEY_Y,
+     ED_MOD_CTRL, GLFW_KEY_Z, ED_MOD_CTRLSHIFT},
+    {"tools.self", "Editor UI", "Tools", 0, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, ED_TOG_SELF,
+     GLFW_KEY_F7, 0, 0, 0},
+    {"tools.keys", "Cheatsheet", "Tools", 0, ED_WHEN_ALWAYS, ED_K_CMD, 0, ED_CMD_KEYS,
+     GLFW_KEY_F1, 0, 0, 0},
     // VIEW: галочки инструментов (View в Word / панели в Roblox Studio)
-    {"view.panel.palette", "Palette", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, GLFW_KEY_1,
+    {"view.panel.palette", "Palette", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 0,
+     GLFW_KEY_1, ED_MOD_CTRL, 0, 0},
+    {"view.panel.tree", "Tree", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 1, GLFW_KEY_2,
      ED_MOD_CTRL, 0, 0},
-    {"view.panel.tree", "Tree", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 1, GLFW_KEY_2,
-     ED_MOD_CTRL, 0, 0},
-    {"view.panel.inspector", "Inspector", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 2, GLFW_KEY_3,
-     ED_MOD_CTRL, 0, 0},
-    {"view.grid", "Grid", "Overlays", 4, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
-    {"view.rulers", "Rulers", "Overlays", 4, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"view.panel.inspector", "Inspector", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 2,
+     GLFW_KEY_3, ED_MOD_CTRL, 0, 0},
 };
 #define ED_ACT_N ((int)(sizeof ED_ACT / sizeof ED_ACT[0]))
 
@@ -1042,6 +1033,43 @@ static int ed_act_find(const char *id) {
     for (int i = 0; i < ED_ACT_N; i++)
         if (strcmp(ED_ACT[i].id, id) == 0) return i;
     return -1;
+}
+// --- палитра = ВИД реестра (второго списка строк больше нет) ----------------
+static int ed_pal_n(void) {
+    int n = 0;
+    for (int i = 0; i < ED_ACT_N; i++)
+        if (ED_ACT[i].views & ED_V_PALETTE) n++;
+    return n;
+}
+static int ed_pal_act(int row) {
+    if (row < 0) return -1;
+    for (int i = 0, k = 0; i < ED_ACT_N; i++)
+        if (ED_ACT[i].views & ED_V_PALETTE) {
+            if (k == row) return i;
+            k++;
+        }
+    return -1;
+}
+static const char *ed_pal_label(int row) {
+    int a = ed_pal_act(row);
+    return a >= 0 ? ED_ACT[a].label : "";
+}
+static int ed_pal_is_action(int row) {
+    int a = ed_pal_act(row);
+    return a >= 0 && ED_ACT[a].kind != ED_K_SPAWN; // строка-ДЕЙСТВИЕ (не создание)
+}
+// Имя типа виджета — из ТОГО ЖЕ реестра (у записи-создания arg = тип). Третьей
+// копии строк «Panel»/«Button»/«Label» (дерево/инспектор) больше нет.
+static const char *wt_type_name(int type) {
+    for (int i = 0; i < ED_ACT_N; i++)
+        if (ED_ACT[i].kind == ED_K_SPAWN && ED_ACT[i].arg == type) return ED_ACT[i].label;
+    return "?";
+}
+// Тумблер включён? — одна точка правды для галочки на ленте.
+static int ed_act_on(int i) {
+    if (i < 0 || i >= ED_ACT_N || ED_ACT[i].kind != ED_K_TOGGLE) return 0;
+    if (ED_ACT[i].arg >= 0 && ED_ACT[i].arg < 3) return g_edOpen[ED_ACT[i].arg];
+    return g_editSelf; // ED_TOG_SELF
 }
 // canExecute: ОДНА точка правды «действие сейчас доступно».
 static int ed_act_enabled(int i) {
@@ -1107,12 +1135,11 @@ static int ed_cmd_run(int cmd) {
     case ED_CMD_DELETE: return wt_delete_sel();
     case ED_CMD_UNDO: return wt_undo_apply(0);
     case ED_CMD_REDO: return wt_undo_apply(1);
-    case ED_CMD_SELF: ed_self_toggle(!g_editSelf); return 1;
     case ED_CMD_KEYS:
         g_edShowKeys = !g_edShowKeys;
         edit_push();
         return 1;
-    default: return 0; // не реализовано (гейт NEVER до нас не дойдёт)
+    default: return 0;
     }
 }
 // Выполнить действие. 0 = не сработало (выключено/отказалось) — вызывающий сам
@@ -1129,7 +1156,8 @@ static int ed_act_run(int i) {
         return 1;
     }
     if (a->kind == ED_K_TOGGLE) {
-        tabs_toggle(a->arg);
+        if (a->arg == ED_TOG_SELF) ed_self_toggle(!g_editSelf);
+        else tabs_toggle(a->arg);
         return 1;
     }
     return ed_cmd_run(a->arg);
@@ -1307,7 +1335,7 @@ static void ed_ribbon_draw(RcVecShape *sh, int *n) {
         const EdAction *a = &ED_ACT[g_rbAct[s]];
         float x = g_rbX[s], w = g_rbW[s], y = by + 4.0f, h = (float)ED_RIBBON_ITEM_H;
         int en = ed_act_enabled(g_rbAct[s]);
-        int on = (a->kind == ED_K_TOGGLE && a->arg >= 0 && a->arg < 3) ? g_edOpen[a->arg] : 0;
+        int on = ed_act_on(g_rbAct[s]);
         const float *col = !en ? dim : (on ? ton : (g_rbHot == g_rbAct[s] ? hot : btn));
         wt_emit(sh, n, x, y, w, h, col, 3.0f);
         if (a->kind == ED_K_TOGGLE) { // квадрат-галочка инструмента
@@ -2409,14 +2437,9 @@ static int wt_event(const UiEvent *e) {
         }
     }
     int pi = ed_panel_open(0) ? pal_hit(e->x, e->y) : -1;
-    if (pi >= 0 && topP == 0) { // палитра
-        if (PAL_TYPE[pi] >= 0) { // тип: Panel=0 тоже валиден!
-            wt_spawn(PAL_TYPE[pi]);
-            wt_persist(); // коммит: новый виджет
-            undo_commit("add");
-        } else {
-            wt_delete_sel(); // строка-действие: удалить выбранное (поддерево)
-        }
+    if (pi >= 0 && topP == 0) { // палитра = ВИД реестра: строка -> запись реестра
+        int ai = ed_pal_act(pi);
+        if (ai >= 0) ed_act_run(ai); // создание/действие — ТОТ ЖЕ путь, что у ленты
         return 1;
     }
     tree_build();
@@ -3525,7 +3548,7 @@ int main(int argc, char **argv) {
             g_treeScroll = 0;
         }
         // Удаление виджета: поддерево целиком, выбор уходит на родителя, пустая
-        // сцена — отказ. Строка палитры Delete — ДЕЙСТВИЕ (PAL_TYPE < 0), а хром
+        // сцена — отказ. Строка палитры Delete — ДЕЙСТВИЕ (ed_pal_is_action), а хром
         // редактора (своё дерево) удалить нельзя.
         {
             widget_tree_init(&g_wt);
@@ -3560,9 +3583,9 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: del-child %d sel %d\n", g_wt.count, g_wtSel);
                 bad = 1;
             }
-            { // клик по строке палитры Delete = то же (проверяет и PAL_TYPE < 0)
+            { // клик по строке палитры Delete = то же (проверяет и ed_pal_is_action)
                 float x, y, w, h;
-                pal_rect(PAL_N - 1, &x, &y, &w, &h);
+                pal_rect(ed_pal_n() - 1, &x, &y, &w, &h);
                 UiEvent de;
                 memset(&de, 0, sizeof de);
                 de.kind = UI_EV_DOWN;
@@ -3869,7 +3892,7 @@ int main(int argc, char **argv) {
             tree_draw(p1, &n1);
             ins_draw(p2, &n2);
             // Инспектор: заголовок поля-имени + IF_N строк + 3 плашки bg (r/g/b).
-            if (n0 < PAL_N || n1 < 1 || n2 != 1 + IF_N + 3) {
+            if (n0 < ed_pal_n() || n1 < 1 || n2 != 1 + IF_N + 3) {
                 printf("SELF FAIL: open-panel-draws pal=%d tree=%d insp=%d want %d\n", n0, n1, n2,
                        1 + IF_N + 3);
                 bad = 1;
@@ -4786,7 +4809,8 @@ int main(int argc, char **argv) {
             ed_chrome_init();
             ed_chrome_sync();
             ui_wundo_init(&g_undo);
-            // (1) реестр корректен: id уникальны, метки непусты, все 5 лент непусты
+            undo_commit("load"); // нулевое состояние истории — как при старте редактора
+            // (1) реестр корректен: id уникальны, метки непусты, каждая лента непуста
             {
                 int dup = 0, empty = 0, perTab[ED_TABS_N];
                 for (int t = 0; t < ED_TABS_N; t++) perTab[t] = 0;
@@ -4800,23 +4824,58 @@ int main(int argc, char **argv) {
                 }
                 for (int t = 0; t < ED_TABS_N; t++)
                     if (perTab[t] == 0) empty++;
-                if (ED_ACT_N < 20 || dup || empty) {
+                if (ED_ACT_N < 10 || dup || empty) {
                     printf("SELF FAIL: ribbon-registry n=%d dup=%d empty=%d\n", ED_ACT_N, dup,
                            empty);
                     bad = 1;
                 }
             }
-            // (2) canExecute: без выбора Rename/Delete выключены, тумблеры — нет,
-            // нереализованное (NEVER) — выключено (никаких кнопок-пустышек)
+            // (1b) ПАЛИТРА — вид ТОГО ЖЕ реестра (второго списка строк нет):
+            // строки/метки = записи с видом ED_V_PALETTE, имена типов — из записей
+            // создания. Раньше это были отдельные PAL_LABEL/PAL_TYPE (дубль).
+            {
+                int ok = ed_pal_n() == 4;
+                if (ok) {
+                    if (strcmp(ed_pal_label(0), "Panel") || strcmp(ed_pal_label(1), "Button") ||
+                        strcmp(ed_pal_label(2), "Label") || strcmp(ed_pal_label(3), "Delete"))
+                        ok = 0;
+                    if (ed_pal_is_action(0) || ed_pal_is_action(1) || ed_pal_is_action(2) ||
+                        !ed_pal_is_action(3))
+                        ok = 0;
+                    if (strcmp(ed_pal_label(2), wt_type_name(UI_W_LABEL)) != 0) ok = 0;
+                    if (strcmp(wt_type_name(UI_W_PANEL), "Panel") ||
+                        strcmp(wt_type_name(99), "?"))
+                        ok = 0;
+                }
+                if (!ok) {
+                    printf("SELF FAIL: ribbon-palette n=%d l=%s,%s,%s,%s\n", ed_pal_n(),
+                           ed_pal_label(0), ed_pal_label(1), ed_pal_label(2), ed_pal_label(3));
+                    bad = 1;
+                }
+            }
+            // (2) canExecute = canExecute: ОДНА точка правды «доступно сейчас», и она
+            // ЖИВАЯ (меняется вместе с документом), а не таблица констант
             {
                 int sel0 = ed_act_enabled(ed_act_find("edit.rename"));
                 int del0 = ed_act_enabled(ed_act_find("edit.delete"));
                 int undo0 = ed_act_enabled(ed_act_find("hist.undo"));
                 int pal0 = ed_act_enabled(ed_act_find("view.panel.palette"));
-                int grid0 = ed_act_enabled(ed_act_find("view.grid"));
-                if (sel0 || del0 || undo0 || grid0 || !pal0) {
-                    printf("SELF FAIL: ribbon-gate sel=%d del=%d undo=%d grid=%d pal=%d\n", sel0,
-                           del0, undo0, grid0, pal0);
+                int self0 = ed_act_enabled(ed_act_find("tools.self"));
+                if (sel0 || del0 || undo0 || !pal0 || !self0 || ed_act_on(ed_act_find("tools.self"))) {
+                    printf("SELF FAIL: ribbon-gate sel=%d del=%d undo=%d pal=%d self=%d\n", sel0,
+                           del0, undo0, pal0, self0);
+                    bad = 1;
+                }
+                int w1 = wt_spawn(UI_W_BUTTON); // выбрали + появилась история -> гейт открылся
+                g_wtSel = w1;
+                undo_commit("add");
+                int sel1 = ed_act_enabled(ed_act_find("edit.rename"));
+                int del1 = ed_act_enabled(ed_act_find("edit.delete"));
+                int undo1 = ed_act_enabled(ed_act_find("hist.undo"));
+                int redo1 = ed_act_enabled(ed_act_find("hist.redo"));
+                if (!sel1 || !del1 || !undo1 || redo1) {
+                    printf("SELF FAIL: ribbon-gate-live sel=%d del=%d undo=%d redo=%d\n", sel1,
+                           del1, undo1, redo1);
                     bad = 1;
                 }
             }
@@ -4824,25 +4883,37 @@ int main(int argc, char **argv) {
             // полосы заголовков (в свою полосу)
             {
                 float tx, ty, tw, th;
-                tab_rect(2, &tx, &ty, &tw, &th);
+                tab_rect(1, &tx, &ty, &tw, &th); // UI
                 UiEvent te;
                 memset(&te, 0, sizeof te);
                 te.kind = UI_EV_DOWN;
                 te.x = tx + 20;
                 te.y = ty + 5;
-                if (!wt_event(&te) || g_edTab != 2) {
+                if (!wt_event(&te) || g_edTab != 1) {
                     printf("SELF FAIL: ribbon-tab tab=%d\n", g_edTab);
                     bad = 1;
                 }
                 ed_ribbon_layout();
                 int uin = g_rbN;
                 ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
-                if (uin < 3 || tw <= 0 || ty < (float)(ED_TOP_CHROME + ED_TABS_H) ||
+                if (uin != 3 || tw <= 0 || ty < (float)(ED_TOP_CHROME + ED_TABS_H) ||
                     ty + th > (float)ed_top()) {
                     printf("SELF FAIL: ribbon-tab-items n=%d rect=%.0f,%.0f %.0fx%.0f\n", uin,
                            (double)tx, (double)ty, (double)tw, (double)th);
                     bad = 1;
                 }
+                // другая лента = ДРУГОЙ НАБОР кнопок (лента, а не одна полоса)
+                g_edTab = 2; // VIEW
+                ed_ribbon_layout();
+                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
+                float p2x, p2y, p2w, p2h;
+                ed_ribbon_item_rect(ed_act_find("view.panel.palette"), &p2x, &p2y, &p2w, &p2h);
+                if (tw != 0 || p2w <= 0) {
+                    printf("SELF FAIL: ribbon-tab-set spawn_w=%.0f pal_w=%.0f\n", (double)tw,
+                           (double)p2w);
+                    bad = 1;
+                }
+                g_edTab = 0;
             }
             // (4) кнопка ленты UI «Button» = спавн виджета (и выбор ложится на него)
             {
@@ -4854,7 +4925,7 @@ int main(int argc, char **argv) {
                 }
             }
             // (5) выключенное действие НЕ срабатывает: без выбора Delete ничего не
-            // делает — кнопка-пустышка врала бы юзеру
+            // делает (гейт canExecute, а не «кнопка для вида»)
             {
                 g_wtSel = 0;
                 int c0 = g_wt.count;
@@ -4956,7 +5027,7 @@ int main(int argc, char **argv) {
             // (9) тултип: у включённой кнопки — метка и клавиша, у выключенной —
             // честная пометка [off]; плашка не вылезает за окно
             {
-                g_edTab = 4; // VIEW
+                g_edTab = 2; // VIEW
                 g_rbHot = ed_act_find("view.panel.tree");
                 char tip[160];
                 ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
@@ -4980,11 +5051,11 @@ int main(int argc, char **argv) {
                 setenv("UI_EDIT_BENCH", "1", 1);
                 int keepTab = g_edTab;
                 int keepOpen[3] = {g_edOpen[0], g_edOpen[1], g_edOpen[2]};
-                g_edTab = 3;
+                g_edTab = 2;
                 ed_panels_save();
                 g_edTab = 0;
                 ed_panels_load();
-                if (g_edTab != 3) {
+                if (g_edTab != 2) {
                     printf("SELF FAIL: ribbon-persist tab=%d\n", g_edTab);
                     bad = 1;
                 }
@@ -5709,11 +5780,11 @@ int main(int argc, char **argv) {
                                  "pick in WIDGETS", dcol);
                 }
             }
-            for (int i = 0; ed_panel_open(0) && i < PAL_N; i++) {
+            for (int i = 0; ed_panel_open(0) && i < ed_pal_n(); i++) {
                 float px, py, pw, ph;
                 pal_rect(i, &px, &py, &pw, &ph);
                 if (ed_text_vis(0, px + 6, py + 5))
-                    ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
+                    ui_text_quad(text, px + 6, py + 5, ed_pal_label(i), tcol);
             }
             // F3: подписи дерева виджетов (только видимые строки).
             tree_build();
@@ -5756,7 +5827,7 @@ int main(int argc, char **argv) {
                     ui_text_quad(text, nx, ty + 3, wd->name, tcol);
                     // F5d: ТИП рядом с именем (как Unity UI Builder: видно, что за
                     // элемент, не открывая инспектор). Серым — имя остаётся главным.
-                    const char *tn = (wd->type >= 0 && wd->type < 3) ? PAL_LABEL[wd->type] : "?";
+                    const char *tn = wt_type_name(wd->type);
                     ui_text_quad(text, nx + ui_text_width(text, wd->name) + 8, ty + 3, tn,
                                  hcol);
                 }
@@ -5774,8 +5845,7 @@ int main(int argc, char **argv) {
                         ui_text_quad(text, hx + 6, hy + 2,
                                      g_nameEdit ? g_nameBuf : sw->name, tcol);
                     if (!g_nameEdit && iv) { // F5d: ТИП справа — видно, что за элемент
-                        const char *tn =
-                            (sw->type >= 0 && sw->type < 3) ? PAL_LABEL[sw->type] : "?";
+                        const char *tn = wt_type_name(sw->type);
                         ui_text_quad(text, hx + hw - 6 - ui_text_width(text, tn), hy + 2, tn,
                                      hcol);
                     }
