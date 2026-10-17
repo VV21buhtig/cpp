@@ -60,14 +60,64 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define PAL_BH 26
 #define PAL_GAP 4
 #define PAL_N 3
+#define PAL_PAD 8    // внутренние поля хром-панели
+#define PAL_TITLE 22 // строка заголовка панели
 #define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
 static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL};
 static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label"};
 
+// --- §14 F3c(1b): ХРОМ РЕДАКТОРА = ВИДЖЕТЫ (self-host) ---
+// Свой UI правщика живёт ВТОРЫМ деревом (g_edWt): палитра/дерево/инспектор — это
+// виджеты, их геометрия берётся отсюда, рисует их ТОТ ЖЕ рантайм, что документ.
+// F7 (env UI_EDIT_SELF=1) переключает, ЧТО правим: документ (g_wt, пишется в
+// layout.json) или хром самого редактора (g_edWt, не пишется — это вид инструмента).
+static UiWidgetTree g_edWt;
+static int g_edPal = 0, g_edTree = 0, g_edIns = 0; // id хром-панелей
+static int g_edMoved[UI_MAX_WIDGETS]; // 1 = юзер подвинул: дефолтом не перетираем
+static int g_editSelf = 0;            // 1 = правим хром редактора
+static UiWidgetTree *g_act = &g_wt;   // АКТИВНОЕ дерево (инспектор/драг/дерево)
+
+// Пиксельный rect хром-панели (то же правило якорей, что у виджетов документа).
+static void ed_rect(int id, float *x, float *y, float *w, float *h) {
+    const UiWidget *p = widget_cget(&g_edWt, id);
+    if (!p) {
+        *x = *y = *w = *h = 0;
+        return;
+    }
+    widget_rect_px(p, g_WW, g_WH, x, y, w, h);
+}
+
+static void ed_chrome_init(void) {
+    widget_tree_init(&g_edWt);
+    memset(g_edMoved, 0, sizeof g_edMoved);
+    UiWidgetStyle s, s2;
+    memset(&s, 0, sizeof s);
+    s.alpha = 1.0f;
+    s.rounding = 6.0f;
+    s.fontSize = 14.0f;
+    s.bg[0] = 0.11f;
+    s.bg[1] = 0.12f;
+    s.bg[2] = 0.16f;
+    s.bg[3] = 1.0f;
+    s2 = s;
+    s2.bg[0] = 0.09f;
+    s2.bg[1] = 0.10f;
+    s2.bg[2] = 0.13f;
+    UiWidgetRect r;
+    memset(&r, 0, sizeof r);
+    r.anchors = UI_A_LEFT | UI_A_TOP;
+    g_edPal = widget_add(&g_edWt, UI_W_PANEL, "EdPalette", 0, &r, &s);
+    g_edTree = widget_add(&g_edWt, UI_W_PANEL, "EdHierarchy", 0, &r, &s2);
+    g_edIns = widget_add(&g_edWt, UI_W_PANEL, "EdInspector", 0, &r, &s2);
+}
+
 static void pal_rect(int i, float *x, float *y, float *w, float *h) {
-    *x = (float)(g_vpx + 10);
-    *y = (float)(g_vpy + 10 + i * (PAL_BH + PAL_GAP));
-    *w = (float)PAL_BW;
+    float px, py, pw, ph;
+    ed_rect(g_edPal, &px, &py, &pw, &ph);
+    (void)ph;
+    *x = px + PAL_PAD;
+    *y = py + PAL_PAD + PAL_TITLE + (float)(i * (PAL_BH + PAL_GAP));
+    *w = pw - 2 * PAL_PAD; // кнопки палитры — во всю ширину панели
     *h = (float)PAL_BH;
 }
 
@@ -80,13 +130,16 @@ static int pal_hit(float px, float py) {
     return -1;
 }
 
-// Прямоугольник спавна (якорь L|T, в пикселях окна) — у вьюпорта, каскадом.
+// Прямоугольник спавна (якорь L|T, в пикселях окна) — ПРАВЕЕ панелей хрома
+// (иначе виджет рождается под панелью и «пропадает»), каскадом вниз.
 static UiWidgetRect wt_spawn_rect(int type) {
     UiWidgetRect r;
     memset(&r, 0, sizeof r);
     r.anchors = UI_A_LEFT | UI_A_TOP;
-    r.x = (float)(g_vpx + 130);
-    r.y = (float)(g_vpy + 30 + g_wt.count * 34);
+    float px, py, pw, ph;
+    ed_rect(g_edPal, &px, &py, &pw, &ph);
+    r.x = px + pw + 24 + (float)((g_wt.count % 5) * 28);
+    r.y = py + 40 + (float)((g_wt.count % 5) * 26);
     if (type == UI_W_PANEL) {
         r.w = 240;
         r.h = 130;
@@ -140,11 +193,11 @@ static int wt_spawn(int type) {
 // (ui_widget_runtime). Здесь только тонкие обёртки над деревом редактора g_wt,
 // чтобы игра и редактор гарантированно видели одинаковый порядок/верх.
 static int wt_sib_sorted(int parent, int *out) {
-    return ui_widget_sib_sorted(&g_wt, parent, out);
+    return ui_widget_sib_sorted(g_act, parent, out);
 }
 
 static int wt_hit(float px, float py) {
-    return ui_widget_hit(&g_wt, g_WW, g_WH, px, py);
+    return ui_widget_hit(g_act, g_WW, g_WH, px, py);
 }
 
 static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
@@ -161,14 +214,24 @@ static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
     memcpy(s->rgba, rgba, sizeof s->rgba);
 }
 
-// §14 F3c: заливки виджетов — из ОБЩЕГО рантайма (то же, что увидит игра);
-// поверх — рамка выбора и ручки: это ХРОМ РЕДАКТОРА, потому локально.
-// Палитра — отдельно (выше, своим слоем).
+// §14 F3c: заливки виджетов — из ОБЩЕГО рантайма (то же, что увидит игра).
 static void wt_draw_all(RcVecShape *sh, int *n) {
     RcVecShape tmp[UI_MAX_PRIMS];
     int m = ui_widget_build(&g_wt, g_WW, g_WH, tmp, UI_MAX_PRIMS);
     for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) sh[(*n)++] = tmp[i];
-    const UiWidget *s = widget_cget(&g_wt, g_wtSel);
+}
+
+// Хром редактора — тем же рантаймом (и это же дерево правится в self-режиме).
+static void chrome_draw(RcVecShape *sh, int *n) {
+    RcVecShape tmp[UI_MAX_PRIMS];
+    int m = ui_widget_build(&g_edWt, g_WW, g_WH, tmp, UI_MAX_PRIMS);
+    for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) sh[(*n)++] = tmp[i];
+}
+
+// Рамка выбора + ручки — это ХРОМ РЕДАКТОРА, потому локально и ПОВЕРХ всего
+// (в self-режиме обводка ложится на панель хрома, а не тонет под ней).
+static void wt_draw_sel(RcVecShape *sh, int *n) {
+    const UiWidget *s = widget_cget(g_act, g_wtSel);
     if (s) {
         float x, y, ww, hh;
         widget_rect_px(s, g_WW, g_WH, &x, &y, &ww, &hh);
@@ -207,13 +270,14 @@ static void pal_draw(RcVecShape *sh, int *n) {
 // Строки идут в том же порядке, что и отрисовка (корни -> дети, в глубину).
 #define TREE_W 180
 #define TREE_RH 20
+#define TREE_HDR 22
 static int g_treeN = 0;
 static int g_treeId[UI_MAX_WIDGETS];
 static int g_treeDepth[UI_MAX_WIDGETS];
 
 static void tree_collect(int id, int depth) {
     if (g_treeN >= UI_MAX_WIDGETS) return;
-    const UiWidget *w = widget_cget(&g_wt, id);
+    const UiWidget *w = widget_cget(g_act, id);
     if (!w) return;
     g_treeId[g_treeN] = id;
     g_treeDepth[g_treeN] = depth;
@@ -229,8 +293,12 @@ static void tree_build(void) {
     for (int i = 0; i < nr; i++) tree_collect(roots[i], 0);
 }
 static void tree_rect(int row, float *x, float *y, float *w, float *h) {
-    *x = (float)(g_vpx + 10);
-    *y = (float)(g_vpy + 10 + PAL_N * (PAL_BH + PAL_GAP) + 8 + row * TREE_RH);
+    float px, py, pw, ph;
+    ed_rect(g_edTree, &px, &py, &pw, &ph);
+    (void)pw;
+    (void)ph;
+    *x = px + PAL_PAD;
+    *y = py + TREE_HDR + (float)(row * TREE_RH);
     *w = (float)TREE_W;
     *h = (float)TREE_RH;
 }
@@ -253,7 +321,7 @@ static void tree_draw(RcVecShape *sh, int *n) {
     for (int i = 0; i < g_treeN; i++) {
         float x, y, w, h;
         tree_rect(i, &x, &y, &w, &h);
-        const UiWidget *wd = widget_cget(&g_wt, g_treeId[i]);
+        const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
         if (!wd) continue;
         int sel = g_treeId[i] == g_wtSel;
         float c[4] = {0.15f, 0.16f, 0.20f, 1.0f};
@@ -271,6 +339,7 @@ static void tree_draw(RcVecShape *sh, int *n) {
 #define INS_W 200
 #define INS_RH 20
 #define INS_GAP 2
+#define INS_HEAD 20 // строка заголовка (имя выбранного)
 enum {
     IF_X, IF_Y, IF_W, IF_H, IF_ROUND, IF_ALPHA, IF_FONT,
     IF_BG_R, IF_BG_G, IF_BG_B, IF_UP, IF_DOWN, IF_N
@@ -284,10 +353,50 @@ static float g_insDownVal = 0;   // значение на DOWN
 static int g_insPrevPx[4];       // прошлый пиксельный rect (dirty-rect)
 
 static void ins_rect(int i, float *x, float *y, float *w, float *h) {
-    *x = (float)(g_vpx + g_vpw - INS_W - 10);
-    *y = (float)(g_vpy + 30 + i * (INS_RH + INS_GAP));
+    float px, py, pw, ph;
+    ed_rect(g_edIns, &px, &py, &pw, &ph);
+    (void)pw;
+    (void)ph;
+    *x = px + PAL_PAD;
+    *y = py + PAL_PAD + (i < 0 ? 0.0f : INS_HEAD + (float)(i * (INS_RH + INS_GAP)));
     *w = (float)INS_W;
-    *h = (float)INS_RH;
+    *h = (i < 0 ? (float)(INS_HEAD - 4) : (float)INS_RH);
+}
+
+// Раскладка хрома по умолчанию: панели привязаны к вьюпорту (L|T-якоря и оффсеты
+// окна) — двинулся док, двинулся хром. Правку юзера (g_edMoved) не перетираем.
+static void ed_chrome_sync(void) {
+    float palW = (float)((TREE_W > PAL_BW ? TREE_W : PAL_BW) + 2 * PAL_PAD);
+    float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
+    float x0 = (float)(g_vpx + PAL_PAD), y0 = (float)(g_vpy + PAL_PAD);
+    struct {
+        int id;
+        float x, y, w, h;
+    } d[3];
+    d[0].id = g_edPal;
+    d[0].x = x0;
+    d[0].y = y0;
+    d[0].w = palW;
+    d[0].h = palH;
+    d[1].id = g_edTree;
+    d[1].x = x0;
+    d[1].y = y0 + palH + 10;
+    d[1].w = palW;
+    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH * 8);
+    d[2].id = g_edIns;
+    d[2].w = (float)(INS_W + 2 * PAL_PAD);
+    d[2].x = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
+    d[2].y = y0;
+    d[2].h = (float)(PAL_PAD * 2 + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+    for (int i = 0; i < 3; i++) {
+        UiWidget *w = widget_get(&g_edWt, d[i].id);
+        if (!w || g_edMoved[d[i].id - 1]) continue;
+        w->rect.anchors = UI_A_LEFT | UI_A_TOP;
+        w->rect.x = d[i].x;
+        w->rect.y = d[i].y;
+        w->rect.w = d[i].w;
+        w->rect.h = d[i].h;
+    }
 }
 static float *ins_slot(UiWidget *w, int f) {
     switch (f) {
@@ -332,7 +441,7 @@ static int ins_hit(float px, float py) {
     return -1;
 }
 static void ins_px(int *out) {
-    const UiWidget *w = widget_cget(&g_wt, g_wtSel);
+    const UiWidget *w = widget_cget(g_act, g_wtSel);
     if (!w) { out[0] = out[1] = out[2] = out[3] = 0; return; }
     float x, y, ww, hh;
     widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
@@ -343,12 +452,10 @@ static void ins_px(int *out) {
 }
 static void ins_draw(RcVecShape *sh, int *n) {
     if (!g_wtSel) return;
-    const UiWidget *w = widget_cget(&g_wt, g_wtSel);
+    const UiWidget *w = widget_cget(g_act, g_wtSel);
     if (!w) return;
     float tx, ty, tw, th;
-    ins_rect(-1, &tx, &ty, &tw, &th); // заголовок над строками
-    ty = (float)(g_vpy + 10);
-    th = 18.0f;
+    ins_rect(-1, &tx, &ty, &tw, &th); // заголовок внутри панели хрома
     float hc[4] = {0.22f, 0.24f, 0.30f, 1.0f};
     wt_emit(sh, n, tx, ty, tw, th, hc, 3.0f);
     for (int i = 0; i < IF_N; i++) {
@@ -383,7 +490,7 @@ static int g_dirtyN = 0;
 
 // Хэндл ресайза под точкой (у выбранного). 0 = не хэндл (тело/мимо).
 static int wt_handle_hit(float px, float py) {
-    const UiWidget *s = widget_cget(&g_wt, g_wtSel);
+    const UiWidget *s = widget_cget(g_act, g_wtSel);
     if (!s) return 0;
     float x, y, w, h;
     widget_rect_px(s, g_WW, g_WH, &x, &y, &w, &h);
@@ -402,8 +509,9 @@ static int wt_handle_hit(float px, float py) {
 }
 
 static void wt_drag_begin(int id, int handle, float mx, float my) {
-    const UiWidget *w = widget_cget(&g_wt, id);
+    const UiWidget *w = widget_cget(g_act, id);
     if (!w) return;
+    if (g_editSelf) g_edMoved[id - 1] = 1; // правка юзера: раскладка больше не вернёт
     g_dragId = id;
     g_dragHandle = handle;
     g_dragMX = mx;
@@ -431,7 +539,7 @@ static void pt_to_anchor(UiWidget *w, float px, float py, float pw, float ph, in
 }
 
 static void wt_drag_apply(float mx, float my) {
-    UiWidget *w = widget_get(&g_wt, g_dragId);
+    UiWidget *w = widget_get(g_act, g_dragId);
     if (!w) {
         g_dragId = 0;
         return;
@@ -536,14 +644,15 @@ static int wt_persist_ok(void) {
     return !getenv("UI_EDIT_SEED") && !getenv("UI_EDIT_BENCH");
 }
 static void wt_persist(void) {
+    if (g_editSelf) return; // хром редактора — вид инструмента, в layout.json не пишем
     if (wt_persist_ok()) widget_json_save(&g_wt, UI_LAYOUT_PATH);
 }
 
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_MOVE) {
-        if (g_insField >= 0) { // F3b: scrub поля инспектора
-            UiWidget *w = widget_get(&g_wt, g_wtSel);
+        if (g_insField >= 0) { // F3b: scrub поля инспектора (правит АКТИВНОЕ дерево)
+            UiWidget *w = widget_get(g_act, g_wtSel);
             float *slot = w ? ins_slot(w, g_insField) : 0;
             if (slot) {
                 float v = g_insDownVal + (e->x - g_insDownX) * ins_step(g_insField);
@@ -594,6 +703,27 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind != UI_EV_DOWN) return 0;
+    // §14 F3c: правим ХРОМ редактора — палитра/дерево/инспектор не работают
+    // (это инструмент документа), клик/драг идёт по панелям хрома.
+    if (g_editSelf) {
+        int sh = wt_handle_hit(e->x, e->y);
+        if (sh > 0 && g_wtSel) {
+            wt_drag_begin(g_wtSel, sh, e->x, e->y);
+            return 1;
+        }
+        int cid = wt_hit(e->x, e->y);
+        if (cid) {
+            g_wtSel = cid;
+            wt_drag_begin(cid, 0, e->x, e->y);
+            return 1;
+        }
+        if (e->x >= g_vpx && e->x < g_vpx + g_vpw && e->y >= g_vpy &&
+            e->y < g_vpy + g_vph) {
+            g_wtSel = 0;
+            return 1;
+        }
+        return 0;
+    }
     int pi = pal_hit(e->x, e->y);
     if (pi >= 0) { // палитра поверх всего
         wt_spawn(PAL_TYPE[pi]);
@@ -609,12 +739,12 @@ static int wt_event(const UiEvent *e) {
     int ii = ins_hit(e->x, e->y);
     if (ii >= 0) { // F3b: инспектор
         if (ii == IF_UP || ii == IF_DOWN) {
-            if (widget_layer(&g_wt, g_wtSel, ii == IF_UP ? 1 : -1)) {
+            if (widget_layer(g_act, g_wtSel, ii == IF_UP ? 1 : -1)) {
                 wt_persist();
                 edit_push(); // порядок слоёв изменился — полный кадр
             }
         } else {
-            UiWidget *w = widget_get(&g_wt, g_wtSel);
+            UiWidget *w = widget_get(g_act, g_wtSel);
             float *slot = w ? ins_slot(w, ii) : 0;
             if (slot) {
                 g_insField = ii;
@@ -679,14 +809,18 @@ static int build_shapes(RcVecShape *shapes) {
         n++;
     }
     (void)panelsDirty;
-    wt_draw_all(shapes, &n);
-    tree_draw(shapes, &n); // F3: дерево (под палитрой)
-    ins_draw(shapes, &n);  // F3b: инспектор (справа)
+    ed_chrome_sync(); // §14 F3c: раскладка панелей хрома (док мог поменяться)
+    wt_draw_all(shapes, &n); // документ — тем же рантаймом, что и игра
+    chrome_draw(shapes, &n); // хром редактора — это тоже виджеты
+    tree_draw(shapes, &n);   // F3: дерево (под палитрой)
+    ins_draw(shapes, &n);    // F3b: инспектор (справа)
     pal_draw(shapes, &n);
+    wt_draw_sel(shapes, &n); // рамка/ручки активного — поверх всего
     return n;
 }
 
 static void edit_push(void) {
+    if (!g_vec) return; // selftest: без GL
     RcVecShape shapes[UI_MAX_PRIMS];
     int n = build_shapes(shapes);
     g_fullN++;
@@ -696,6 +830,7 @@ static void edit_push(void) {
 // Частичная перерисовка (dirty-rect, как в игровом редакторе): растр только
 // региона (x,y,w,h, y-вниз), остальное не трогаем. Это и есть лечение лага.
 static void edit_push_dirtyN(const int (*rects)[4], int cnt) {
+    if (!g_vec) return; // selftest: без GL
     if (cnt <= 0) return;
     RcVecShape shapes[UI_MAX_PRIMS];
     int n = build_shapes(shapes); // один сбор кадра на все регионы
@@ -800,12 +935,30 @@ static void on_move(GLFWwindow *win, double x, double y) {
     push_ev(&e);
 }
 
+// §14 F3c: переключить, ЧТО правим — документ или собственный UI редактора.
+static void ed_self_toggle(int on) {
+    g_editSelf = on ? 1 : 0;
+    g_act = g_editSelf ? &g_edWt : &g_wt;
+    g_wtSel = 0;
+    g_insField = -1;
+    g_dragId = 0;
+    g_dragHandle = 0;
+    g_palHot = -1;
+    edit_push();
+    printf("ui_edit: self=%d (правим %s)\n", g_editSelf,
+           g_editSelf ? "ХРОМ редактора" : "документ (layout.json)");
+}
+
 static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
     (void)win;
     (void)scancode;
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_ESCAPE) {
         g_quit = 1;
+        return;
+    }
+    if (key == GLFW_KEY_F7) { // self-host: правим собственный UI редактора
+        ed_self_toggle(!g_editSelf);
         return;
     }
     // Инструменту нужны: Tab (коллапс), Z/Y (undo), L (уже в EDIT — no-op).
@@ -888,6 +1041,8 @@ int main(int argc, char **argv) {
         g_vpy = y;
         g_vpw = w;
         g_vph = h;
+        ed_chrome_init(); // §14 F3c(1b): хром = виджеты; геометрия от вьюпорта
+        ed_chrome_sync();
         {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
@@ -1354,6 +1509,96 @@ int main(int argc, char **argv) {
             }
             g_wt = keepRT;
         }
+        // §14 F3c(1b): SELF-HOST — правим СОБСТВЕННЫЙ UI редактора теми же
+        // механизмами (выбор/драг/ручки/инспектор), документ не трогаем.
+        {
+            widget_tree_init(&g_wt); // документ пуст
+            g_editSelf = 1;
+            g_act = &g_edWt;
+            g_wtSel = 0;
+            g_palHot = -1;
+            g_dragId = 0;
+            g_dragHandle = 0;
+            ed_chrome_init();
+            ed_chrome_sync();
+            float px, py, pw, ph;
+            ed_rect(g_edPal, &px, &py, &pw, &ph);
+            if (pw <= 0 || ph <= 0) {
+                printf("SELF FAIL: self-geom %f %f\n", pw, ph);
+                bad = 1;
+            }
+            // Клик по паддингу панели (вне строк палитры) -> выбран виджет ХРОМА.
+            UiEvent we;
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_DOWN;
+            we.x = px + 3;
+            we.y = py + 3;
+            if (!wt_event(&we) || g_wtSel != g_edPal) {
+                printf("SELF FAIL: self-pick %d\n", g_wtSel);
+                bad = 1;
+            }
+            // Драг -> панель хрома уехала; правка юзера стабильна (sync не вернёт).
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = px + 3 + 40;
+            we.y = py + 3 + 25;
+            wt_event(&we);
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_UP;
+            wt_event(&we);
+            float x2, y2, w2, h2;
+            ed_rect(g_edPal, &x2, &y2, &w2, &h2);
+            if (x2 != px + 40 || y2 != py + 25 || w2 != pw || h2 != ph) {
+                printf("SELF FAIL: self-move %f %f\n", x2, y2);
+                bad = 1;
+            }
+            ed_chrome_sync();
+            ed_rect(g_edPal, &x2, &y2, &w2, &h2);
+            if (x2 != px + 40 || y2 != py + 25) {
+                printf("SELF FAIL: self-keep %f %f\n", x2, y2);
+                bad = 1;
+            }
+            // Инспектор в self-режиме правит ХРОМ (round), а не документ.
+            UiWidget *cw = widget_get(&g_edWt, g_edPal);
+            float r0 = cw->style.rounding;
+            g_insField = IF_ROUND;
+            g_insDownX = 0;
+            g_insDownVal = r0;
+            memset(&we, 0, sizeof we);
+            we.kind = UI_EV_MOVE;
+            we.x = 40;
+            wt_event(&we); // 40 * 0.25 = +10
+            if (cw->style.rounding <= r0 || g_wt.count != 0) {
+                printf("SELF FAIL: self-ins %f\n", (double)cw->style.rounding);
+                bad = 1;
+            }
+            g_insField = -1;
+            // Хром НЕ пишем в layout.json (это вид инструмента, не документ):
+            // коммит в self-режиме не создаёт файл.
+            remove(UI_LAYOUT_PATH);
+            wt_persist();
+            {
+                FILE *pf = fopen(UI_LAYOUT_PATH, "rb");
+                if (pf) {
+                    printf("SELF FAIL: self-persist\n");
+                    fclose(pf);
+                    bad = 1;
+                }
+            }
+            // Слои хрома: 3 панели-корня, Lay + меняет порядок (как у документа).
+            int before[UI_MAX_WIDGETS];
+            int nb = wt_sib_sorted(0, before);
+            if (nb != 3) {
+                printf("SELF FAIL: self-lay-n %d\n", nb);
+                bad = 1;
+            }
+            // Возврат в обычный режим + дефолтный хром для остальных проверок.
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            ed_chrome_init();
+            ed_chrome_sync();
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -1396,6 +1641,17 @@ int main(int argc, char **argv) {
         return 1;
     }
     widget_tree_init(&g_wt); // §14: пусто до создания из палитры
+    ed_chrome_init();        // §14 F3c(1b): собственный UI редактора — тоже виджеты
+    ui_panels_viewport(g_panels, g_WW, g_WH, &g_vpx, &g_vpy, &g_vpw, &g_vph);
+    ed_chrome_sync();
+    {
+        const char *sf = getenv("UI_EDIT_SELF");
+        if (sf && sf[0] == '1') {
+            g_editSelf = 1;
+            g_act = &g_edWt;
+            printf("ui_edit: self=1 (env): правим ХРОМ редактора\n");
+        }
+    }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
     if (!text) printf("ui_edit: text OFF (rects only)\n");
     // Всегда EDIT (L скриптом — как дефолтный select в ui_test).
@@ -1526,7 +1782,6 @@ int main(int argc, char **argv) {
     }
     int frames = 0;
     static const float hintCol[4] = {0.55f, 0.55f, 0.58f, 1.0f};
-    static const float voidCol[4] = {0.35f, 0.38f, 0.45f, 1.0f};
     while (!glfwWindowShouldClose(win) && !g_quit) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
         { // живой FPS (для жалобы «со временем деградирует»)
@@ -1578,10 +1833,20 @@ int main(int argc, char **argv) {
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
         if (text) {
             ui_panels_text(g_panels, &g_scene, text, g_WW, g_WH);
-            ui_text_quad(text, (float)(g_vpx + 10), (float)(g_vpy + 8), "VIEWPORT (3D here)",
-                         voidCol);
-            // Подписи виджетов (button/label) + палитры.
+            // Подписи виджетов (button/label) + заголовки панелей хрома.
             static const float tcol[4] = {0.85f, 0.87f, 0.92f, 1.0f};
+            static const float hcol[4] = {0.60f, 0.65f, 0.74f, 1.0f};
+            {
+                // §14 F3c: хром редактора = виджеты: заголовки — их имена/роль.
+                float px, py, pw, ph;
+                ed_rect(g_edPal, &px, &py, &pw, &ph);
+                ui_text_quad(text, px + PAL_PAD, py + 4, "PALETTE", hcol);
+                ed_rect(g_edTree, &px, &py, &pw, &ph);
+                ui_text_quad(text, px + PAL_PAD, py + 4,
+                             g_editSelf ? "EDITOR UI (F7)" : "WIDGETS", hcol);
+                ed_rect(g_edIns, &px, &py, &pw, &ph);
+                ui_text_quad(text, px + PAL_PAD, py + 4, "INSPECTOR", hcol);
+            }
             for (int i = 0; i < UI_MAX_WIDGETS; i++) {
                 const UiWidget *w = widget_cget(&g_wt, i + 1);
                 if (!w || w->type == UI_W_PANEL) continue;
@@ -1597,7 +1862,7 @@ int main(int argc, char **argv) {
             // F3: подписи дерева виджетов.
             tree_build();
             for (int i = 0; i < g_treeN; i++) {
-                const UiWidget *wd = widget_cget(&g_wt, g_treeId[i]);
+                const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
                 if (!wd) continue;
                 float tx, ty, tw, th;
                 tree_rect(i, &tx, &ty, &tw, &th);
@@ -1606,14 +1871,13 @@ int main(int argc, char **argv) {
             }
             // F3b: подписи инспектора (заголовок + поля).
             if (g_wtSel) {
-                const UiWidget *sw = widget_cget(&g_wt, g_wtSel);
+                const UiWidget *sw = widget_cget(g_act, g_wtSel);
                 if (sw) {
                     float hx, hy, hw, hh;
                     ins_rect(-1, &hx, &hy, &hw, &hh);
-                    (void)hy;
                     (void)hw;
                     (void)hh;
-                    ui_text_quad(text, hx + 6, (float)(g_vpy + 12), sw->name, tcol);
+                    ui_text_quad(text, hx + 6, hy + 2, sw->name, tcol);
                     for (int i = 0; i < IF_N; i++) {
                         float x, y, ww, hh2;
                         ins_rect(i, &x, &y, &ww, &hh2);
@@ -1641,8 +1905,8 @@ int main(int argc, char **argv) {
                 }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: click palette=add | click widget=select | blue edges resize"
-                         " | Tab collapse | Esc quit",
+                         "frontedit: click palette=add | click widget=select | blue edges"
+                         " resize | F7 edit editor's own UI | Tab collapse | Esc quit",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок (диагноз «съеденного fps»)
                 char hud[48];
