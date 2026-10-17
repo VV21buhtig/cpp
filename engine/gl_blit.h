@@ -130,7 +130,11 @@ static float blit_frame(BlitGL *b, int ww, int hh, float br, float bg, float bb)
             if (b->frame == at) {
                 uint8_t *px = (uint8_t *)malloc((size_t)ww * hh * 3);
                 if (px) {
+                    // Пак-выравнивание 4 (по умолчанию) дописывает паддинг в
+                    // конец строки при ширине не кратной 4 — за границу буфера.
+                    glPixelStorei(GL_PACK_ALIGNMENT, 1);
                     glReadPixels(0, 0, ww, hh, GL_RGB, GL_UNSIGNED_BYTE, px);
+                    glPixelStorei(GL_PACK_ALIGNMENT, 4);
                     FILE *f = fopen(sp, "wb");
                     if (f) {
                         fprintf(f, "P6\n%d %d\n255\n", ww, hh);

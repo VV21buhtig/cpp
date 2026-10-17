@@ -73,6 +73,7 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 // строки исчезнут и отступ уйдёт вместе с ними.
 #define ED_TOP_CHROME 84
 #define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
+#define TREE_W 200     // ширина панели дока (палитра/дерево/инспектор считают от неё)
 // §14 F5k: ПОЛОСА ВКЛАДОК-ИНСТРУМЕНТОВ (как View в Word / панели в Roblox
 // Studio). Панели — это ИНСТРУМЕНТЫ: их ОТКРЫВАЮТ вкладкой, они стоят в доке,
 // а «вынуть в отдельное окно» — отдельное действие (драг за заголовок панели).
@@ -115,13 +116,44 @@ static int g_edOpen[3] = {1, 1, 1}; // палитра/дерево/инспек�
 static int g_selftest = 0;          // 1 = прогон --selftest: файлы юзера не трогаем
 static void edit_push(void); // определения ниже: инспектор/вкладки зовут их из wt_event
 static void edit_push_dirtyN(const int (*rects)[4], int cnt);
+// F5l(3): документ живёт в вьюпорте — координаты/клип (определения ниже, нужны
+// уже хит-тесту и стопке клика).
+static int doc_w(void);
+static int doc_h(void);
+static float doc_ox(void);
+static float doc_oy(void);
+static int doc_live(void);
+static void doc_px(const UiWidget *w, float *x, float *y, float *ww, float *hh);
+static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, float h,
+                         const float rgba[4], float round);
 static const char *g_edTabName[3] = {"PALETTE", "WIDGETS", "INSPECTOR"};
 static int ed_panel_open(int i) { return i >= 0 && i < 3 && g_edOpen[i]; }
-// Полоса вкладок — во всю ширину вьюпорта, сразу под легаси-хромом.
+
+// §14 F5l(4): ПОЛОСЫ ДОКОВ. Инструмент В ДОКЕ занимает свою полосу — слева
+// палитра+дерево, справа инспектор, — а вьюпорт (экран игры) это ОСТАТОК окна.
+// Раньше панели лежали поверх экрана игры: тестер «инструменты не должны быть во
+// вьюпорте, нужно окно, которое отвечает за редакцию». Оторванная (F5j) панель —
+// исключение: она окно и плавает поверх всего, пока её не вернут в док.
+#define ED_DOCK_W (TREE_W + 2 * PAL_PAD) // ширина полосы дока (панель + отступы)
+static int g_dockL = 0, g_dockR = 0;     // занятые полосы доков в этом кадре
+static void ed_viewport_compute(void) {
+    g_dockL = (g_edOpen[0] || g_edOpen[1]) ? ED_DOCK_W + PAL_PAD : 0;
+    g_dockR = g_edOpen[2] ? ED_DOCK_W + PAL_PAD : 0;
+    int top = ED_TOP_CHROME + ED_TABS_H + PAL_PAD; // под полосой вкладок
+    g_vpx = g_dockL;
+    g_vpy = top;
+    g_vpw = g_WW - g_dockL - g_dockR;
+    g_vph = g_WH - top;
+    if (g_vpw < 64) g_vpw = 64; // тесное окно: вьюпорт не схлопываем в ноль
+    if (g_vph < 64) g_vph = 64;
+}
+
+// Полоса вкладок-инструментов — во всю ширину ОКНА (это лента редактора, не
+// вьюпорт: доки начинаются ниже неё).
 static void tabs_rect(float *x, float *y, float *w, float *h) {
-    float w0 = (float)g_vpw;
+    float w0 = (float)g_WW;
     if (w0 < (float)ED_TAB_W + 2 * PAL_PAD) w0 = (float)ED_TAB_W + 2 * PAL_PAD;
-    *x = (float)g_vpx;
+    *x = 0.0f;
     *y = (float)ED_TOP_CHROME;
     *w = w0;
     *h = (float)ED_TABS_H;
@@ -207,16 +239,14 @@ static int pal_hit(float px, float py) {
     return -1;
 }
 
-// Прямоугольник спавна (якорь L|T, в пикселях окна) — ПРАВЕЕ панелей хрома
-// (иначе виджет рождается под панелью и «пропадает»), каскадом вниз.
+// Прямоугольник спавна: виджет рождается НА ЭКРАНЕ ИГРЫ (вьюпорте), а не
+// «правее палитры в пикселях окна». Тестер в тесном окне получал виджет ЗА
+// границей экрана («улетел»), поэтому центр вьюпорта + каскад, с зажимом внутрь
+// его рамки (Word/UE/Unity: новый элемент появляется там, где на него смотрят).
 static UiWidgetRect wt_spawn_rect(int type) {
     UiWidgetRect r;
     memset(&r, 0, sizeof r);
     r.anchors = UI_A_LEFT | UI_A_TOP;
-    float px, py, pw, ph;
-    ed_rect(g_edPal, &px, &py, &pw, &ph);
-    r.x = px + pw + 24 + (float)((g_wt.count % 5) * 28);
-    r.y = py + 40 + (float)((g_wt.count % 5) * 26);
     if (type == UI_W_PANEL) {
         r.w = 240;
         r.h = 130;
@@ -227,6 +257,24 @@ static UiWidgetRect wt_spawn_rect(int type) {
         r.w = 150;
         r.h = 22;
     }
+    int k = g_wt.count % 5;
+    float Wpx = (float)doc_w(), Hpx = (float)doc_h();
+    // Новый виджет не больше экрана игры: в тесном окне панель 240px не влезала
+    // в 192px экрана и «улетала» за границу (как макетный фрейм в Figma/UE —
+    // рождается по размеру видимой области).
+    if (r.w > Wpx - 16.0f) r.w = Wpx - 16.0f;
+    if (r.h > Hpx - 16.0f) r.h = Hpx - 16.0f;
+    if (r.w < 8.0f) r.w = 8.0f;
+    if (r.h < 8.0f) r.h = 8.0f;
+    r.x = (Wpx - r.w) * 0.5f + (float)(k * 24) - 48.0f;
+    r.y = (Hpx - r.h) * 0.5f + (float)(k * 20) - 40.0f;
+    float mx = Wpx - r.w - 8.0f, my = Hpx - r.h - 8.0f;
+    if (mx < 8.0f) mx = 8.0f;
+    if (my < 8.0f) my = 8.0f;
+    if (r.x < 8.0f) r.x = 8.0f;
+    if (r.y < 8.0f) r.y = 8.0f;
+    if (r.x > mx) r.x = mx;
+    if (r.y > my) r.y = my;
     return r;
 }
 
@@ -274,6 +322,12 @@ static int wt_sib_sorted(int parent, int *out) {
 }
 
 static int wt_hit(float px, float py) {
+    if (doc_live()) { // документ: мышь -> координаты ЭКРАНА ИГРЫ, вне вьюпорта нет
+        if (px < (float)g_vpx || px >= (float)(g_vpx + g_vpw) || py < (float)g_vpy ||
+            py >= (float)(g_vpy + g_vph))
+            return 0;
+        return ui_widget_hit(g_act, doc_w(), doc_h(), px - doc_ox(), py - doc_oy());
+    }
     return ui_widget_hit(g_act, g_WW, g_WH, px, py);
 }
 
@@ -292,12 +346,20 @@ static int wt_stack_at(float px, float py, int *out, int cap) {
     int order[UI_MAX_WIDGETS];
     int n = 0;
     wt_order_rec(0, order, &n, UI_MAX_WIDGETS);
+    if (doc_live()) { // F5l(3): стопка документа — в координатах экрана игры
+        if (px < (float)g_vpx || px >= (float)(g_vpx + g_vpw) || py < (float)g_vpy ||
+            py >= (float)(g_vpy + g_vph))
+            return 0;
+        px -= doc_ox();
+        py -= doc_oy();
+    }
     int m = 0;
     for (int i = 0; i < n && m < cap; i++) {
         const UiWidget *w = widget_cget(g_act, order[i]);
         if (!w) continue;
         float x, y, ww, hh;
-        widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+        if (g_act == &g_wt) widget_rect_px(w, doc_w(), doc_h(), &x, &y, &ww, &hh);
+        else widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
         if (px >= x && px < x + ww && py >= y && py < y + hh) out[m++] = order[i];
     }
     return m;
@@ -332,11 +394,65 @@ static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
     memcpy(s->rgba, rgba, sizeof s->rgba);
 }
 
+// §14 F5l(3): ДОКУМЕНТ ЖИВЁТ ВО ВЬЮПОРТЕ (экран игры). Координаты виджетов
+// отсчитываются от его левого верхнего угла, а якоря L/R/T/B — от РАЗМЕРА ЭКРАНА
+// ИГРЫ (как в самой игре: предпросмотр = то, что увидит игрок). За границей
+// вьюпорта документа НЕТ (клип) — там хром редактора.
+static int doc_w(void) { return g_vpw > 0 ? g_vpw : g_WW; }
+static int doc_h(void) { return g_vph > 0 ? g_vph : g_WH; }
+static float doc_ox(void) { return g_vpw > 0 ? (float)g_vpx : 0.0f; }
+static float doc_oy(void) { return g_vpw > 0 ? (float)g_vpy : 0.0f; }
+// Активен ли документ (в self-режиме правим хром: он в пикселях окна).
+static int doc_live(void) { return g_act == &g_wt && g_vpw > 0; }
+// Пиксельный rect виджета в координатах ЭКРАНА: хит, грязь, рамка выбора.
+static void doc_px(const UiWidget *w, float *x, float *y, float *ww, float *hh) {
+    widget_rect_px(w, doc_w(), doc_h(), x, y, ww, hh);
+    *x += doc_ox();
+    *y += doc_oy();
+}
+// Обрезать фигуру редактора вьюпортом: документа за его границей не бывает
+// (иначе «виджет улетел» — тестер видел фигуру за экраном игры).
+static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, float h,
+                         const float rgba[4], float round) {
+    if (doc_live()) {
+        float x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+        float cx0 = (float)g_vpx, cy0 = (float)g_vpy;
+        float cx1 = cx0 + (float)g_vpw, cy1 = cy0 + (float)g_vph;
+        if (x0 < cx0) x0 = cx0;
+        if (y0 < cy0) y0 = cy0;
+        if (x1 > cx1) x1 = cx1;
+        if (y1 > cy1) y1 = cy1;
+        if (x1 <= x0 || y1 <= y0) return;
+        wt_emit(sh, n, x0, y0, x1 - x0, y1 - y0, rgba, round);
+        return;
+    }
+    wt_emit(sh, n, x, y, w, h, rgba, round);
+}
+
 // §14 F3c: заливки виджетов — из ОБЩЕГО рантайма (то же, что увидит игра).
 static void wt_draw_all(RcVecShape *sh, int *n) {
     RcVecShape tmp[UI_MAX_PRIMS];
-    int m = ui_widget_build(&g_wt, g_WW, g_WH, tmp, UI_MAX_PRIMS);
-    for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) sh[(*n)++] = tmp[i];
+    int m = ui_widget_build(&g_wt, doc_w(), doc_h(), tmp, UI_MAX_PRIMS);
+    for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) {
+        RcVecShape s = tmp[i];
+        s.a += doc_ox();
+        s.b += doc_oy();
+        if (doc_live() && s.kind == 0) { // F5l(3): за вьюпортом документа нет
+            float x0 = s.a, y0 = s.b, x1 = s.a + s.c, y1 = s.b + s.d;
+            float cx0 = (float)g_vpx, cy0 = (float)g_vpy;
+            float cx1 = cx0 + (float)g_vpw, cy1 = cy0 + (float)g_vph;
+            if (x0 < cx0) x0 = cx0;
+            if (y0 < cy0) y0 = cy0;
+            if (x1 > cx1) x1 = cx1;
+            if (y1 > cy1) y1 = cy1;
+            s.a = x0;
+            s.b = y0;
+            s.c = x1 - x0;
+            s.d = y1 - y0;
+            if (s.c <= 0.0f || s.d <= 0.0f) continue;
+        }
+        sh[(*n)++] = s;
+    }
 }
 
 // Хром редактора — тем же рантаймом (и это же дерево правится в self-режиме).
@@ -380,20 +496,21 @@ static void wt_draw_sel(RcVecShape *sh, int *n) {
     const UiWidget *s = widget_cget(g_act, g_wtSel);
     if (s) {
         float x, y, ww, hh;
-        widget_rect_px(s, g_WW, g_WH, &x, &y, &ww, &hh);
+        if (g_act == &g_wt) doc_px(s, &x, &y, &ww, &hh);
+        else widget_rect_px(s, g_WW, g_WH, &x, &y, &ww, &hh);
         static const float sel[4] = {0.25f, 0.55f, 1.0f, 1.0f};
-        wt_emit(sh, n, x - 1, y - 1, ww + 2, 2, sel, 0);
-        wt_emit(sh, n, x - 1, y + hh - 1, ww + 2, 2, sel, 0);
-        wt_emit(sh, n, x - 1, y, 2, hh, sel, 0);
-        wt_emit(sh, n, x + ww - 1, y, 2, hh, sel, 0);
+        ed_emit_clip(sh, n, x - 1, y - 1, ww + 2, 2, sel, 0);
+        ed_emit_clip(sh, n, x - 1, y + hh - 1, ww + 2, 2, sel, 0);
+        ed_emit_clip(sh, n, x - 1, y, 2, hh, sel, 0);
+        ed_emit_clip(sh, n, x + ww - 1, y, 2, hh, sel, 0);
         // 8 ручек ресайза (визуал «за что тянуть» — юзер просил).
         float hxs[3] = {x, x + ww * 0.5f, x + ww};
         float hys[3] = {y, y + hh * 0.5f, y + hh};
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++) {
                 if (i == 1 && j == 1) continue; // центр — не ручка
-                wt_emit(sh, n, hxs[i] - WT_HANDLE / 2, hys[j] - WT_HANDLE / 2, WT_HANDLE,
-                        WT_HANDLE, sel, 0);
+                ed_emit_clip(sh, n, hxs[i] - WT_HANDLE / 2, hys[j] - WT_HANDLE / 2,
+                             WT_HANDLE, WT_HANDLE, sel, 0);
             }
     }
 }
@@ -419,7 +536,6 @@ static void pal_draw(RcVecShape *sh, int *n) {
 
 // --- F3: дерево виджетов (иерархия + выбор кликом) ---
 // Строки идут в том же порядке, что и отрисовка (корни -> дети, в глубину).
-#define TREE_W 200
 #define TREE_RH 20
 // F5d: строка «хлебных крошек» (путь до выбранного) под заголовком панели.
 #define TREE_HDR 22
@@ -648,14 +764,13 @@ static void ins_rect(int i, float *x, float *y, float *w, float *h) {
 // окна) — двинулся док, двинулся хром. Правку юзера (g_edMoved) не перетираем.
 // §14 F5j: «домашнее» место панели в доке (панели соседствуют, не пересекаются).
 static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
-    float palW = (float)((TREE_W > PAL_BW ? TREE_W : PAL_BW) + 2 * PAL_PAD);
+    // §14 F5l(4): панели стоят в СВОИХ полосах дока, а не поверх экрана игры:
+    // левый док — от левого края ОКНА, правый — от правого, вьюпорт = середина.
+    float palW = (float)ED_DOCK_W;
     float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
-    float x0 = (float)(g_vpx + PAL_PAD);
-    // §14 F5k: док начинается ПОД полосой вкладок (она сама под легаси-хромом).
-    float y0 = (float)(g_vpy + PAL_PAD);
-    if (y0 < (float)(ED_TOP_CHROME + ED_TABS_H + PAL_PAD))
-        y0 = (float)(ED_TOP_CHROME + ED_TABS_H + PAL_PAD);
-    if (i == 0) { // палитра: верхний левый угол вьюпорта
+    float x0 = (float)PAL_PAD;
+    float y0 = (float)(ED_TOP_CHROME + ED_TABS_H + PAL_PAD); // под полосой вкладок
+    if (i == 0) { // палитра: верх левого дока
         *ox = x0;
         *oy = y0;
         *ow = palW;
@@ -669,7 +784,7 @@ static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
         *ow = palW;
         {
             float h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10);
-            float avail = (float)(g_vpy + g_vph) - ty - PAL_PAD;
+            float avail = (float)g_WH - ty - PAL_PAD;
             float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH);
             if (h > avail) h = avail;
             if (h < one) h = one;
@@ -677,14 +792,15 @@ static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
         }
         return;
     }
-    *ow = (float)(INS_W + 2 * PAL_PAD); // инспектор: справа во вьюпорте
-    *ox = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
+    *ow = (float)(INS_W + 2 * PAL_PAD); // инспектор: правый док
+    *ox = (float)(g_WW - ED_DOCK_W - PAL_PAD);
     *oy = y0;
     *oh = (float)(PAL_PAD * 2 + PAL_TITLE + INS_HEAD + IF_N * (INS_RH + INS_GAP));
 }
 // Раскладка хрома: панели, которых юзер НЕ двигал, ставим на их док-места.
 // Оторванную (g_edMoved) не трогаем — она живёт там, куда её положил юзер.
 static void ed_chrome_sync(void) {
+    ed_viewport_compute(); // F5l(4): вьюпорт = окно минус полосы доков
     for (int i = 0; i < 3; i++) {
         UiWidget *p = widget_get(&g_edWt, g_edPanels[i]);
         if (!p) continue;
@@ -821,7 +937,8 @@ static void ins_px(int *out) {
     const UiWidget *w = widget_cget(g_act, g_wtSel);
     if (!w) { out[0] = out[1] = out[2] = out[3] = 0; return; }
     float x, y, ww, hh;
-    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    if (g_act == &g_wt) doc_px(w, &x, &y, &ww, &hh);
+    else widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
     out[0] = (int)x;
     out[1] = (int)y;
     out[2] = (int)(ww + 0.5f);
@@ -897,7 +1014,16 @@ static int wt_handle_hit(float px, float py) {
     const UiWidget *s = widget_cget(g_act, g_wtSel);
     if (!s) return 0;
     float x, y, w, h;
-    widget_rect_px(s, g_WW, g_WH, &x, &y, &w, &h);
+    if (doc_live()) { // ручки документа — только внутри экрана игры
+        if (px < (float)g_vpx || px >= (float)(g_vpx + g_vpw) || py < (float)g_vpy ||
+            py >= (float)(g_vpy + g_vph))
+            return 0;
+        px -= doc_ox();
+        py -= doc_oy();
+        widget_rect_px(s, doc_w(), doc_h(), &x, &y, &w, &h);
+    } else {
+        widget_rect_px(s, g_WW, g_WH, &x, &y, &w, &h);
+    }
     if (px < x - 3 || px > x + w + 3 || py < y - 3 || py > y + h + 3) return 0;
     // Малый виджет: полоса захвата не больше трети стороны — иначе весь
     // прямоугольник станет «ручкой» и тело не подвинуть (баг «ресайз вместо move»).
@@ -920,7 +1046,9 @@ static void wt_drag_begin(int id, int handle, float mx, float my) {
     g_dragHandle = handle;
     g_dragMX = mx;
     g_dragMY = my;
-    widget_rect_px(w, g_WW, g_WH, &g_dragX, &g_dragY, &g_dragW, &g_dragH);
+    // F5l(3): геометрия драга — в координатах ЭКРАНА ИГРЫ (модель документа).
+    if (g_act == &g_wt) widget_rect_px(w, doc_w(), doc_h(), &g_dragX, &g_dragY, &g_dragW, &g_dragH);
+    else widget_rect_px(w, g_WW, g_WH, &g_dragX, &g_dragY, &g_dragW, &g_dragH);
     g_prevX = g_dragX;
     g_prevY = g_dragY;
     g_prevW = g_dragW;
@@ -976,7 +1104,8 @@ static void wt_bounds_walk(int id, float *x0, float *y0, float *x1, float *y1, i
     const UiWidget *w = widget_cget(g_act, id);
     if (!w) return;
     float x, y, ww, hh;
-    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    if (g_act == &g_wt) widget_rect_px(w, doc_w(), doc_h(), &x, &y, &ww, &hh);
+    else widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
     if (x < *x0) *x0 = x;
     if (y < *y0) *y0 = y;
     if (x + ww > *x1) *x1 = x + ww;
@@ -1062,8 +1191,8 @@ static void wt_drag_apply(float mx, float my) {
 #define WT_ADD_RECT(X, Y, W, H)                                                        \
     do {                                                                               \
         if (g_dirtyN < 12) {                                                           \
-            g_dirtyR[g_dirtyN][0] = (int)(X);                                          \
-            g_dirtyR[g_dirtyN][1] = (int)(Y);                                          \
+            g_dirtyR[g_dirtyN][0] = (int)((X) + (g_act == &g_wt ? doc_ox() : 0.0f));   \
+            g_dirtyR[g_dirtyN][1] = (int)((Y) + (g_act == &g_wt ? doc_oy() : 0.0f));   \
             g_dirtyR[g_dirtyN][2] = (int)(W);                                          \
             g_dirtyR[g_dirtyN][3] = (int)(H);                                          \
             g_dirtyN++;                                                                \
@@ -1108,7 +1237,8 @@ static void wt_drag_apply(float mx, float my) {
         g_prevW = nw;
         g_prevH = nh;
     }
-    pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
+    if (g_act == &g_wt) pt_to_anchor(w, nx, ny, nw, nh, doc_w(), doc_h());
+    else pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
 }
 
 // Персист §14 (F2a2): пишем виджеты в ТОТ ЖЕ layout.json, что и доки (§11).// widget_json_save заменяет только свою секцию, доки не трогает — и наоборот
@@ -1860,6 +1990,13 @@ static int wt_event(const UiEvent *e) {
 static int build_shapes(RcVecShape *shapes) {
     const UiFrame *fr = 0;
     int n = 0;
+    ed_viewport_compute(); // F5l(4): доки решают, где экран игры (до всего)
+    // §14 F5l(3): вокруг экрана игры — фон ОКНА РЕДАКТОРА. Раньше там была
+    // чёрная пустота, и это читалось как поломка («инструменты во вьюпорте»).
+    {
+        static const float chromeCol[4] = {0.10f, 0.11f, 0.14f, 1.0f};
+        wt_emit(shapes, &n, 0.0f, 0.0f, (float)g_WW, (float)g_WH, chromeCol, 0.0f);
+    }
     int panelsDirty = ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr);
     if (fr) {
         for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
@@ -1874,6 +2011,7 @@ static int build_shapes(RcVecShape *shapes) {
         }
     }
     ui_panels_viewport(g_panels, g_WW, g_WH, &g_vpx, &g_vpy, &g_vpw, &g_vph);
+    ed_viewport_compute(); // F5l(4): у редактора свой вьюпорт (легаси-доки скрыты)
     if (n < UI_MAX_PRIMS && g_vpw > 0 && g_vph > 0) {
         // Плашка вместо 3D (игровой редактор подставит сюда frame_to).
         static const float voidCol[4] = {0.03f, 0.04f, 0.07f, 1.0f};
@@ -2215,7 +2353,7 @@ int main(int argc, char **argv) {
             // Клик по телу виджета -> он же выбран (не сбрасывается).
             const UiWidget *W1 = widget_cget(&g_wt, p1);
             float bx, by, bw, bh;
-            widget_rect_px(W1, g_WW, g_WH, &bx, &by, &bw, &bh);
+            doc_px(W1, &bx, &by, &bw, &bh); // F5l(3): мышь — в координатах экрана
             g_wtSel = 0; // сброс, чтобы проверить именно выбор кликом
             memset(&we, 0, sizeof we);
             we.kind = UI_EV_DOWN;
@@ -2282,7 +2420,7 @@ int main(int argc, char **argv) {
             memset(g_wtN, 0, sizeof g_wtN);
             int id = wt_spawn(UI_W_BUTTON);
             float x0, y0, w0, h0;
-            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x0, &y0, &w0, &h0);
+            doc_px(widget_cget(&g_wt, id), &x0, &y0, &w0, &h0); // F5l(3): экран
             UiEvent we;
             // DOWN в теле -> move, MOVE +50/+30 -> сдвиг ровно на это, размер тот же.
             memset(&we, 0, sizeof we);
@@ -2296,7 +2434,7 @@ int main(int argc, char **argv) {
             we.y = y0 + h0 / 2 + 30;
             wt_event(&we);
             float x1, y1, w1, h1;
-            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x1, &y1, &w1, &h1);
+            doc_px(widget_cget(&g_wt, id), &x1, &y1, &w1, &h1); // F5l(3): экран
             if (x1 != x0 + 50 || y1 != y0 + 30 || w1 != w0 || h1 != h0) {
                 printf("SELF FAIL: wt-move %f %f %f %f\n", x1, y1, w1, h1);
                 bad = 1;
@@ -2324,7 +2462,7 @@ int main(int argc, char **argv) {
             we.y = y1 + h1 / 2;
             wt_event(&we);
             float x2, y2, w2, h2;
-            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x2, &y2, &w2, &h2);
+            doc_px(widget_cget(&g_wt, id), &x2, &y2, &w2, &h2); // F5l(3): экран
             if (x2 != x1 || y2 != y1 || w2 != w1 + 40 || h2 != h1) {
                 printf("SELF FAIL: wt-resize-r %f\n", w2);
                 bad = 1;
@@ -2344,7 +2482,7 @@ int main(int argc, char **argv) {
             we.y = y2 + h2 / 2;
             wt_event(&we);
             float x3, y3, w3, h3;
-            widget_rect_px(widget_cget(&g_wt, id), g_WW, g_WH, &x3, &y3, &w3, &h3);
+            doc_px(widget_cget(&g_wt, id), &x3, &y3, &w3, &h3); // F5l(3): экран
             if (w3 != WT_MIN) {
                 printf("SELF FAIL: wt-min %f\n", w3);
                 bad = 1;
@@ -2653,7 +2791,8 @@ int main(int argc, char **argv) {
             // Редакторская обёртка = тот же рантайм (не расходимся).
             UiWidgetTree keepRT = g_wt;
             g_wt = srn;
-            if (wt_hit(200, 200) != ui_widget_hit(&g_wt, g_WW, g_WH, 200, 200)) {
+            if (wt_hit(200 + doc_ox(), 200 + doc_oy()) !=
+                ui_widget_hit(&g_wt, g_WW, g_WH, 200, 200)) { // F5l(3): мышь -> экран игры
                 printf("SELF FAIL: rtb-wrap\n");
                 bad = 1;
             }
@@ -3653,8 +3792,8 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             float px0, py0, pw0, ph0, bx0, by0, bw0, bh0;
-            widget_rect_px(pw, g_WW, g_WH, &px0, &py0, &pw0, &ph0);
-            widget_rect_px(bw, g_WW, g_WH, &bx0, &by0, &bw0, &bh0);
+            doc_px(pw, &px0, &py0, &pw0, &ph0); // F5l(3): мышь и грязь — экран
+            doc_px(bw, &bx0, &by0, &bw0, &bh0);
             float rel0 = (bx0 - px0) * 1000.0f + (by0 - py0);
             // (1) тащим РОДИТЕЛЯ за тело: дитя обязано ехать с ним
             UiEvent de;
@@ -3673,8 +3812,8 @@ int main(int argc, char **argv) {
             de.y = py0 + 36;
             wt_event(&de);
             float px1, py1, pw1, ph1, bx1, by1, bw1, bh1;
-            widget_rect_px(pw, g_WW, g_WH, &px1, &py1, &pw1, &ph1);
-            widget_rect_px(bw, g_WW, g_WH, &bx1, &by1, &bw1, &bh1);
+            doc_px(pw, &px1, &py1, &pw1, &ph1);
+            doc_px(bw, &bx1, &by1, &bw1, &bh1);
             if (fabsf((px1 - px0) - 40.0f) > 0.5f || fabsf((py1 - py0) - 24.0f) > 0.5f ||
                 fabsf((bx1 - bx0) - 40.0f) > 0.5f || fabsf((by1 - by0) - 24.0f) > 0.5f) {
                 printf("SELF FAIL: group-move pal=%.0f,%.0f kid=%.0f,%.0f want +40,+24\n",
@@ -3721,7 +3860,7 @@ int main(int argc, char **argv) {
                 g_insPrevPx[2] = 0;
                 g_insPrevPx[3] = 0;
                 float cb0 = 0, cb1 = 0, cb2 = 0, cb3 = 0;
-                widget_rect_px(bw, g_WW, g_WH, &cb0, &cb1, &cb2, &cb3);
+                doc_px(bw, &cb0, &cb1, &cb2, &cb3);
                 float oldx = pw->rect.x;
                 UiEvent ie;
                 memset(&ie, 0, sizeof ie);
@@ -3730,7 +3869,7 @@ int main(int argc, char **argv) {
                 ie.y = 10.0f;
                 wt_event(&ie);
                 float cb4 = 0, cb5 = 0, cb6 = 0, cb7 = 0;
-                widget_rect_px(bw, g_WW, g_WH, &cb4, &cb5, &cb6, &cb7);
+                doc_px(bw, &cb4, &cb5, &cb6, &cb7);
                 float want = pw->rect.x - oldx;
                 if (fabsf((cb4 - cb0) - want) > 0.5f) {
                     printf("SELF FAIL: group-ins kid=%.0f want=%.0f\n", (double)(cb4 - cb0),
@@ -3738,6 +3877,110 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 g_insField = -1;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            ed_chrome_init();
+            ed_chrome_sync();
+        }
+        // §14 F5l(3): ДОКУМЕНТ ВНУТРИ ВЬЮПОРТА (экран игры). Тестер: «нажал на
+        // панель и зебра полетела» — в тесном окне виджет рождался ЗА границей
+        // экрана, а документ рисовался поверх хрома редактора.
+        {
+            for (int i = 0; i < 3; i++) g_edOrder[i] = i;
+            memset(g_edMoved, 0, sizeof g_edMoved);
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1;
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            ed_chrome_init();
+            ed_chrome_sync();
+            // (1) вьюпорт = окно МИНУС полосы доков; экран игры в середине
+            if (g_vpx != ED_DOCK_W + PAL_PAD ||
+                g_vpx + g_vpw != g_WW - (ED_DOCK_W + PAL_PAD) ||
+                g_vpy != ED_TOP_CHROME + ED_TABS_H + PAL_PAD || g_vpw <= 0 || g_vph <= 0) {
+                printf("SELF FAIL: dock-vp vp=%d,%d %dx%d\n", g_vpx, g_vpy, g_vpw, g_vph);
+                bad = 1;
+            }
+            // (2) якорь R цепляется к краю ЭКРАНА ИГРЫ, а не окна
+            UiWidgetRect rr;
+            memset(&rr, 0, sizeof rr);
+            rr.anchors = UI_A_RIGHT | UI_A_TOP;
+            rr.x = 10;
+            rr.y = 10;
+            rr.w = 100;
+            rr.h = 20;
+            int rid = widget_add(&g_wt, UI_W_LABEL, "R", 0, &rr, 0);
+            float rx, ry, rw, rh;
+            doc_px(widget_cget(&g_wt, rid), &rx, &ry, &rw, &rh);
+            if (fabsf((rx + rw) - (float)(g_vpx + g_vpw - 10)) > 0.5f) {
+                printf("SELF FAIL: doc-anchor-r %.0f want %d\n", (double)(rx + rw),
+                       g_vpx + g_vpw - 10);
+                bad = 1;
+            }
+            // (3) спавн ложится В экран игры (раньше — за окно)
+            int sid = wt_spawn(UI_W_PANEL);
+            const UiWidget *swp = widget_cget(&g_wt, sid);
+            if (!swp || swp->rect.x < 0.0f || swp->rect.y < 0.0f ||
+                swp->rect.x + swp->rect.w > (float)doc_w() ||
+                swp->rect.y + swp->rect.h > (float)doc_h()) {
+                printf("SELF FAIL: spawn-in-vp %.0f,%.0f vp=%dx%d\n", (double)swp->rect.x,
+                       (double)swp->rect.y, doc_w(), doc_h());
+                bad = 1;
+            }
+            // (4) за вьюпортом документа НЕТ: выехавший виджет обрезан, клик по
+            // доке документ не выбирает (раньше пиксели/клик уходили в хром)
+            UiWidget *ew = widget_get(&g_wt, sid);
+            ew->rect.x = -80.0f;
+            ew->rect.y = 40.0f;
+            RcVecShape dbuf[UI_MAX_PRIMS];
+            int dn = 0;
+            wt_draw_all(dbuf, &dn);
+            int leak = 0;
+            for (int i = 0; i < dn; i++) {
+                if (dbuf[i].a < (float)g_vpx - 0.5f || dbuf[i].b < (float)g_vpy - 0.5f ||
+                    dbuf[i].a + dbuf[i].c > (float)(g_vpx + g_vpw) + 0.5f ||
+                    dbuf[i].b + dbuf[i].d > (float)(g_vpy + g_vph) + 0.5f)
+                    leak++;
+            }
+            if (!dn || leak) {
+                printf("SELF FAIL: doc-clip n=%d leak=%d\n", dn, leak);
+                bad = 1;
+            }
+            // (300,250) — внутри экрана игры и попадает в виджет; (150,250) —
+            // левее вьюпорта (в доке) и не должен попадать, хотя по координатам
+            // документа та же точка.
+            if (!wt_hit(300.0f, 250.0f) || wt_hit(150.0f, 250.0f)) {
+                printf("SELF FAIL: doc-hit-out\n");
+                bad = 1;
+            }
+            // (5) тесное окно: доки и экран игры помещаются, а новый виджет
+            // зажимается внутрь маленького экрана (раньше рождался за окном)
+            {
+                int kw = g_WW, kh = g_WH;
+                g_WW = 640;
+                g_WH = 360;
+                ed_chrome_sync();
+                if (g_vpx != ED_DOCK_W + PAL_PAD || g_vpw < 64 || g_vph < 64 ||
+                    g_vpx + g_vpw > 640 - (ED_DOCK_W + PAL_PAD) + 1) {
+                    printf("SELF FAIL: vp-narrow vp=%d,%d %dx%d\n", g_vpx, g_vpy, g_vpw,
+                           g_vph);
+                    bad = 1;
+                }
+                widget_tree_init(&g_wt); // count=0 -> спавн из центра экрана игры
+                g_wtSel = 0;
+                int nid = wt_spawn(UI_W_PANEL);
+                const UiWidget *nw2 = widget_cget(&g_wt, nid);
+                if (!nw2 || nw2->rect.x < 0.0f || nw2->rect.y < 0.0f ||
+                    nw2->rect.x + nw2->rect.w > (float)doc_w() + 0.5f ||
+                    nw2->rect.y + nw2->rect.h > (float)doc_h() + 0.5f) {
+                    printf("SELF FAIL: spawn-narrow %.0f,%.0f %gx%g vp=%dx%d\n",
+                           (double)nw2->rect.x, (double)nw2->rect.y, (double)nw2->rect.w,
+                           (double)nw2->rect.h, doc_w(), doc_h());
+                    bad = 1;
+                }
+                g_WW = kw;
+                g_WH = kh;
+                ed_chrome_sync();
             }
             widget_tree_init(&g_wt);
             g_wtSel = 0;
@@ -3923,6 +4166,20 @@ int main(int argc, char **argv) {
         printf("ui_edit: window FAIL\n");
         return 1;
     }
+    { // §14 F5l: тест-инструмент — окно заданного размера. Жалоба тестера
+        // «нажал на панель и зебра полетела» пришла из ТЕСНОГО окна: проверяем
+        // доки/полосу вкладок на узком и низком окне (иначе не воспроизвести).
+        const char *ws = getenv("UI_EDIT_WIN");
+        int ww = 0, wh = 0;
+        if (ws && sscanf(ws, "%dx%d", &ww, &wh) == 2 && ww >= 240 && wh >= 240)
+            glfwSetWindowSize(win, ww, wh);
+    }
+    // §14 F5l(4): МИНИМАЛЬНЫЙ РАЗМЕР ОКНА. Доки (лево+право) и экран игры должны
+    // помещаться вместе: уже 2*(216+8)+192 = 640 окно не вмещает раскладку, и
+    // панели начинают наезжать друг на друга/на вьюпорт (тестер: «зебра улетела»
+    // из тесного окна). Так делают все редакторы (UE/Blender/Figma) — пол на
+    // размер, а не «сломанная раскладка на маленьком окне».
+    glfwSetWindowSizeLimits(win, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
     RenderCore *vec = rc_create("vec");
     if (!vec || !vec->init(vec, win)) {
         printf("ui_edit: vec FAIL\n");
@@ -3947,6 +4204,7 @@ int main(int argc, char **argv) {
     ed_chrome_init();        // §14 F3c(1b): собственный UI редактора — тоже виджеты
     ed_panels_load();        // §14 F5k: какие инструменты были открыты (переживают запуск)
     ui_panels_viewport(g_panels, g_WW, g_WH, &g_vpx, &g_vpy, &g_vpw, &g_vph);
+    ed_viewport_compute(); // F5l(4): вьюпорт редактора считают ДОКИ, а не легаси-панели
     ed_chrome_sync();
     {
         const char *sf = getenv("UI_EDIT_SELF");
@@ -4002,7 +4260,7 @@ int main(int argc, char **argv) {
     g_curArrow = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
     g_curResize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
     glfwShowWindow(win);
-    glfwMaximizeWindow(win);
+    if (!getenv("UI_EDIT_WIN")) glfwMaximizeWindow(win); // WIN=WxH: окно как просили
     glfwPollEvents();
     drain_ev();
     if (wt_persist_ok()) widget_json_load(&g_wt, wt_path()); // персист §14
@@ -4017,6 +4275,20 @@ int main(int argc, char **argv) {
         // Вложенность: демо показывает и глубину в дереве, и крошки предков.
         if (p && b) widget_reparent(&g_wt, b, p);
         if (b && l) widget_reparent(&g_wt, l, b);
+        { // Дети ЛОЖАТСЯ В ПАНЕЛЬ (модель абсолютная): иначе кнопка/подпись
+            // висят на краю панели и это читается как «виджет развалился».
+            UiWidget *pw = widget_get(&g_wt, p);
+            UiWidget *bw = widget_get(&g_wt, b);
+            UiWidget *lw = widget_get(&g_wt, l);
+            if (pw && bw) {
+                bw->rect.x = pw->rect.x + 24.0f;
+                bw->rect.y = pw->rect.y + 30.0f;
+            }
+            if (bw && lw) {
+                lw->rect.x = bw->rect.x + 8.0f;
+                lw->rect.y = bw->rect.y + bw->rect.h + 12.0f;
+            }
+        }
         if (l) g_wtSel = l; // выбран самый глубокий: Scene > Panel > Button > Label
         edit_push();
     }
@@ -4451,7 +4723,10 @@ int main(int argc, char **argv) {
                 const UiWidget *w = widget_cget(&g_wt, i + 1);
                 if (!w || w->type == UI_W_PANEL) continue;
                 float wx, wy, ww, hh;
-                widget_rect_px(w, g_WW, g_WH, &wx, &wy, &ww, &hh);
+                doc_px(w, &wx, &wy, &ww, &hh); // F5l(3): координаты экрана игры
+                if (wx < (float)g_vpx || wy < (float)g_vpy ||
+                    wx >= (float)(g_vpx + g_vpw) || wy >= (float)(g_vpy + g_vph))
+                    continue; // за вьюпортом подписи нет (документ туда обрезан)
                 if (ed_text_vis(-1, wx + 6, wy + (hh - 16) / 2))
                     ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
             }
@@ -4573,9 +4848,16 @@ int main(int argc, char **argv) {
         if (shot && shot[0] && frames == shotAt) {
             uint8_t *px = (uint8_t *)malloc((size_t)g_WW * g_WH * 3);
             if (px) {
+                // ПАК-ВЫРАВНИВАНИЕ: по умолчанию пак = 4 байта, и для ширины
+                // не кратной 4 (217, 317, …) GL дописывает паддинг в КОНЕЦ
+                // строки — за границу буфера. Это НЕ косметика: тестер «нажал
+                // на панель, и зебра улетела» приходил из тесного окна, где
+                // программа портила кучу и рисовала мусор. Пишем строго 3*w.
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
                 glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
                 glReadPixels(0, 0, g_WW, g_WH, GL_RGB, GL_UNSIGNED_BYTE, px);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glPixelStorei(GL_PACK_ALIGNMENT, 4);
                 FILE *ff = fopen(shot, "wb");
                 if (ff) {
                     fprintf(ff, "P6\n%d %d\n255\n", g_WW, g_WH);
@@ -4621,7 +4903,7 @@ int main(int argc, char **argv) {
             if (frames == 10) {
                 const UiWidget *bw = widget_cget(&g_wt, g_benchId);
                 float bx, by, bww, bhh;
-                widget_rect_px(bw, g_WW, g_WH, &bx, &by, &bww, &bhh);
+                doc_px(bw, &bx, &by, &bww, &bhh); // F5l(3): мышь — экран, не модель
                 if (g_benchResize) { // хватаем правую ручку (или угол BR)
                     g_benchX = bx + bww - 1;
                     g_benchY = g_benchCorner ? by + bhh - 1 : by + bhh / 2;
