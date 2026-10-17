@@ -136,14 +136,44 @@ static int wt_spawn(int type) {
 }
 
 // Верхний (по id — дети выше родителей) под точкой.
+// Соседи данного parent в порядке слоёв (z, затем id) — единый порядок
+// отрисовки, хита и дерева (§14 F3: кто ниже/выше).
+static int wt_sib_sorted(int parent, int *out) {
+    int n = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (g_wt.alive[i] && g_wt.items[i].parent == parent) out[n++] = i + 1;
+    for (int i = 1; i < n; i++) {
+        int k = out[i], j = i - 1;
+        while (j >= 0) {
+            const UiWidget *a = widget_cget(&g_wt, out[j]);
+            const UiWidget *b = widget_cget(&g_wt, k);
+            if (a->z > b->z || (a->z == b->z && out[j] > k)) {
+                out[j + 1] = out[j];
+                j--;
+            } else
+                break;
+        }
+        out[j + 1] = k;
+    }
+    return n;
+}
+
+static void wt_hit_rec(float px, float py, int id, int *best) {
+    const UiWidget *w = widget_cget(&g_wt, id);
+    if (!w) return;
+    float x, y, ww, hh;
+    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    if (px >= x && px < x + ww && py >= y && py < y + hh) *best = id; // верхний = последний
+    int kids[UI_MAX_WIDGETS];
+    int n = wt_sib_sorted(id, kids);
+    for (int i = 0; i < n; i++) wt_hit_rec(px, py, kids[i], best);
+}
+
 static int wt_hit(float px, float py) {
     int best = 0;
-    for (int i = 0; i < UI_MAX_WIDGETS; i++) {
-        if (!g_wt.alive[i]) continue;
-        float x, y, w, h;
-        widget_rect_px(&g_wt.items[i], g_WW, g_WH, &x, &y, &w, &h);
-        if (px >= x && px < x + w && py >= y && py < y + h) best = i + 1;
-    }
+    int roots[UI_MAX_WIDGETS];
+    int n = wt_sib_sorted(0, roots);
+    for (int i = 0; i < n; i++) wt_hit_rec(px, py, roots[i], &best);
     return best;
 }
 
@@ -169,13 +199,16 @@ static void wt_draw_node(RcVecShape *sh, int *n, int id) {
     float col[4] = {w->style.bg[0], w->style.bg[1], w->style.bg[2],
                     w->style.bg[3] * w->style.alpha};
     if (col[3] > 0.001f) wt_emit(sh, n, x, y, ww, hh, col, w->style.rounding);
-    for (int i = 0; i < w->nchildren; i++) wt_draw_node(sh, n, w->children[i]);
+    int kids[UI_MAX_WIDGETS];
+    int nk = wt_sib_sorted(id, kids); // дети — по слоям
+    for (int i = 0; i < nk; i++) wt_draw_node(sh, n, kids[i]);
 }
 
-// Виджеты (корни->дети), затем рамка выбора. Палитра — отдельно (поверх).
+// Виджеты (корни->дети по слоям), затем рамка выбора. Палитра — отдельно (поверх).
 static void wt_draw_all(RcVecShape *sh, int *n) {
-    for (int i = 0; i < UI_MAX_WIDGETS; i++)
-        if (g_wt.alive[i] && g_wt.items[i].parent == 0) wt_draw_node(sh, n, i + 1);
+    int roots[UI_MAX_WIDGETS];
+    int nr = wt_sib_sorted(0, roots);
+    for (int i = 0; i < nr; i++) wt_draw_node(sh, n, roots[i]);
     const UiWidget *s = widget_cget(&g_wt, g_wtSel);
     if (s) {
         float x, y, ww, hh;
@@ -226,12 +259,15 @@ static void tree_collect(int id, int depth) {
     g_treeId[g_treeN] = id;
     g_treeDepth[g_treeN] = depth;
     g_treeN++;
-    for (int i = 0; i < w->nchildren; i++) tree_collect(w->children[i], depth + 1);
+    int kids[UI_MAX_WIDGETS];
+    int nk = wt_sib_sorted(id, kids); // порядок = слои (как рисуем)
+    for (int i = 0; i < nk; i++) tree_collect(kids[i], depth + 1);
 }
 static void tree_build(void) {
     g_treeN = 0;
-    for (int i = 0; i < UI_MAX_WIDGETS; i++)
-        if (g_wt.alive[i] && g_wt.items[i].parent == 0) tree_collect(i + 1, 0);
+    int roots[UI_MAX_WIDGETS];
+    int nr = wt_sib_sorted(0, roots);
+    for (int i = 0; i < nr; i++) tree_collect(roots[i], 0);
 }
 static void tree_rect(int row, float *x, float *y, float *w, float *h) {
     *x = (float)(g_vpx + 10);
@@ -267,6 +303,105 @@ static void tree_draw(RcVecShape *sh, int *n) {
         float tc[4];
         type_col(wd->type, tc);
         wt_emit(sh, n, x + 4 + (float)(g_treeDepth[i] * 10), y + 4, 4, h - 8, tc, 0);
+    }
+}
+
+// --- F3b: инспектор (правка выбранного) ---
+// Справа: строки полей. Числа тянутся мышью влево/вправо (scrub, как в
+// Blender/UE); Lay +/- меняет слой среди соседей. Пишем на коммит (UP).
+#define INS_W 200
+#define INS_RH 20
+#define INS_GAP 2
+enum {
+    IF_X, IF_Y, IF_W, IF_H, IF_ROUND, IF_ALPHA, IF_FONT,
+    IF_BG_R, IF_BG_G, IF_BG_B, IF_UP, IF_DOWN, IF_N
+};
+static const char *INS_LABEL[IF_N] = {"x",   "y",     "w",     "h",     "round",
+                                      "alpha", "font", "bg.r", "bg.g", "bg.b",
+                                      "Lay +", "Lay -"};
+static int g_insField = -1;      // какой ряд тянем (scrub), -1 = нет
+static float g_insDownX = 0;     // мышь на DOWN
+static float g_insDownVal = 0;   // значение на DOWN
+static int g_insPrevPx[4];       // прошлый пиксельный rect (dirty-rect)
+
+static void ins_rect(int i, float *x, float *y, float *w, float *h) {
+    *x = (float)(g_vpx + g_vpw - INS_W - 10);
+    *y = (float)(g_vpy + 30 + i * (INS_RH + INS_GAP));
+    *w = (float)INS_W;
+    *h = (float)INS_RH;
+}
+static float *ins_slot(UiWidget *w, int f) {
+    switch (f) {
+    case IF_X: return &w->rect.x;
+    case IF_Y: return &w->rect.y;
+    case IF_W: return &w->rect.w;
+    case IF_H: return &w->rect.h;
+    case IF_ROUND: return &w->style.rounding;
+    case IF_ALPHA: return &w->style.alpha;
+    case IF_FONT: return &w->style.fontSize;
+    case IF_BG_R: return &w->style.bg[0];
+    case IF_BG_G: return &w->style.bg[1];
+    case IF_BG_B: return &w->style.bg[2];
+    }
+    return 0;
+}
+static float ins_step(int f) {
+    if (f == IF_ROUND) return 0.25f;
+    if (f == IF_ALPHA || (f >= IF_BG_R && f <= IF_BG_B)) return 0.01f;
+    return 1.0f;
+}
+static void ins_clamp(int f, float *v) {
+    if (f == IF_W || f == IF_H) {
+        if (*v < 8.0f) *v = 8.0f;
+    } else if (f == IF_ROUND) {
+        if (*v < 0) *v = 0;
+    } else if (f == IF_ALPHA || (f >= IF_BG_R && f <= IF_BG_B)) {
+        if (*v < 0) *v = 0;
+        if (*v > 1) *v = 1;
+    } else if (f == IF_FONT) {
+        if (*v < 6) *v = 6;
+        if (*v > 48) *v = 48;
+    }
+}
+static int ins_hit(float px, float py) {
+    if (!g_wtSel) return -1;
+    for (int i = 0; i < IF_N; i++) {
+        float x, y, w, h;
+        ins_rect(i, &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) return i;
+    }
+    return -1;
+}
+static void ins_px(int *out) {
+    const UiWidget *w = widget_cget(&g_wt, g_wtSel);
+    if (!w) { out[0] = out[1] = out[2] = out[3] = 0; return; }
+    float x, y, ww, hh;
+    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    out[0] = (int)x;
+    out[1] = (int)y;
+    out[2] = (int)(ww + 0.5f);
+    out[3] = (int)(hh + 0.5f);
+}
+static void ins_draw(RcVecShape *sh, int *n) {
+    if (!g_wtSel) return;
+    const UiWidget *w = widget_cget(&g_wt, g_wtSel);
+    if (!w) return;
+    float tx, ty, tw, th;
+    ins_rect(-1, &tx, &ty, &tw, &th); // заголовок над строками
+    ty = (float)(g_vpy + 10);
+    th = 18.0f;
+    float hc[4] = {0.22f, 0.24f, 0.30f, 1.0f};
+    wt_emit(sh, n, tx, ty, tw, th, hc, 3.0f);
+    for (int i = 0; i < IF_N; i++) {
+        float x, y, ww, hh;
+        ins_rect(i, &x, &y, &ww, &hh);
+        float c[4] = {0.16f, 0.17f, 0.21f, 1.0f};
+        if (i == g_insField) { c[0] = 0.30f; c[1] = 0.45f; c[2] = 0.75f; }
+        wt_emit(sh, n, x, y, ww, hh, c, 3.0f);
+        if (i >= IF_BG_R && i <= IF_BG_B) {
+            float sc[4] = {w->style.bg[0], w->style.bg[1], w->style.bg[2], 1.0f};
+            wt_emit(sh, n, x + ww - 18, y + 3, 14, hh - 6, sc, 2.0f);
+        }
     }
 }
 
@@ -432,8 +567,10 @@ static void wt_drag_apply(float mx, float my) {
     pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
 }
 
-// Персист §14 (F2a2): пишем виджеты в ТОТ ЖЕ layout.json, что и доки (§11).
-// widget_json_save заменяет только свою секцию, доки не трогает — и наоборот
+static void edit_push(void); // определения ниже: инспектор зовёт их из wt_event
+static void edit_push_dirtyN(const int (*rects)[4], int cnt);
+
+// Персист §14 (F2a2): пишем виджеты в ТОТ ЖЕ layout.json, что и доки (§11).// widget_json_save заменяет только свою секцию, доки не трогает — и наоборот
 // (lay_save переносит "widgets"). Пишем на КОММИТ (конец драга/спавн), не на
 // каждый шаг. В seed/bench/скриншот-режимах файл не пачкаем (герметичность).
 static int wt_persist_ok(void) {
@@ -446,6 +583,31 @@ static void wt_persist(void) {
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_MOVE) {
+        if (g_insField >= 0) { // F3b: scrub поля инспектора
+            UiWidget *w = widget_get(&g_wt, g_wtSel);
+            float *slot = w ? ins_slot(w, g_insField) : 0;
+            if (slot) {
+                float v = g_insDownVal + (e->x - g_insDownX) * ins_step(g_insField);
+                ins_clamp(g_insField, &v);
+                *slot = v;
+                int now[4], u[4];
+                ins_px(now);
+                u[0] = g_insPrevPx[0] < now[0] ? g_insPrevPx[0] : now[0];
+                u[1] = g_insPrevPx[1] < now[1] ? g_insPrevPx[1] : now[1];
+                int rx = g_insPrevPx[0] + g_insPrevPx[2] > now[0] + now[2]
+                             ? g_insPrevPx[0] + g_insPrevPx[2]
+                             : now[0] + now[2];
+                int ry = g_insPrevPx[1] + g_insPrevPx[3] > now[1] + now[3]
+                             ? g_insPrevPx[1] + g_insPrevPx[3]
+                             : now[1] + now[3];
+                u[2] = rx - u[0];
+                u[3] = ry - u[1];
+                int one[1][4] = {{u[0], u[1], u[2], u[3]}};
+                edit_push_dirtyN(one, 1); // растр только региона
+                for (int k = 0; k < 4; k++) g_insPrevPx[k] = now[k];
+            }
+            return 1;
+        }
         if (g_dragId) {
             wt_drag_apply(e->x, e->y);
             return 1;
@@ -458,6 +620,12 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind == UI_EV_UP) {
+        if (g_insField >= 0) { // F3b: конец scrub
+            g_insField = -1;
+            wt_persist();
+            edit_push(); // снять подсветку ряда
+            return 1;
+        }
         if (g_dragId) {
             g_dragId = 0;
             g_dragHandle = 0;
@@ -477,6 +645,26 @@ static int wt_event(const UiEvent *e) {
     int ti = tree_hit(e->x, e->y);
     if (ti) { // F3: выбор виджета из дерева
         g_wtSel = ti;
+        return 1;
+    }
+    int ii = ins_hit(e->x, e->y);
+    if (ii >= 0) { // F3b: инспектор
+        if (ii == IF_UP || ii == IF_DOWN) {
+            if (widget_layer(&g_wt, g_wtSel, ii == IF_UP ? 1 : -1)) {
+                wt_persist();
+                edit_push(); // порядок слоёв изменился — полный кадр
+            }
+        } else {
+            UiWidget *w = widget_get(&g_wt, g_wtSel);
+            float *slot = w ? ins_slot(w, ii) : 0;
+            if (slot) {
+                g_insField = ii;
+                g_insDownX = e->x;
+                g_insDownVal = *slot;
+                ins_px(g_insPrevPx);
+                edit_push(); // подсветка ряда
+            }
+        }
         return 1;
     }
     int hb = wt_handle_hit(e->x, e->y);
@@ -534,6 +722,7 @@ static int build_shapes(RcVecShape *shapes) {
     (void)panelsDirty;
     wt_draw_all(shapes, &n);
     tree_draw(shapes, &n); // F3: дерево (под палитрой)
+    ins_draw(shapes, &n);  // F3b: инспектор (справа)
     pal_draw(shapes, &n);
     return n;
 }
@@ -1058,6 +1247,50 @@ int main(int argc, char **argv) {
                 }
                 g_wt = keep;
             }
+            // F3: слои (z) — сдвиг меняет порядок отрисовки/хита; край не двигается.
+            {
+                UiWidgetTree keep = g_wt;
+                g_wt = wt;
+                int before[UI_MAX_WIDGETS], after[UI_MAX_WIDGETS];
+                int nb = wt_sib_sorted(P, before);
+                if (nb < 2) { printf("SELF FAIL: lay-n\n"); bad = 1; }
+                if (!widget_layer(&g_wt, before[0], +1)) {
+                    printf("SELF FAIL: lay-raise\n");
+                    bad = 1;
+                }
+                int na = wt_sib_sorted(P, after);
+                if (na != nb || after[0] != before[1] || after[1] != before[0]) {
+                    printf("SELF FAIL: lay-swap\n");
+                    bad = 1;
+                }
+                if (widget_layer(&g_wt, after[na - 1], +1)) {
+                    printf("SELF FAIL: lay-top\n"); // верхний край — некуда
+                    bad = 1;
+                }
+                g_wt = keep;
+            }
+            // z переживает roundtrip save/load.
+            {
+                const char *zp = "/tmp/opencode/widget_z.json";
+                remove(zp);
+                if (!widget_json_save(&wt, zp)) {
+                    printf("SELF FAIL: z-save\n");
+                    bad = 1;
+                }
+                UiWidgetTree zt;
+                widget_tree_init(&zt);
+                if (!widget_json_load(&zt, zp) || zt.count != 9) {
+                    printf("SELF FAIL: z-load count=%d\n", zt.count);
+                    bad = 1;
+                } else {
+                    int a = widget_find(&zt, "k1");
+                    if (!a || widget_cget(&zt, a)->z != widget_cget(&wt, a)->z) {
+                        printf("SELF FAIL: z-keep\n");
+                        bad = 1;
+                    }
+                }
+                remove(zp);
+            }
             UiWidgetTree rt;
             widget_tree_init(&rt);
             if (!widget_json_load(&rt, "/tmp/opencode/widget_dock.json") || rt.count != 9) {
@@ -1352,6 +1585,42 @@ int main(int argc, char **argv) {
                 tree_rect(i, &tx, &ty, &tw, &th);
                 ui_text_quad(text, tx + 16 + (float)(g_treeDepth[i] * 10), ty + 3, wd->name,
                              tcol);
+            }
+            // F3b: подписи инспектора (заголовок + поля).
+            if (g_wtSel) {
+                const UiWidget *sw = widget_cget(&g_wt, g_wtSel);
+                if (sw) {
+                    float hx, hy, hw, hh;
+                    ins_rect(-1, &hx, &hy, &hw, &hh);
+                    (void)hy;
+                    (void)hw;
+                    (void)hh;
+                    ui_text_quad(text, hx + 6, (float)(g_vpy + 12), sw->name, tcol);
+                    for (int i = 0; i < IF_N; i++) {
+                        float x, y, ww, hh2;
+                        ins_rect(i, &x, &y, &ww, &hh2);
+                        ui_text_quad(text, x + 6, y + 3, INS_LABEL[i], tcol);
+                        char vb[32];
+                        vb[0] = 0;
+                        if (i == IF_X) snprintf(vb, sizeof vb, "%.0f", (double)sw->rect.x);
+                        else if (i == IF_Y) snprintf(vb, sizeof vb, "%.0f", (double)sw->rect.y);
+                        else if (i == IF_W) snprintf(vb, sizeof vb, "%.0f", (double)sw->rect.w);
+                        else if (i == IF_H) snprintf(vb, sizeof vb, "%.0f", (double)sw->rect.h);
+                        else if (i == IF_ROUND)
+                            snprintf(vb, sizeof vb, "%.2f", (double)sw->style.rounding);
+                        else if (i == IF_ALPHA)
+                            snprintf(vb, sizeof vb, "%.2f", (double)sw->style.alpha);
+                        else if (i == IF_FONT)
+                            snprintf(vb, sizeof vb, "%.0f", (double)sw->style.fontSize);
+                        else if (i == IF_BG_R)
+                            snprintf(vb, sizeof vb, "%.2f", (double)sw->style.bg[0]);
+                        else if (i == IF_BG_G)
+                            snprintf(vb, sizeof vb, "%.2f", (double)sw->style.bg[1]);
+                        else if (i == IF_BG_B)
+                            snprintf(vb, sizeof vb, "%.2f", (double)sw->style.bg[2]);
+                        if (vb[0]) ui_text_quad(text, x + 70, y + 3, vb, tcol);
+                    }
+                }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
                          "frontedit: click palette=add | click widget=select | blue edges resize"

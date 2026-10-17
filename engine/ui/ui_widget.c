@@ -89,9 +89,52 @@ int widget_add(UiWidgetTree *t, int type, const char *name, int parent,
     w->parent = parent;
     if (rect) w->rect = *rect;
     if (style) w->style = *style;
+    // Слой: новый виджет ложится ПОВЕРХ соседей (тот же parent).
+    w->z = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (t->alive[i] && t->items[i].parent == parent && t->items[i].z >= w->z)
+            w->z = t->items[i].z + 1;
     t->alive[s] = 1;
     t->count++;
     return w->id;
+}
+
+// Слой среди соседей: нормализуем z в порядок 0..n-1 (по (z,id)) и меняем
+// местами с соседом в направлении dir. 1 = изменилось.
+int widget_layer(UiWidgetTree *t, int id, int dir) {
+    UiWidget *w = widget_get(t, id);
+    if (!t || !w || !dir) return 0;
+    int sib[UI_MAX_WIDGETS];
+    int n = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (t->alive[i] && t->items[i].parent == w->parent) sib[n++] = i + 1;
+    if (n < 2) return 0;
+    for (int i = 1; i < n; i++) { // вставками по (z, id)
+        int k = sib[i], j = i - 1;
+        while (j >= 0) {
+            const UiWidget *a = widget_cget(t, sib[j]);
+            const UiWidget *b = widget_cget(t, k);
+            if (a->z > b->z || (a->z == b->z && sib[j] > k)) {
+                sib[j + 1] = sib[j];
+                j--;
+            } else
+                break;
+        }
+        sib[j + 1] = k;
+    }
+    int pos = -1;
+    for (int i = 0; i < n; i++)
+        if (sib[i] == id) { pos = i; break; }
+    if (pos < 0) return 0;
+    int np = pos + dir;
+    if (np < 0 || np >= n) return 0; // уже край
+    for (int i = 0; i < n; i++) widget_get(t, sib[i])->z = i; // нормализация
+    UiWidget *A = widget_get(t, sib[pos]);
+    UiWidget *B = widget_get(t, sib[np]);
+    int tmp = A->z;
+    A->z = B->z;
+    B->z = tmp;
+    return 1;
 }
 
 // Рекурсия по детям (глубина <= 64, дерево маленькое — стека хватает).
@@ -240,11 +283,11 @@ int widget_json_save(const UiWidgetTree *t, const char *path) {
                       "%s{\"id\":%d,\"type\":%d,\"name\":\"%.47s\",\"parent\":%d,"
                       "\"a\":%d,\"x\":%.2f,\"y\":%.2f,\"w\":%.2f,\"h\":%.2f,"
                       "\"bg\":[%.3f,%.3f,%.3f,%.3f],\"round\":%.2f,\"alpha\":%.3f,"
-                      "\"font\":%.1f,\"on\":\"%.63s\"}",
+                      "\"font\":%.1f,\"z\":%d,\"on\":\"%.63s\"}",
                       first ? "" : ",", w->id, w->type, w->name, w->parent, w->rect.anchors,
                       w->rect.x, w->rect.y, w->rect.w, w->rect.h, w->style.bg[0],
                       w->style.bg[1], w->style.bg[2], w->style.bg[3], w->style.rounding,
-                      w->style.alpha, w->style.fontSize, w->bind.handler);
+                      w->style.alpha, w->style.fontSize, w->z, w->bind.handler);
         if (n >= (int)sizeof body - 512) return 0; // не влезло — честный отказ
         first = 0;
     }
@@ -378,6 +421,11 @@ int widget_json_load(UiWidgetTree *t, const char *path) {
         num_at(obj, "round", &w->style.rounding);
         num_at(obj, "alpha", &w->style.alpha);
         num_at(obj, "font", &w->style.fontSize);
+        {
+            float zf = 0;
+            num_at(obj, "z", &zf); // нет поля (старый файл) = 0, порядок по id
+            w->z = (int)zf;
+        }
         {
             float r = 0, g = 0, bl = 0, al = 1;
             const char *bf = strstr(obj, "\"bg\"");

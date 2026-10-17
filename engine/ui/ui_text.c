@@ -89,7 +89,10 @@ UiText *ui_text_init(const char *fontPath, float px) {
     glGenBuffers(1, &t->vbo);
     glBindVertexArray(t->vao);
     glBindBuffer(GL_ARRAY_BUFFER, t->vbo);
-    glBufferData(GL_ARRAY_BUFFER, (size_t)UI_TEXT_MAXQ * 4 * 8 * sizeof(float), 0,
+    // 6 вершин на квад (2 треугольника, БЕЗ индексного буфера) — как в flush.
+    // Было *4: при >341 квадре glBufferSubData переполнял VBO и ВЕСЬ текст
+    // пропадал (GL-ошибка). Баг латентный, всплыл на плотном кадре (инспектор).
+    glBufferData(GL_ARRAY_BUFFER, (size_t)UI_TEXT_MAXQ * 6 * 8 * sizeof(float), 0,
                  GL_DYNAMIC_DRAW);
     // xyuv rgba(4): stride 8 float
     glVertexAttribPointer(0, 2, GL_FLOAT, 0, 8 * sizeof(float), (void *)0);

@@ -47,6 +47,7 @@ typedef struct {
     int parent; // id родителя, 0 = корень
     int children[UI_MAX_WIDGET_KIDS]; // id детей (ведём руками, как layHist)
     int nchildren;
+    int z; // слой среди соседей (0 = ниже всех): порядок отрисовки/хита (§14 F3)
     UiWidgetRect rect;
     UiWidgetStyle style;
     UiWidgetBind bind;
@@ -69,6 +70,9 @@ int widget_remove(UiWidgetTree *t, int id);
 int widget_find(const UiWidgetTree *t, const char *name);
 // Перевесить к новому родителю (0 = корень). Циклы/чужие/переполнение = 0.
 int widget_reparent(UiWidgetTree *t, int id, int newParent);
+// Слой: сдвинуть id на dir (+1 выше, -1 ниже) среди соседей (тот же parent).
+// 1 = изменилось (z пересчитан 0..n-1), 0 = уже край/нет виджета.
+int widget_layer(UiWidgetTree *t, int id, int dir);
 // Указатель (живёт пока дерево). 0 = нет.
 UiWidget *widget_get(UiWidgetTree *t, int id);
 const UiWidget *widget_cget(const UiWidgetTree *t, int id);
