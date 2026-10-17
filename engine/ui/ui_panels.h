@@ -15,6 +15,8 @@ typedef struct UiPanels UiPanels;
 
 UiPanels *ui_panels_create(void);
 void ui_panels_destroy(UiPanels *p);
+// Явное сохранение раскладки доков в path (чужая секция "widgets" переносится).
+int ui_panels_save_layout(UiPanels *p, const char *path);
 // Ввод как FReply: handled + захват мыши (см. ui_bind.h). Dirty внутри reply.
 UiReply ui_panels_event(UiPanels *p, ScWorld *scene, const UiEvent *e);
 // Построить rect-примитивы (dirty-паттерн как eng_ui_build).

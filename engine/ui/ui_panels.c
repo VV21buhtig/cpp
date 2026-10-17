@@ -160,25 +160,72 @@ static void lay_load(UiPanels *p, const char *path) {
     p->dirty = 1;
 }
 
+// ОДИН файл layout.json — ДВА писателя: §11 доки (здесь) и §14 виджеты
+// (widget_json_save). Пишем только СВОИ ключи, а чужую секцию "widgets"
+// переносим как есть (read-modify-write, без клоббера). Скан без парсера:
+// массив верхнего уровня, строки с экранированием — этого достаточно.
+#define LAY_FILE_CAP 65536
+static int lay_widgets_span(const char *s, const char **a, const char **b) {
+    const char *p = strstr(s, "\"widgets\"");
+    if (!p) return 0;
+    p = strchr(p, '[');
+    if (!p) return 0;
+    int depth = 0, in = 0;
+    for (const char *q = p; *q; q++) {
+        char c = *q;
+        if (in) {
+            if (c == '\\') { q++; continue; }
+            if (c == '"') in = 0;
+            continue;
+        }
+        if (c == '"') { in = 1; continue; }
+        if (c == '[') depth++;
+        else if (c == ']' && --depth == 0) { *a = p; *b = q; return 1; }
+    }
+    return 0;
+}
+
 static int lay_save(const UiPanels *p, const char *path) {
     if (!p || !path) return 0;
-    FILE *ff = fopen(path, "wb");
-    if (!ff) return 0;
-    fprintf(ff,
+    char dock[512];
+    int dn = snprintf(dock, sizeof dock,
             "{\n"
             "  \"_note\": \"editor layout (§11): widths/visibility/swap. Hot-reload by mtime.\",\n"
             "  \"hierW\": [%d],\n"
             "  \"inspW\": [%d],\n"
             "  \"showHier\": [%d],\n"
             "  \"showInsp\": [%d],\n"
-            "  \"swapped\": [%d]\n"
-            "}\n",
+            "  \"swapped\": [%d]",
             p->hierW, p->inspW, p->showHier, p->showInsp, p->swapped);
+    if (dn <= 0 || (size_t)dn >= sizeof dock) return 0;
+    char file[LAY_FILE_CAP + 1];
+    file[0] = 0;
+    FILE *rf = fopen(path, "rb");
+    if (rf) {
+        size_t got = fread(file, 1, LAY_FILE_CAP, rf);
+        file[got] = 0;
+        fclose(rf);
+    }
+    const char *a = 0, *b = 0;
+    char out[LAY_FILE_CAP + 1024];
+    int m;
+    if (file[0] && lay_widgets_span(file, &a, &b))
+        m = snprintf(out, sizeof out, "%s,\n  \"widgets\": %.*s\n}\n", dock,
+                     (int)(b - a + 1), a); // чужая секция — как есть
+    else
+        m = snprintf(out, sizeof out, "%s\n}\n", dock);
+    if (m <= 0 || (size_t)m >= sizeof out) return 0;
+    FILE *ff = fopen(path, "wb");
+    if (!ff) return 0;
+    int ok = fwrite(out, 1, (size_t)m, ff) == (size_t)m;
     fclose(ff);
+    if (!ok) return 0;
     struct stat st;
     if (stat(path, &st) == 0) g_layMtime = (long)st.st_mtime;
     return 1;
 }
+
+int ui_panels_save_layout(UiPanels *p, const char *path) { return lay_save(p, path); }
 
 static void lay_commit(UiPanels *p) {
     // Коммит раскладки: история + файл (§11 хвост).

@@ -20,6 +20,7 @@
 
 #define W 1280
 #define H 720 // дефолт до первого замера
+#define UI_LAYOUT_PATH "engine/assets/layout.json" // обменник с игровым редактором
 
 static int g_WW = W, g_WH = H; // живой размер (фреймбуферные пиксели)
 static float g_mouseKx = 1.0f, g_mouseKy = 1.0f;
@@ -372,6 +373,17 @@ static void wt_drag_apply(float mx, float my) {
     pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
 }
 
+// Персист §14 (F2a2): пишем виджеты в ТОТ ЖЕ layout.json, что и доки (§11).
+// widget_json_save заменяет только свою секцию, доки не трогает — и наоборот
+// (lay_save переносит "widgets"). Пишем на КОММИТ (конец драга/спавн), не на
+// каждый шаг. В seed/bench/скриншот-режимах файл не пачкаем (герметичность).
+static int wt_persist_ok(void) {
+    return !getenv("UI_EDIT_SEED") && !getenv("UI_EDIT_BENCH");
+}
+static void wt_persist(void) {
+    if (wt_persist_ok()) widget_json_save(&g_wt, UI_LAYOUT_PATH);
+}
+
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_MOVE) {
@@ -390,6 +402,7 @@ static int wt_event(const UiEvent *e) {
         if (g_dragId) {
             g_dragId = 0;
             g_dragHandle = 0;
+            wt_persist(); // коммит: конец перемещения/ресайза
             return 1;
         }
         return 0;
@@ -398,6 +411,7 @@ static int wt_event(const UiEvent *e) {
     int pi = pal_hit(e->x, e->y);
     if (pi >= 0) { // палитра поверх всего
         wt_spawn(PAL_TYPE[pi]);
+        wt_persist(); // коммит: новый виджет
         return 1;
     }
     int hb = wt_handle_hit(e->x, e->y);
@@ -915,6 +929,46 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
             }
+            // Обратная сторона F2a2: доки (lay_save) НЕ стирают секцию widgets,
+            // в обоих порядках записи (read-modify-write чужой секции).
+            {
+                UiPanels *pp = ui_panels_create();
+                const char *mp = "/tmp/opencode/widget_merge2.json";
+                remove(mp);
+                if (!widget_json_save(&wt, mp) || !ui_panels_save_layout(pp, mp)) {
+                    printf("SELF FAIL: lay-save\n");
+                    bad = 1;
+                }
+                FILE *df = fopen(mp, "rb");
+                char chk[70000];
+                size_t cn = df ? fread(chk, 1, sizeof chk - 1, df) : 0;
+                if (df) fclose(df);
+                chk[cn] = 0;
+                if (!strstr(chk, "\"hierW\": [") || !strstr(chk, "\"widgets\": [")) {
+                    printf("SELF FAIL: lay-keeps-widgets\n");
+                    bad = 1;
+                }
+                if (!widget_json_save(&wt, mp)) { // обратный порядок
+                    printf("SELF FAIL: lay-wsave\n");
+                    bad = 1;
+                }
+                df = fopen(mp, "rb");
+                cn = df ? fread(chk, 1, sizeof chk - 1, df) : 0;
+                if (df) fclose(df);
+                chk[cn] = 0;
+                if (!strstr(chk, "\"hierW\": [") || !strstr(chk, "\"widgets\": [")) {
+                    printf("SELF FAIL: wsave-keeps-dock2\n");
+                    bad = 1;
+                }
+                UiWidgetTree rt2;
+                widget_tree_init(&rt2);
+                if (!widget_json_load(&rt2, mp) || rt2.count != 9) {
+                    printf("SELF FAIL: lay-merge-load count=%d\n", rt2.count);
+                    bad = 1;
+                }
+                ui_panels_destroy(pp);
+                remove(mp);
+            }
             UiWidgetTree rt;
             widget_tree_init(&rt);
             if (!widget_json_load(&rt, "/tmp/opencode/widget_dock.json") || rt.count != 9) {
@@ -1034,6 +1088,7 @@ int main(int argc, char **argv) {
     glfwMaximizeWindow(win);
     glfwPollEvents();
     drain_ev();
+    if (wt_persist_ok()) widget_json_load(&g_wt, UI_LAYOUT_PATH); // персист §14
     edit_push(); // первая заливка
     // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
     if (getenv("UI_EDIT_SEED")) {
