@@ -65,6 +65,12 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define PAL_N 4
 #define PAL_PAD 8    // внутренние поля хром-панели
 #define PAL_TITLE 22 // строка заголовка панели
+// Верх легаси-хрома редактора (ui_panels): меню 0..26, тулбар 26..58, строка
+// коллапса доков 58..84 (текст на y=62). Панели ИНСТРУМЕНТА ставим ниже неё —
+// иначе «PALETTE» налезает на строку коллапса (тестер: «всё стоит криво»).
+// Точка замены: когда хром редактора станет виджетами (F10/self-host), легаси-
+// строки исчезнут и отступ уйдёт вместе с ними.
+#define ED_TOP_CHROME 84
 #define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
 // PAL_TYPE > 0 — тип для спавна; < 0 — ДЕЙСТВИЕ над выбранным (сейчас: удалить).
 static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL, -1};
@@ -204,6 +210,47 @@ static int wt_hit(float px, float py) {
     return ui_widget_hit(g_act, g_WW, g_WH, px, py);
 }
 
+// --- §14 F5d: стопка под курсором (порядок ОТРИСОВКИ, низ -> верх) ---
+// Нужна для «выбрать сквозь верхний» (Figma deep select / Blender alt-click):
+// без неё нижний виджет в перекрытии мышью не достать вообще.
+static void wt_order_rec(int parent, int *out, int *n, int cap) {
+    int kids[UI_MAX_WIDGETS];
+    int k = wt_sib_sorted(parent, kids);
+    for (int i = 0; i < k && *n < cap; i++) {
+        out[(*n)++] = kids[i];
+        wt_order_rec(kids[i], out, n, cap);
+    }
+}
+static int wt_stack_at(float px, float py, int *out, int cap) {
+    int order[UI_MAX_WIDGETS];
+    int n = 0;
+    wt_order_rec(0, order, &n, UI_MAX_WIDGETS);
+    int m = 0;
+    for (int i = 0; i < n && m < cap; i++) {
+        const UiWidget *w = widget_cget(g_act, order[i]);
+        if (!w) continue;
+        float x, y, ww, hh;
+        widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+        if (px >= x && px < x + ww && py >= y && py < y + hh) out[m++] = order[i];
+    }
+    return m;
+}
+// Ctrl+клик: следующий НИЖЕ текущего в стопке (cur = 0 -> на один ниже верхнего).
+// Дошли до низа — снова верхний (цикл), как в Figma/Blender.
+static int wt_pick_deep(float px, float py, int cur) {
+    int stk[UI_MAX_WIDGETS];
+    int m = wt_stack_at(px, py, stk, UI_MAX_WIDGETS);
+    if (m <= 0) return 0;
+    int i = m - 1; // без текущего в стопке — верхний (первый Ctrl+клик)
+    for (int k = m - 1; k >= 0; k--)
+        if (stk[k] == cur) {
+            i = k - 1;
+            break;
+        }
+    if (i < 0) i = m - 1; // ниже некуда -> верхний (цикл)
+    return stk[i];
+}
+
 static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
                     const float rgba[4], float round) {
     if (*n >= UI_MAX_PRIMS) return;
@@ -230,6 +277,22 @@ static void chrome_draw(RcVecShape *sh, int *n) {
     RcVecShape tmp[UI_MAX_PRIMS];
     int m = ui_widget_build(&g_edWt, g_WW, g_WH, tmp, UI_MAX_PRIMS);
     for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) sh[(*n)++] = tmp[i];
+}
+
+// §14 F5c: полоса ЗАГОЛОВКА панели (как в Unity/Figma). Без неё заголовок
+// «висит» на фоне панели и кажется съехавшим (жалоба тестера). Рисуем после
+// фона панели, но ДО рядов и до текста (текст — отдельный проход).
+static void chrome_heads_draw(RcVecShape *sh, int *n) {
+    float head[4] = {0.19f, 0.21f, 0.27f, 1.0f};
+    float line[4] = {0.30f, 0.33f, 0.41f, 1.0f};
+    int ids[3] = {g_edPal, g_edTree, g_edIns};
+    for (int i = 0; i < 3; i++) {
+        float px, py, pw, ph;
+        ed_rect(ids[i], &px, &py, &pw, &ph);
+        if (pw <= 2 || ph <= (float)PAL_TITLE) continue;
+        wt_emit(sh, n, px + 1, py + 1, pw - 2, (float)PAL_TITLE - 1, head, 5.0f);
+        wt_emit(sh, n, px + 1, py + (float)PAL_TITLE - 1, pw - 2, 1.0f, line, 0.0f);
+    }
 }
 
 // Рамка выбора + ручки — это ХРОМ РЕДАКТОРА, потому локально и ПОВЕРХ всего
@@ -277,9 +340,12 @@ static void pal_draw(RcVecShape *sh, int *n) {
 
 // --- F3: дерево виджетов (иерархия + выбор кликом) ---
 // Строки идут в том же порядке, что и отрисовка (корни -> дети, в глубину).
-#define TREE_W 180
+#define TREE_W 200
 #define TREE_RH 20
+// F5d: строка «хлебных крошек» (путь до выбранного) под заголовком панели.
 #define TREE_HDR 22
+#define TREE_PATH 18
+static void tree_path_rect(float *x, float *y, float *w, float *h); // F5d (ниже)
 static int g_treeN = 0;
 static int g_treeId[UI_MAX_WIDGETS];
 static int g_treeDepth[UI_MAX_WIDGETS];
@@ -292,7 +358,7 @@ static int tree_rows_fit(void) {
     (void)px;
     (void)py;
     (void)pw;
-    int rows = (int)((ph - TREE_HDR - PAL_PAD) / TREE_RH);
+    int rows = (int)((ph - TREE_HDR - TREE_PATH - PAL_PAD) / TREE_RH);
     return rows < 1 ? 1 : rows;
 }
 
@@ -331,7 +397,7 @@ static void tree_rect(int row, float *x, float *y, float *w, float *h) {
     ed_rect(g_edTree, &px, &py, &pw, &ph);
     (void)ph;
     *x = px + PAL_PAD;
-    *y = py + TREE_HDR + (float)(row * TREE_RH);
+    *y = py + TREE_HDR + TREE_PATH + (float)(row * TREE_RH);
     *w = pw - 2 * PAL_PAD - 4;
     *h = (float)TREE_RH;
 }
@@ -353,6 +419,12 @@ static void type_col(int type, float out[4]) {
 static void tree_draw(RcVecShape *sh, int *n) {
     tree_build();
     int rows = tree_rows_fit();
+    { // F5d: полоса крошек (под заголовком): «где я» отдельно от списка
+        float x, y, w, h;
+        tree_path_rect(&x, &y, &w, &h);
+        float c[4] = {0.13f, 0.145f, 0.18f, 1.0f};
+        wt_emit(sh, n, x - 2, y, w + 4, h, c, 0.0f);
+    }
     for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
         float x, y, w, h;
         tree_rect(i - g_treeScroll, &x, &y, &w, &h);
@@ -375,8 +447,8 @@ static void tree_draw(RcVecShape *sh, int *n) {
         float thumb[4] = {0.45f, 0.52f, 0.62f, 1.0f};
         float barW = 3.0f;
         float bx = px + pw - PAL_PAD + 1.0f;
-        float ty = py + TREE_HDR;
-        float thh = ph - TREE_HDR - PAL_PAD;
+        float ty = py + TREE_HDR + TREE_PATH;
+        float thh = ph - TREE_HDR - TREE_PATH - PAL_PAD;
         int maxs = g_treeN - rows;
         float frac = maxs > 0 ? (float)g_treeScroll / (float)maxs : 0.0f;
         float bh = thh * (float)rows / (float)g_treeN;
@@ -440,6 +512,7 @@ static void ed_chrome_sync(void) {
     float palW = (float)((TREE_W > PAL_BW ? TREE_W : PAL_BW) + 2 * PAL_PAD);
     float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
     float x0 = (float)(g_vpx + PAL_PAD), y0 = (float)(g_vpy + PAL_PAD);
+    if (y0 < (float)ED_TOP_CHROME) y0 = (float)ED_TOP_CHROME; // ниже легаси-строки
     struct {
         int id;
         float x, y, w, h;
@@ -453,10 +526,10 @@ static void ed_chrome_sync(void) {
     d[1].x = x0;
     d[1].y = y0 + palH + 10;
     d[1].w = palW;
-    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH * 10); // ~10 строк, дальше скролл
+    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10); // ~10 строк
     { // не вылезаем за низ окна
         float avail = (float)(g_vpy + g_vph) - (y0 + palH + 10) - PAL_PAD;
-        float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH);
+        float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH);
         if (d[1].h > avail) d[1].h = avail;
         if (d[1].h < one) d[1].h = one;
     }
@@ -946,6 +1019,89 @@ static int ins_head_hit(float px, float py) {
     return px >= x && px < x + w && py >= y && py < y + h;
 }
 
+// --- §14 F5d: ХЛЕБНЫЕ КРОШКИ — цепочка предков выбранного ---
+// Тестер: «нажать на объект и видеть, В КОМ он лежит; переключиться на родителей».
+// Ряд под заголовком дерева: Scene > Panel > Button. Клик по сегменту выбирает
+// этого предка (как цепочка слоёв в Figma). Дети — в дереве ниже: иерархия всегда
+// развёрнута, поэтому «перейти к детям» = клик по ребёнку.
+static int g_pathN = 0;               // сегментов, [0] = Scene (id 0)
+static int g_pathId[16];
+static int g_pathFrom = 0;            // с какого сегмента рисуем (обрезка слева)
+static float g_pathX[16], g_pathW[16]; // геометрия сегментов (текст И хит)
+static void tree_path_rect(float *x, float *y, float *w, float *h) {
+    float px, py, pw, ph;
+    ed_rect(g_edTree, &px, &py, &pw, &ph);
+    (void)ph;
+    *x = px + PAL_PAD;
+    *y = py + TREE_HDR;
+    *w = pw - 2 * PAL_PAD - 4;
+    *h = (float)TREE_PATH;
+}
+static void tree_path_build(void) {
+    int chain[15];
+    int n = 0;
+    const UiWidget *w = widget_cget(g_act, g_wtSel);
+    while (w && n < 15) {
+        chain[n++] = w->id;
+        w = widget_cget(g_act, w->parent);
+    }
+    g_pathN = 0;
+    g_pathId[g_pathN++] = 0; // Scene: клик = снять выбор
+    for (int i = n - 1; i >= 0; i--) g_pathId[g_pathN++] = chain[i];
+}
+static const char *tree_path_label(int i, char *buf) {
+    if (i <= 0) return "Scene";
+    const UiWidget *w = widget_cget(g_act, g_pathId[i]);
+    if (!w) return "?";
+    snprintf(buf, UI_WIDGET_NAME, "%s", w->name);
+    return buf;
+}
+static float tree_seg_w(const char *s) {
+    return g_text ? ui_text_width(g_text, s) : (float)(8 * (int)strlen(s));
+}
+// Геометрию сегментов считает ОДНА функция — и текст, и хит (иначе подпись и
+// клик разъезжаются). Не влезло в панель — обрезаем СЛЕВА (ближние предки
+// важнее): выделенный сегмент виден всегда.
+static void tree_path_layout(void) {
+    tree_path_build();
+    float rx, ry, rw, rh;
+    tree_path_rect(&rx, &ry, &rw, &rh);
+    float sep = tree_seg_w("/");
+    float ell = tree_seg_w("...");
+    // «Scene» — корень документа, он подразумевается: его выкидываем БЕЗ «...»,
+    // поэтому цепочка предков влезает заметно чаще (тестер: «видеть, в ком лежит»).
+    int s = 0;
+    for (;;) {
+        float tot = (s >= 2) ? ell + 6.0f : 0.0f;
+        for (int i = s; i < g_pathN; i++) {
+            char b[UI_WIDGET_NAME];
+            tot += tree_seg_w(tree_path_label(i, b)) + (i > s ? sep : 0.0f);
+        }
+        if (tot <= rw || s >= g_pathN - 1) break;
+        s++;
+    }
+    g_pathFrom = s;
+    float cx = rx + ((s >= 2) ? ell + 6.0f : 0.0f);
+    for (int i = s; i < g_pathN; i++) {
+        char b[UI_WIDGET_NAME];
+        const char *str = tree_path_label(i, b);
+        if (i > s) cx += sep;
+        g_pathX[i] = cx;
+        g_pathW[i] = tree_seg_w(str);
+        cx += g_pathW[i];
+    }
+}
+// Возврат: id предка (0 = Scene/снять выбор) или -1 = мимо строки крошек.
+static int tree_path_hit_at(float px, float py) {
+    float x, y, w, h;
+    tree_path_rect(&x, &y, &w, &h);
+    if (px < x || px >= x + w || py < y || py >= y + h) return -1;
+    tree_path_layout();
+    for (int i = g_pathFrom; i < g_pathN; i++)
+        if (px >= g_pathX[i] - 3 && px < g_pathX[i] + g_pathW[i] + 3) return g_pathId[i];
+    return -1;
+}
+
 // Удаление выбранного (вместе с поддеревом). Выбор уходит на родителя — как в
 // UE/Unity: после удаления «активен» контейнер, а не пустота. Хром редактора не
 // удаляем: панели EdPalette/EdHierarchy/EdInspector — сам инструмент, не документ.
@@ -1071,6 +1227,11 @@ static int wt_event(const UiEvent *e) {
         return 1;
     }
     tree_build();
+    int pth = tree_path_hit_at(e->x, e->y);
+    if (pth >= 0) { // F5d: клик по крошке = выбрать ПРЕДКА (Scene = снять выбор)
+        g_wtSel = pth;
+        return 1;
+    }
     int ti = tree_hit(e->x, e->y);
     if (ti) { // F3: выбор виджета из дерева
         g_wtSel = ti;
@@ -1106,10 +1267,13 @@ static int wt_event(const UiEvent *e) {
         wt_drag_begin(g_wtSel, hb, e->x, e->y);
         return 1;
     }
-    int id = wt_hit(e->x, e->y);
-    if (id) { // выбор + сразу готов к драгу
+    // F5d: Ctrl+клик — выбрать СЛЕДУЮЩЕГО НИЖЕ в стопке (Figma deep select):
+    // иначе верхний виджет «загораживает» нижнего и его не достать мышью.
+    int deep = (e->mods & GLFW_MOD_CONTROL) != 0;
+    int id = deep ? wt_pick_deep(e->x, e->y, g_wtSel) : wt_hit(e->x, e->y);
+    if (id) { // выбор + сразу готов к драгу (deep — только выбор, без драга)
         g_wtSel = id;
-        wt_drag_begin(id, 0, e->x, e->y);
+        if (!deep) wt_drag_begin(id, 0, e->x, e->y);
         return 1;
     }
     int inVp = e->x >= g_vpx && e->x < g_vpx + g_vpw && e->y >= g_vpy &&
@@ -1157,6 +1321,7 @@ static int build_shapes(RcVecShape *shapes) {
     ed_chrome_sync(); // §14 F3c: раскладка панелей хрома (док мог поменяться)
     wt_draw_all(shapes, &n); // документ — тем же рантаймом, что и игра
     chrome_draw(shapes, &n); // хром редактора — это тоже виджеты
+    chrome_heads_draw(shapes, &n); // F5c: полосы заголовков панелей
     tree_draw(shapes, &n);   // F3: дерево (под палитрой)
     ins_draw(shapes, &n);    // F3b: инспектор (справа)
     pal_draw(shapes, &n);
@@ -1244,11 +1409,11 @@ static void drain_ev(void) {
 
 static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     (void)win;
-    (void)mods;
     if (button != GLFW_MOUSE_BUTTON_LEFT) return;
     UiEvent e;
     memset(&e, 0, sizeof e);
     e.button = 0;
+    e.mods = mods; // F5d: Ctrl+клик = «сквозь» верхний виджет
     e.x = (float)g_mx;
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
@@ -2336,6 +2501,122 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // §14 F5c: ГЕОМЕТРИЯ ХРОМА — панели инструмента не пересекаются и не
+        // залезают на легаси-строку меню/коллапса (тестер: «всё стоит криво»,
+        // панели «съехали»). Дерево вмещает заголовок + крошки + >=3 строки.
+        {
+            ed_chrome_sync();
+            float ax, ay, aw, ah, bx, by, bw, bh, cx, cy, cw, ch;
+            ed_rect(g_edPal, &ax, &ay, &aw, &ah);
+            ed_rect(g_edTree, &bx, &by, &bw, &bh);
+            ed_rect(g_edIns, &cx, &cy, &cw, &ch);
+            int ov = (ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah) ||
+                     (ax < cx + cw && cx < ax + aw && ay < cy + ch && cy < ay + ah);
+            if (ov || ay < (float)ED_TOP_CHROME || cy < (float)ED_TOP_CHROME) {
+                printf("SELF FAIL: chrome-geom pal=%.0f,%.0f tree=%.0f,%.0f ins=%.0f,%.0f "
+                       "top=%d\n",
+                       ax, ay, bx, by, cx, cy, ED_TOP_CHROME);
+                bad = 1;
+            }
+            if (bh < (float)(TREE_HDR + TREE_PATH + 3 * TREE_RH)) {
+                printf("SELF FAIL: chrome-tree-h %.0f\n", bh);
+                bad = 1;
+            }
+        }
+        // §14 F5d: ИЕРАРХИЯ — крошки предков (клик = выбрать предка), обрезка
+        // слева при нехватке места, Ctrl+клик «сквозь» верхний в стопке.
+        {
+            UiWidgetTree pt;
+            widget_tree_init(&pt);
+            g_editSelf = 0;
+            UiWidgetRect rr;
+            UiWidgetStyle ss;
+            memset(&rr, 0, sizeof rr);
+            memset(&ss, 0, sizeof ss);
+            rr.anchors = UI_A_LEFT | UI_A_TOP;
+            rr.x = 100;
+            rr.y = 100;
+            rr.w = 200;
+            rr.h = 100;
+            ss.alpha = 1.0f;
+            int pa = widget_add(&pt, UI_W_PANEL, "Card", 0, &rr, &ss);
+            rr.x = 120;
+            rr.y = 120;
+            rr.w = 100;
+            rr.h = 60;
+            int pb = widget_add(&pt, UI_W_BUTTON, "Ok", pa, &rr, &ss);
+            rr.x = 130;
+            rr.y = 130;
+            rr.w = 60;
+            rr.h = 30;
+            int pc = widget_add(&pt, UI_W_LABEL, "Cap", pb, &rr, &ss);
+            if (!pa || !pb || !pc) {
+                printf("SELF FAIL: path-add\n");
+                bad = 1;
+            }
+            g_act = &pt;
+            g_wtSel = pc;
+            tree_path_build();
+            if (g_pathN != 4 || g_pathId[0] != 0 || g_pathId[1] != pa || g_pathId[2] != pb ||
+                g_pathId[3] != pc) {
+                printf("SELF FAIL: path-build n=%d\n", g_pathN);
+                bad = 1;
+            }
+            tree_path_layout();
+            float px2, py2, pw2, ph2;
+            tree_path_rect(&px2, &py2, &pw2, &ph2);
+            (void)pw2;
+            int hid = tree_path_hit_at(g_pathX[2] + 2, py2 + ph2 / 2);
+            if (hid != pb) {
+                printf("SELF FAIL: path-hit %d want %d\n", hid, pb);
+                bad = 1;
+            }
+            if (tree_path_hit_at(px2 + 2, py2 - 30) != -1) {
+                printf("SELF FAIL: path-hit-out\n");
+                bad = 1;
+            }
+            // Ctrl+клик: сверху вниз по стопке, снизу — снова верхний (цикл).
+            int d1 = wt_pick_deep(140, 140, 0);
+            int d2 = wt_pick_deep(140, 140, d1);
+            int d3 = wt_pick_deep(140, 140, d2);
+            int d4 = wt_pick_deep(140, 140, d3);
+            if (d1 != pc || d2 != pb || d3 != pa || d4 != pc) {
+                printf("SELF FAIL: deep-pick %d %d %d %d\n", d1, d2, d3, d4);
+                bad = 1;
+            }
+            // Длинная цепочка не влезает в панель -> обрезка СЛЕВА, выделенный
+            // (последний) сегмент виден всегда.
+            int deepId = pb;
+            for (int i = 0; i < 7; i++) {
+                char nm[UI_WIDGET_NAME];
+                snprintf(nm, sizeof nm, "VeryLongWidget%02d", i);
+                rr.x = 130;
+                rr.y = 130;
+                rr.w = 40;
+                rr.h = 20;
+                deepId = widget_add(&pt, UI_W_LABEL, nm, deepId, &rr, &ss);
+            }
+            g_wtSel = deepId;
+            tree_path_layout();
+            float lx, ly, lw, lh;
+            tree_path_rect(&lx, &ly, &lw, &lh);
+            (void)ly;
+            (void)lh;
+            if (g_pathN < 8 || g_pathFrom <= 0) {
+                printf("SELF FAIL: path-clip n=%d from=%d\n", g_pathN, g_pathFrom);
+                bad = 1;
+            }
+            int last = g_pathN - 1;
+            if (g_pathX[last] + g_pathW[last] > lx + lw + 1.0f ||
+                g_pathId[last] != deepId) {
+                printf("SELF FAIL: path-fit x=%.1f w=%.1f lim=%.1f\n", g_pathX[last],
+                       g_pathW[last], lx + lw);
+                bad = 1;
+            }
+            g_wtSel = 0;
+            widget_tree_init(&pt);
+            g_act = &g_wt;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -2444,9 +2725,13 @@ int main(int argc, char **argv) {
     edit_push(); // первая заливка
     // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
     if (getenv("UI_EDIT_SEED")) {
-        wt_spawn(UI_W_PANEL);
-        wt_spawn(UI_W_BUTTON);
-        wt_spawn(UI_W_LABEL);
+        int p = wt_spawn(UI_W_PANEL);
+        int b = wt_spawn(UI_W_BUTTON);
+        int l = wt_spawn(UI_W_LABEL);
+        // Вложенность: демо показывает и глубину в дереве, и крошки предков.
+        if (p && b) widget_reparent(&g_wt, b, p);
+        if (b && l) widget_reparent(&g_wt, l, b);
+        if (l) g_wtSel = l; // выбран самый глубокий: Scene > Panel > Button > Label
         edit_push();
     }
     { // UI_EDIT_RENAME=1: сразу открыть поле имени (скриншот/проверка каретки)
@@ -2648,6 +2933,23 @@ int main(int argc, char **argv) {
             }
             // F3: подписи дерева виджетов (только видимые строки).
             tree_build();
+            { // F5d: крошки предков (клик по сегменту = выбрать предка)
+                tree_path_layout();
+                float px, py, pw, ph;
+                tree_path_rect(&px, &py, &pw, &ph);
+                (void)pw;
+                (void)ph;
+                if (g_pathFrom >= 2) ui_text_quad(text, px, py + 1, "...", hcol);
+                for (int i = g_pathFrom; i < g_pathN; i++) {
+                    char b[UI_WIDGET_NAME];
+                    const char *s = tree_path_label(i, b);
+                    if (i > g_pathFrom)
+                        ui_text_quad(text, g_pathX[i] - ui_text_width(text, "/"), py + 1,
+                                     "/", hcol);
+                    ui_text_quad(text, g_pathX[i], py + 1, s,
+                                 i == g_pathN - 1 ? tcol : hcol);
+                }
+            }
             {
                 int rows = tree_rows_fit();
                 for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
@@ -2655,8 +2957,15 @@ int main(int argc, char **argv) {
                     if (!wd) continue;
                     float tx, ty, tw, th;
                     tree_rect(i - g_treeScroll, &tx, &ty, &tw, &th);
-                    ui_text_quad(text, tx + 16 + (float)(g_treeDepth[i] * 10), ty + 3,
-                                 wd->name, tcol);
+                    (void)tw;
+                    (void)th;
+                    float nx = tx + 16 + (float)(g_treeDepth[i] * 10);
+                    ui_text_quad(text, nx, ty + 3, wd->name, tcol);
+                    // F5d: ТИП рядом с именем (как Unity UI Builder: видно, что за
+                    // элемент, не открывая инспектор). Серым — имя остаётся главным.
+                    const char *tn = (wd->type >= 0 && wd->type < 3) ? PAL_LABEL[wd->type] : "?";
+                    ui_text_quad(text, nx + ui_text_width(text, wd->name) + 8, ty + 3, tn,
+                                 hcol);
                 }
             }
             // F3b: подписи инспектора (заголовок + поля).
@@ -2665,11 +2974,16 @@ int main(int argc, char **argv) {
                 if (sw) {
                     float hx, hy, hw, hh;
                     ins_rect(-1, &hx, &hy, &hw, &hh);
-                    (void)hw;
                     (void)hh;
                     // F5a: правим текст — рисуем БУФЕР (а не имя модели).
                     ui_text_quad(text, hx + 6, hy + 2,
                                  g_nameEdit ? g_nameBuf : sw->name, tcol);
+                    if (!g_nameEdit) { // F5d: ТИП справа — видно, что за элемент
+                        const char *tn =
+                            (sw->type >= 0 && sw->type < 3) ? PAL_LABEL[sw->type] : "?";
+                        ui_text_quad(text, hx + hw - 6 - ui_text_width(text, tn), hy + 2, tn,
+                                     hcol);
+                    }
                     for (int i = 0; i < IF_N; i++) {
                         float x, y, ww, hh2;
                         ins_rect(i, &x, &y, &ww, &hh2);
@@ -2697,9 +3011,9 @@ int main(int argc, char **argv) {
                 }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: click=select | drag=move | edges=resize | F2/header"
-                         "=rename | Del | Ctrl+Z/Y undo/redo | wheel list=scroll | F7 self"
-                         " | Tab | Esc",
+                         "frontedit: click=select | Ctrl+click=under | drag=move |"
+                         " edges=resize | F2=rename | Del | Ctrl+Z/Y undo | F7 self |"
+                         " Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
                 char hud[64];
