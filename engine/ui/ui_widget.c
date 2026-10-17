@@ -36,6 +36,23 @@ int widget_find(const UiWidgetTree *t, const char *name) {
     return 0;
 }
 
+void widget_name_unique(UiWidgetTree *t, int id, char *name) {
+    if (!t || !name || !name[0]) return;
+    // Свободно (0) или это наше собственное имя — уже уникально. ВАЖНО: кандидата
+    // в модели ещё НЕТ (он в буфере вызывающего), поэтому «занято» = нашли ЧУЖОГО.
+    int owner = widget_find(t, name);
+    if (owner == 0 || owner == id) return;
+    char base[UI_WIDGET_NAME];
+    snprintf(base, sizeof base, "%s", name);
+    size_t bl = strlen(base); // оставляем место под суффикс: буфер имени 48
+    if (bl > UI_WIDGET_NAME - 6) bl = UI_WIDGET_NAME - 6;
+    for (int k = 2; k < 1000; k++) {
+        snprintf(name, UI_WIDGET_NAME, "%.*s_%d", (int)bl, base, k);
+        owner = widget_find(t, name);
+        if (owner == 0 || owner == id) return;
+    }
+}
+
 // Отцепить от родителя (молча, если сирота). Возвращает был-родитель.
 static int detach(UiWidgetTree *t, int id) {
     UiWidget *w = widget_get(t, id);

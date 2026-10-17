@@ -406,13 +406,30 @@ static float g_insDownX = 0;     // мышь на DOWN
 static float g_insDownVal = 0;   // значение на DOWN
 static int g_insPrevPx[4];       // прошлый пиксельный rect (dirty-rect)
 
+// --- §14 F5a: состояние правки ТЕКСТА (имя выбранного виджета) ---
+// Объявлено здесь (не рядом с функциями), потому что ins_draw выше по файлу:
+// каретка рисуется в том же проходе, что и строки инспектора.
+static UiText *g_text = 0; // атлас: ширина каретки
+static int g_nameEdit = 0; // 1 = идёт правка имени выбранного
+static char g_nameBuf[UI_WIDGET_NAME];
+static int g_nameLen = 0, g_nameCaret = 0;
+static int g_nameAnchor = 0; // второе плечо выделения (anchor..caret)
+static int g_caretOn = 1;      // фаза мигания каретки
+static double g_nameBlink = 0; // 0 = фазу перезапустить (ставит цикл кадра)
+static int name_has_sel(void); // выделение (определения ниже: ins_draw выше них)
+static int name_sel_lo(void);
+static int name_sel_hi(void);
+
 static void ins_rect(int i, float *x, float *y, float *w, float *h) {
     float px, py, pw, ph;
     ed_rect(g_edIns, &px, &py, &pw, &ph);
     (void)pw;
     (void)ph;
+    // Строка ЗАГОЛОВКА панели (PAL_TITLE) — отдельная: иначе «INSPECTOR» лезло на
+    // имя выбранного (тестер: «все стоит криво»). Контент идёт ниже заголовка.
     *x = px + PAL_PAD;
-    *y = py + PAL_PAD + (i < 0 ? 0.0f : INS_HEAD + (float)(i * (INS_RH + INS_GAP)));
+    *y = py + PAL_PAD + PAL_TITLE +
+         (i < 0 ? 0.0f : INS_HEAD + (float)(i * (INS_RH + INS_GAP)));
     *w = (float)INS_W;
     *h = (i < 0 ? (float)(INS_HEAD - 4) : (float)INS_RH);
 }
@@ -447,7 +464,7 @@ static void ed_chrome_sync(void) {
     d[2].w = (float)(INS_W + 2 * PAL_PAD);
     d[2].x = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
     d[2].y = y0;
-    d[2].h = (float)(PAL_PAD * 2 + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+    d[2].h = (float)(PAL_PAD * 2 + PAL_TITLE + INS_HEAD + IF_N * (INS_RH + INS_GAP));
     for (int i = 0; i < 3; i++) {
         UiWidget *w = widget_get(&g_edWt, d[i].id);
         if (!w || g_edMoved[d[i].id - 1]) continue;
@@ -518,6 +535,33 @@ static void ins_draw(RcVecShape *sh, int *n) {
     ins_rect(-1, &tx, &ty, &tw, &th); // заголовок внутри панели хрома
     float hc[4] = {0.22f, 0.24f, 0.30f, 1.0f};
     wt_emit(sh, n, tx, ty, tw, th, hc, 3.0f);
+    // F5a: поле имени — выделение и каретка. Ширина считается ТОЙ ЖЕ метрикой,
+    // что у текста (ui_text_width), иначе каретка «плыла» бы относительно букв.
+    if (g_nameEdit && g_text) {
+        char pre[UI_WIDGET_NAME];
+        if (name_has_sel()) {
+            int lo = name_sel_lo(), hi = name_sel_hi();
+            int k = lo < UI_WIDGET_NAME - 1 ? lo : UI_WIDGET_NAME - 1;
+            memcpy(pre, g_nameBuf, (size_t)k);
+            pre[k] = 0;
+            int sl = hi - lo;
+            if (sl > UI_WIDGET_NAME - 1) sl = UI_WIDGET_NAME - 1;
+            char sel[UI_WIDGET_NAME];
+            memcpy(sel, g_nameBuf + lo, (size_t)sl);
+            sel[sl] = 0;
+            float sc[4] = {0.26f, 0.38f, 0.66f, 1.0f};
+            wt_emit(sh, n, tx + 6 + ui_text_width(g_text, pre), ty + 2,
+                    ui_text_width(g_text, sel), th - 4, sc, 2.0f);
+        }
+        if (g_caretOn) {
+            int k = g_nameCaret < UI_WIDGET_NAME - 1 ? g_nameCaret : UI_WIDGET_NAME - 1;
+            memcpy(pre, g_nameBuf, (size_t)k);
+            pre[k] = 0;
+            float cc[4] = {0.95f, 0.97f, 1.0f, 1.0f};
+            wt_emit(sh, n, tx + 6 + ui_text_width(g_text, pre), ty + 2, 1.5f, th - 4, cc,
+                    0.0f);
+        }
+    }
     for (int i = 0; i < IF_N; i++) {
         float x, y, ww, hh;
         ins_rect(i, &x, &y, &ww, &hh);
@@ -743,6 +787,165 @@ static int wt_undo_apply(int redo) {
     return 1;
 }
 
+// --- §14 F5a: ТЕКСТ — правка ИМЕНИ виджета (просьба тестера «невозможно
+// переименовать»). Имя = и строка дерева, и подпись на холсте (у button/label),
+// поэтому переименование = правка текста. Мини-текстбокс v1 (однострочный, как
+// WPF TextBox/UMG EditableText): каретка, Left/Right/Home/End, Backspace/Delete
+// ПО КАРЕТКЕ, Enter/Tab = коммит, Esc = отмена, клик мимо поля = коммит.
+// Полноценный бокс (выделение, Ctrl+C/V, IME, прокрутка длинной строки, двойной
+// клик по слову) — F5a2: точка замены = все name_edit_* ниже, состояние одно.
+// Символы '"' '\\' '{' '}' '[' ']' не принимаем ВООБЩЕ (widget_add их тоже
+// запрещает: имя пишется в JSON сырым текстом — иначе файл побьётся).
+static void name_edit_redraw(void) {
+    float hx, hy, hw, hh;
+    ins_rect(-1, &hx, &hy, &hw, &hh);
+    const int r[1][4] = {{(int)hx - 4, (int)hy - 4, (int)hw + 8, (int)hh + 8}};
+    edit_push_dirtyN(r, 1); // только строка имени: полный кадр на букву — жирно
+}
+static int name_bad_char(char c) {
+    return c == '"' || c == '\\' || c == '{' || c == '}' || c == '[' || c == ']';
+}
+static void name_edit_blink_reset(void) {
+    g_caretOn = 1;
+    g_nameBlink = 0;
+}
+// Выделение (anchor..caret) — как в любой текстовой правке: F2 выделяет имя
+// целиком, поэтому первая же буква ЗАМЕНЯЕТ имя (UE/Unity/Blender), а не
+// приклеивается в конец. Shift+стрелки тянут выделение, Ctrl+A — всё.
+static int name_sel_lo(void) {
+    return g_nameCaret < g_nameAnchor ? g_nameCaret : g_nameAnchor;
+}
+static int name_sel_hi(void) {
+    return g_nameCaret < g_nameAnchor ? g_nameAnchor : g_nameCaret;
+}
+static int name_has_sel(void) {
+    return g_nameCaret != g_nameAnchor;
+}
+static void name_sel_all(void) {
+    g_nameAnchor = 0;
+    g_nameCaret = g_nameLen;
+}
+static void name_del_sel(void) {
+    if (!name_has_sel()) return;
+    int lo = name_sel_lo(), hi = name_sel_hi();
+    memmove(g_nameBuf + lo, g_nameBuf + hi, (size_t)(g_nameLen - hi) + 1);
+    g_nameLen -= hi - lo;
+    g_nameCaret = lo;
+    g_nameAnchor = lo;
+}
+static void name_ins(char c) {
+    if (name_has_sel()) name_del_sel();
+    if (g_nameLen >= UI_WIDGET_NAME - 1) return;
+    memmove(g_nameBuf + g_nameCaret + 1, g_nameBuf + g_nameCaret,
+            (size_t)(g_nameLen - g_nameCaret) + 1);
+    g_nameBuf[g_nameCaret++] = c;
+    g_nameLen++;
+    g_nameAnchor = g_nameCaret;
+}
+static void name_edit_end(int commit) {
+    if (!g_nameEdit) return;
+    g_nameEdit = 0;
+    if (commit) {
+        const UiWidget *cw = widget_cget(g_act, g_wtSel);
+        if (cw && g_nameLen > 0 && strcmp(g_nameBuf, cw->name) != 0) {
+            char nm[UI_WIDGET_NAME];
+            snprintf(nm, sizeof nm, "%s", g_nameBuf);
+            widget_name_unique(g_act, g_wtSel, nm); // занято -> суффикс (как UE)
+            UiWidget *w = widget_get(g_act, g_wtSel);
+            if (w && strcmp(nm, w->name) != 0) {
+                snprintf(w->name, sizeof w->name, "%s", nm);
+                wt_persist();
+                undo_commit("rename");
+            }
+        }
+    }
+    edit_push();
+}
+static void name_edit_begin(void) {
+    if (g_editSelf) return; // текст правим в документе (хром — вид инструмента)
+    const UiWidget *w = widget_cget(g_act, g_wtSel);
+    if (!w) return;
+    g_nameEdit = 1;
+    snprintf(g_nameBuf, sizeof g_nameBuf, "%s", w->name);
+    g_nameLen = (int)strlen(g_nameBuf);
+    g_nameCaret = g_nameLen;
+    name_sel_all(); // F2/клик по имени: имя выделено целиком -> буква заменяет его
+    name_edit_blink_reset();
+    edit_push(); // поле в фокусе (каретка видна сразу)
+}
+static void name_edit_char(unsigned cp) {
+    if (!g_nameEdit) return;
+    if (cp < 32 || cp > 126) return; // атлас = printable ASCII
+    char c = (char)cp;
+    if (name_bad_char(c)) return;
+    name_ins(c);
+    name_edit_blink_reset();
+    name_edit_redraw();
+}
+// 1 = клавиша ушла в поле (в приложение не летит, пока поле в фокусе).
+static int name_edit_key(int key, int mods) {
+    if (!g_nameEdit) return 0;
+    int shift = (mods & GLFW_MOD_SHIFT) != 0;
+    int ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+    switch (key) {
+    case GLFW_KEY_ESCAPE: name_edit_end(0); return 1;
+    case GLFW_KEY_ENTER:
+    case GLFW_KEY_KP_ENTER:
+    case GLFW_KEY_TAB: name_edit_end(1); return 1;
+    case GLFW_KEY_BACKSPACE:
+        if (name_has_sel()) {
+            name_del_sel();
+        } else if (g_nameCaret > 0) {
+            memmove(g_nameBuf + g_nameCaret - 1, g_nameBuf + g_nameCaret,
+                    (size_t)(g_nameLen - g_nameCaret) + 1);
+            g_nameCaret--;
+            g_nameLen--;
+        }
+        g_nameAnchor = g_nameCaret;
+        break;
+    case GLFW_KEY_DELETE:
+        if (name_has_sel()) {
+            name_del_sel();
+        } else if (g_nameCaret < g_nameLen) {
+            memmove(g_nameBuf + g_nameCaret, g_nameBuf + g_nameCaret + 1,
+                    (size_t)(g_nameLen - g_nameCaret));
+            g_nameLen--;
+        }
+        g_nameAnchor = g_nameCaret;
+        break;
+    case GLFW_KEY_LEFT:
+        if (g_nameCaret > 0) g_nameCaret--;
+        if (!shift) g_nameAnchor = g_nameCaret;
+        break;
+    case GLFW_KEY_RIGHT:
+        if (g_nameCaret < g_nameLen) g_nameCaret++;
+        if (!shift) g_nameAnchor = g_nameCaret;
+        break;
+    case GLFW_KEY_HOME:
+        g_nameCaret = 0;
+        if (!shift) g_nameAnchor = 0;
+        break;
+    case GLFW_KEY_END:
+        g_nameCaret = g_nameLen;
+        if (!shift) g_nameAnchor = g_nameLen;
+        break;
+    case GLFW_KEY_A:
+        if (ctrl) name_sel_all(); // Ctrl+A — выделить всё (как везде)
+        break;
+    default: return 1; // фокус: прочие клавиши не улетают в приложение
+    }
+    name_edit_blink_reset();
+    name_edit_redraw();
+    return 1;
+}
+// Клик по заголовку инспектора (имя выбранного) = начать правку.
+static int ins_head_hit(float px, float py) {
+    if (!g_wtSel) return 0;
+    float x, y, w, h;
+    ins_rect(-1, &x, &y, &w, &h);
+    return px >= x && px < x + w && py >= y && py < y + h;
+}
+
 // Удаление выбранного (вместе с поддеревом). Выбор уходит на родителя — как в
 // UE/Unity: после удаления «активен» контейнер, а не пустота. Хром редактора не
 // удаляем: панели EdPalette/EdHierarchy/EdInspector — сам инструмент, не документ.
@@ -832,6 +1035,9 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind != UI_EV_DOWN) return 0;
+    // F5a: клик ВНЕ поля имени = коммит правки текста (как в любом редакторе),
+    // после чего клик обрабатывается как обычно (выбор/драг по месту).
+    if (g_nameEdit && !ins_head_hit(e->x, e->y)) name_edit_end(1);
     // §14 F3c: правим ХРОМ редактора — палитра/дерево/инспектор не работают
     // (это инструмент документа), клик/драг идёт по панелям хрома.
     if (g_editSelf) {
@@ -868,6 +1074,10 @@ static int wt_event(const UiEvent *e) {
     int ti = tree_hit(e->x, e->y);
     if (ti) { // F3: выбор виджета из дерева
         g_wtSel = ti;
+        return 1;
+    }
+    if (ins_head_hit(e->x, e->y)) { // F5a: имя выбранного = поле правки текста
+        name_edit_begin();
         return 1;
     }
     int ii = ins_hit(e->x, e->y);
@@ -1084,6 +1294,7 @@ static void on_move(GLFWwindow *win, double x, double y) {
 
 // §14 F3c: переключить, ЧТО правим — документ или собственный UI редактора.
 static void ed_self_toggle(int on) {
+    if (g_nameEdit) name_edit_end(0); // режим меняется — правку текста бросаем
     g_editSelf = on ? 1 : 0;
     g_act = g_editSelf ? &g_edWt : &g_wt;
     g_wtSel = 0;
@@ -1100,6 +1311,9 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     (void)win;
     (void)scancode;
     if (action != GLFW_PRESS) return;
+    // F5a: поле имени в фокусе — клавиша идёт ЕМУ (иначе Del удалял бы виджет,
+    // Esc выходил из программы и т.п.). Поле забирает клавишу целиком.
+    if (g_nameEdit && name_edit_key(key, mods)) return;
     if (key == GLFW_KEY_ESCAPE) {
         g_quit = 1;
         return;
@@ -1110,6 +1324,10 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     }
     if (key == GLFW_KEY_DELETE || key == GLFW_KEY_BACKSPACE) { // удалить выбранное
         wt_delete_sel();
+        return;
+    }
+    if (key == GLFW_KEY_F2) { // переименовать выбранное (как UE/Unity)
+        name_edit_begin();
         return;
     }
     // Ctrl+Z — откат, Ctrl+Y / Ctrl+Shift+Z — повтор. Если у виджетов истории нет,
@@ -1128,6 +1346,14 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
         e.mods = mods;
         push_ev(&e);
     }
+}
+
+// F5a: символы (раскладка/шифт/юникод — GLFW отдаёт codepoint). Иначе буквы не
+// набрать: key-callback даёт КЛАВИШУ (GLFW_KEY_A), а не текст.
+static void on_char(GLFWwindow *win, unsigned cp) {
+    (void)win;
+    if (!g_nameEdit) return;
+    name_edit_char(cp);
 }
 
 int main(int argc, char **argv) {
@@ -1969,6 +2195,147 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // §14 F5a: ТЕКСТ — правка имени (оно же подпись на холсте). Каретка,
+        // вставка В СЕРЕДИНУ, Backspace/Delete по каретке, Home/End, Esc = отмена
+        // (без следа в истории), Enter = коммит (документ + шаг истории), мусор
+        // ('"'/'[' ) в имя не пускаем (имя пишется в JSON сырым текстом),
+        // занятое имя -> суффикс (уникальность), пустое — не коммит.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            ui_wundo_init(&g_undo);
+            undo_commit("load");
+            int la = wt_spawn(UI_W_LABEL);
+            int lb = wt_spawn(UI_W_LABEL);
+            snprintf(widget_get(&g_wt, la)->name, UI_WIDGET_NAME, "%s", "Body");
+            snprintf(widget_get(&g_wt, lb)->name, UI_WIDGET_NAME, "%s", "Body2");
+            undo_commit("add");
+            int depth0 = ui_wundo_depth(&g_undo);
+            g_wtSel = la;
+            name_edit_begin();
+            // F2/клик по имени: имя ВЫДЕЛЕНО ЦЕЛИКОМ (как UE/Unity/Blender).
+            if (!g_nameEdit || strcmp(g_nameBuf, "Body") != 0 || g_nameCaret != 4 ||
+                g_nameAnchor != 0 || !name_has_sel()) {
+                printf("SELF FAIL: text-begin '%s' %d/%d\n", g_nameBuf, g_nameCaret,
+                       g_nameAnchor);
+                bad = 1;
+            }
+            // Первая же буква ЗАМЕНЯЕТ выделенное имя, а не клеится в конец.
+            name_edit_char('X');
+            if (strcmp(g_nameBuf, "X") != 0 || g_nameCaret != 1 || name_has_sel()) {
+                printf("SELF FAIL: text-replace '%s' %d\n", g_nameBuf, g_nameCaret);
+                bad = 1;
+            }
+            name_edit_char('Y');
+            if (strcmp(g_nameBuf, "XY") != 0) {
+                printf("SELF FAIL: text-type '%s'\n", g_nameBuf);
+                bad = 1;
+            }
+            // Набрали заново полное имя: каретка, вставка В СЕРЕДИНУ, Backspace.
+            name_edit_key(GLFW_KEY_HOME, 0);
+            for (int i = 0; i < UI_WIDGET_NAME; i++) name_edit_key(GLFW_KEY_DELETE, 0);
+            const char *n1 = "Body";
+            for (const char *p = n1; *p; p++) name_edit_char((unsigned)(unsigned char)*p);
+            if (strcmp(g_nameBuf, "Body") != 0 || g_nameCaret != 4) {
+                printf("SELF FAIL: text-retype '%s' %d\n", g_nameBuf, g_nameCaret);
+                bad = 1;
+            }
+            name_edit_key(GLFW_KEY_LEFT, 0); // каретка перед 'y'
+            name_edit_char('X');             // вставка В СЕРЕДИНУ строки
+            if (strcmp(g_nameBuf, "BodXy") != 0 || g_nameCaret != 4) {
+                printf("SELF FAIL: text-ins '%s' %d\n", g_nameBuf, g_nameCaret);
+                bad = 1;
+            }
+            name_edit_key(GLFW_KEY_BACKSPACE, 0); // и убрать её
+            if (strcmp(g_nameBuf, "Body") != 0 || g_nameCaret != 3) {
+                printf("SELF FAIL: text-bs '%s' %d\n", g_nameBuf, g_nameCaret);
+                bad = 1;
+            }
+            // Shift+Home = выделить до начала; Backspace убирает ВЫДЕЛЕННОЕ.
+            name_edit_key(GLFW_KEY_HOME, GLFW_MOD_SHIFT);
+            if (!name_has_sel() || name_sel_lo() != 0 || name_sel_hi() != 3) {
+                printf("SELF FAIL: text-selshift %d..%d\n", name_sel_lo(), name_sel_hi());
+                bad = 1;
+            }
+            name_edit_key(GLFW_KEY_LEFT, 0); // клик вправо отменяет выделение
+            if (name_has_sel()) {
+                printf("SELF FAIL: text-selcollapse\n");
+                bad = 1;
+            }
+            name_edit_key(GLFW_KEY_HOME, 0);
+            name_edit_key(GLFW_KEY_DELETE, 0); // 'B' в начале
+            if (strcmp(g_nameBuf, "ody") != 0 || g_nameCaret != 0) {
+                printf("SELF FAIL: text-del '%s' %d\n", g_nameBuf, g_nameCaret);
+                bad = 1;
+            }
+            name_edit_char('"'); // структурные символы в имя не пускаем
+            name_edit_char('[');
+            if (strcmp(g_nameBuf, "ody") != 0) {
+                printf("SELF FAIL: text-sanitize '%s'\n", g_nameBuf);
+                bad = 1;
+            }
+            name_edit_end(0); // Esc: отмена — модель и история не тронуты
+            if (strcmp(widget_cget(&g_wt, la)->name, "Body") != 0 ||
+                ui_wundo_depth(&g_undo) != depth0) {
+                printf("SELF FAIL: text-cancel '%s' d%d\n", widget_cget(&g_wt, la)->name,
+                       ui_wundo_depth(&g_undo));
+                bad = 1;
+            }
+            name_edit_begin(); // коммит: Enter (Ctrl+A -> заменяем имя целиком)
+            name_edit_key(GLFW_KEY_A, GLFW_MOD_CONTROL);
+            if (!name_has_sel()) {
+                printf("SELF FAIL: text-ctrl-a\n");
+                bad = 1;
+            }
+            for (const char *p = "Body3"; *p; p++) name_edit_char((unsigned)(unsigned char)*p);
+            name_edit_end(1);
+            if (strcmp(widget_cget(&g_wt, la)->name, "Body3") != 0 ||
+                ui_wundo_depth(&g_undo) != depth0 + 1) {
+                printf("SELF FAIL: text-commit '%s' d%d\n", widget_cget(&g_wt, la)->name,
+                       ui_wundo_depth(&g_undo));
+                bad = 1;
+            }
+            name_edit_begin(); // без правок: ни модель, ни история не меняются
+            name_edit_end(1);
+            if (strcmp(widget_cget(&g_wt, la)->name, "Body3") != 0 ||
+                ui_wundo_depth(&g_undo) != depth0 + 1) {
+                printf("SELF FAIL: text-nochange\n");
+                bad = 1;
+            }
+            name_edit_begin(); // очистить всё и НЕ вводить ничего -> не коммит
+            for (int i = 0; i < UI_WIDGET_NAME; i++) name_edit_key(GLFW_KEY_DELETE, 0);
+            if (g_nameLen != 0) {
+                printf("SELF FAIL: text-clear %d\n", g_nameLen);
+                bad = 1;
+            }
+            name_edit_end(1);
+            if (strcmp(widget_cget(&g_wt, la)->name, "Body3") != 0) {
+                printf("SELF FAIL: text-empty '%s'\n", widget_cget(&g_wt, la)->name);
+                bad = 1;
+            }
+            name_edit_begin(); // занятое имя (у соседа Body2) -> суффикс
+            for (int i = 0; i < UI_WIDGET_NAME; i++) name_edit_key(GLFW_KEY_DELETE, 0);
+            for (const char *p = "Body2"; *p; p++) name_edit_char((unsigned)(unsigned char)*p);
+            name_edit_end(1);
+            if (strcmp(widget_cget(&g_wt, la)->name, "Body2_2") != 0) {
+                printf("SELF FAIL: text-uniq '%s'\n", widget_cget(&g_wt, la)->name);
+                bad = 1;
+            }
+            if (!wt_undo_apply(0) || strcmp(widget_cget(&g_wt, la)->name, "Body3") != 0) {
+                printf("SELF FAIL: text-undo '%s'\n", widget_cget(&g_wt, la)->name);
+                bad = 1;
+            }
+            // Переименование НЕ трогает геометрию (это текст, не layout).
+            if (widget_cget(&g_wt, lb) == 0 || widget_cget(&g_wt, la)->type != UI_W_LABEL) {
+                printf("SELF FAIL: text-model\n");
+                bad = 1;
+            }
+            g_nameEdit = 0;
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -2023,6 +2390,7 @@ int main(int argc, char **argv) {
         }
     }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
+    g_text = text; // F5a: атлас нужен хит-тесту/каретке поля имени
     if (!text) printf("ui_edit: text OFF (rects only)\n");
     // Всегда EDIT (L скриптом — как дефолтный select в ui_test).
     {
@@ -2049,6 +2417,7 @@ int main(int argc, char **argv) {
     glfwSetCursorPosCallback(win, on_move);
     glfwSetScrollCallback(win, on_scroll);
     glfwSetKeyCallback(win, on_key);
+    glfwSetCharCallback(win, on_char); // F5a: ввод текста (имя виджета)
     // Синхронизация кадра с дисплеем (по умолчанию ВКЛ). Без неё на слабом iGPU
     // кадр может попасть в композитор «полусобранным» — это и выглядит как
     // шлейф/косынка при драге. Бенчи/диагностика снимают: UI_EDIT_VSYNC=0.
@@ -2079,6 +2448,14 @@ int main(int argc, char **argv) {
         wt_spawn(UI_W_BUTTON);
         wt_spawn(UI_W_LABEL);
         edit_push();
+    }
+    { // UI_EDIT_RENAME=1: сразу открыть поле имени (скриншот/проверка каретки)
+        const char *rn = getenv("UI_EDIT_RENAME");
+        if (rn && rn[0] == '1') {
+            name_edit_begin();
+            printf("ui_edit: rename '%s' (sel %d..%d)\n", g_nameBuf, name_sel_lo(),
+                   name_sel_hi());
+        }
     }
     { // UI_EDIT_SPAWN=N: сразу N кнопок — проверить/показать скролл списка
         const char *sp = getenv("UI_EDIT_SPAWN");
@@ -2196,6 +2573,15 @@ int main(int argc, char **argv) {
             }
             g_lastT = nowT;
         }
+        if (g_nameEdit) { // F5a: каретка мигает — перерисовываем ТОЛЬКО имя
+            double nt = glfwGetTime();
+            if (g_nameBlink == 0.0) g_nameBlink = nt;
+            else if (nt - g_nameBlink >= 0.5) {
+                g_nameBlink = nt;
+                g_caretOn = !g_caretOn;
+                name_edit_redraw();
+            }
+        }
         {
             int fw = 0, fh = 0, ww = 0, wh = 0;
             glfwGetFramebufferSize(win, &fw, &fh);
@@ -2281,7 +2667,9 @@ int main(int argc, char **argv) {
                     ins_rect(-1, &hx, &hy, &hw, &hh);
                     (void)hw;
                     (void)hh;
-                    ui_text_quad(text, hx + 6, hy + 2, sw->name, tcol);
+                    // F5a: правим текст — рисуем БУФЕР (а не имя модели).
+                    ui_text_quad(text, hx + 6, hy + 2,
+                                 g_nameEdit ? g_nameBuf : sw->name, tcol);
                     for (int i = 0; i < IF_N; i++) {
                         float x, y, ww, hh2;
                         ins_rect(i, &x, &y, &ww, &hh2);
@@ -2309,8 +2697,9 @@ int main(int argc, char **argv) {
                 }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: palette=add | click=select | blue resize | Del remove"
-                         " | Ctrl+Z/Y undo/redo | wheel list=scroll | F7 self | Tab | Esc",
+                         "frontedit: click=select | drag=move | edges=resize | F2/header"
+                         "=rename | Del | Ctrl+Z/Y undo/redo | wheel list=scroll | F7 self"
+                         " | Tab | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
                 char hud[64];

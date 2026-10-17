@@ -1141,6 +1141,57 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: wundo-ceil %d\n", steps);
                 bad = 1;
             }
+            // Уникальность имён (F5a): занято -> суффикс _2, своё имя не трогаем,
+            // освободившееся имя берётся снова (без «дырок» в нумерации).
+            {
+                static UiWidgetTree nt;
+                widget_tree_init(&nt);
+                UiWidgetRect r2;
+                UiWidgetStyle s2;
+                memset(&r2, 0, sizeof r2);
+                memset(&s2, 0, sizeof s2);
+                r2.anchors = UI_A_LEFT | UI_A_TOP;
+                r2.w = 10;
+                r2.h = 10;
+                s2.alpha = 1.0f;
+                int w1 = widget_add(&nt, UI_W_BUTTON, "Btn", 0, &r2, &s2);
+                int w2 = widget_add(&nt, UI_W_BUTTON, "Btn2", 0, &r2, &s2);
+                char nm[UI_WIDGET_NAME];
+                snprintf(nm, sizeof nm, "%s", "Btn2"); // занято соседом
+                widget_name_unique(&nt, w1, nm);
+                if (strcmp(nm, "Btn2_2") != 0) {
+                    printf("SELF FAIL: wname-taken '%s'\n", nm);
+                    bad = 1;
+                }
+                snprintf(nm, sizeof nm, "%s", "Btn"); // своё имя — свободно
+                widget_name_unique(&nt, w1, nm);
+                if (strcmp(nm, "Btn") != 0) {
+                    printf("SELF FAIL: wname-own '%s'\n", nm);
+                    bad = 1;
+                }
+                snprintf(nm, sizeof nm, "%s", "Nobody"); // ничей -> берём как есть
+                widget_name_unique(&nt, w1, nm);
+                if (strcmp(nm, "Nobody") != 0) {
+                    printf("SELF FAIL: wname-free '%s'\n", nm);
+                    bad = 1;
+                }
+                int w3 = widget_add(&nt, UI_W_BUTTON, "Dup", 0, &r2, &s2);
+                (void)w3;
+                snprintf(widget_get(&nt, w2)->name, UI_WIDGET_NAME, "%s", "Dup_2");
+                snprintf(nm, sizeof nm, "%s", "Dup"); // Dup И Dup_2 заняты -> дальше
+                widget_name_unique(&nt, w1, nm);
+                if (strcmp(nm, "Dup_3") != 0) {
+                    printf("SELF FAIL: wname-skip '%s'\n", nm);
+                    bad = 1;
+                }
+                snprintf(nm, sizeof nm, "%s", "");
+                widget_name_unique(&nt, w1, nm); // пустое имя не ломает
+                if (strcmp(nm, "") != 0) {
+                    printf("SELF FAIL: wname-empty '%s'\n", nm);
+                    bad = 1;
+                }
+                widget_tree_init(&nt);
+            }
             widget_tree_init(&t);
         }
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.

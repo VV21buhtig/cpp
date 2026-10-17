@@ -225,3 +225,20 @@ void ui_text_flush(UiText *t, int w, int h) {
 unsigned ui_text_tex(const UiText *t) {
     return t ? t->tex : 0;
 }
+
+// Ширина строки без отрисовки: тот же advance стб, что в ui_text_quad (иначе
+// каретка «плыла» бы относительно текста). Квады не пишем — только метрика.
+float ui_text_width(UiText *t, const char *s) {
+    if (!t || !s) return 0.0f;
+    float ox = 0.0f;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 32 || *p > 126) {
+            ox += t->px * 0.5f;
+            continue;
+        }
+        float y = 0.0f;
+        stbtt_aligned_quad q;
+        stbtt_GetBakedQuad(t->ch, UI_ATLAS_W, UI_ATLAS_H, *p - 32, &ox, &y, &q, 1);
+    }
+    return ox;
+}

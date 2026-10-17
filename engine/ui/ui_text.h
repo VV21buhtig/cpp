@@ -17,5 +17,8 @@ float ui_text_quad(UiText *t, float x, float y, const char *s, const float rgba[
 // Нарисовать накопленное в текущую цель W×H (Y вниз -> ortho сам флипает).
 void ui_text_flush(UiText *t, int w, int h);
 unsigned ui_text_tex(const UiText *t);
+// Ширина строки в px БЕЗ отрисовки (каретка/центрирование). Printable ASCII —
+// как ui_text_quad; остальное — полширины (в атласе нет глифа).
+float ui_text_width(UiText *t, const char *s);
 
 #endif // ENGINE_UI_TEXT_H

@@ -68,6 +68,10 @@ int widget_add(UiWidgetTree *t, int type, const char *name, int parent,
 int widget_remove(UiWidgetTree *t, int id);
 // Найти по имени (первый). 0 = нет.
 int widget_find(const UiWidgetTree *t, const char *name);
+// Сделать имя УНИКАЛЬНЫМ в дереве (как UE: занято -> суффикс _2, _3...).
+// Имя нужно для человекочитаемого выбора в дереве/логе; id — своё (не считаем
+// конфликтом). Имя правится на месте (буфер >= UI_WIDGET_NAME).
+void widget_name_unique(UiWidgetTree *t, int id, char *name);
 // Перевесить к новому родителю (0 = корень). Циклы/чужие/переполнение = 0.
 int widget_reparent(UiWidgetTree *t, int id, int newParent);
 // Слой: сдвинуть id на dir (+1 выше, -1 ниже) среди соседей (тот же parent).
