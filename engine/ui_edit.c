@@ -12,6 +12,7 @@
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
 #include "ui/ui_widget.h" // дерево виджетов конструктора (§14)
+#include "ui/ui_widget_runtime.h" // §14 F3c: общий порядок/рендер/хит (игре и редактору)
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "rtarget.h"
 #include "comp_gl.h"
@@ -135,46 +136,15 @@ static int wt_spawn(int type) {
     return id;
 }
 
-// Верхний (по id — дети выше родителей) под точкой.
-// Соседи данного parent в порядке слоёв (z, затем id) — единый порядок
-// отрисовки, хита и дерева (§14 F3: кто ниже/выше).
+// §14 F3c: порядок слоёв, хит и отрисовка виджетов — из ОБЩЕГО рантайма
+// (ui_widget_runtime). Здесь только тонкие обёртки над деревом редактора g_wt,
+// чтобы игра и редактор гарантированно видели одинаковый порядок/верх.
 static int wt_sib_sorted(int parent, int *out) {
-    int n = 0;
-    for (int i = 0; i < UI_MAX_WIDGETS; i++)
-        if (g_wt.alive[i] && g_wt.items[i].parent == parent) out[n++] = i + 1;
-    for (int i = 1; i < n; i++) {
-        int k = out[i], j = i - 1;
-        while (j >= 0) {
-            const UiWidget *a = widget_cget(&g_wt, out[j]);
-            const UiWidget *b = widget_cget(&g_wt, k);
-            if (a->z > b->z || (a->z == b->z && out[j] > k)) {
-                out[j + 1] = out[j];
-                j--;
-            } else
-                break;
-        }
-        out[j + 1] = k;
-    }
-    return n;
-}
-
-static void wt_hit_rec(float px, float py, int id, int *best) {
-    const UiWidget *w = widget_cget(&g_wt, id);
-    if (!w) return;
-    float x, y, ww, hh;
-    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
-    if (px >= x && px < x + ww && py >= y && py < y + hh) *best = id; // верхний = последний
-    int kids[UI_MAX_WIDGETS];
-    int n = wt_sib_sorted(id, kids);
-    for (int i = 0; i < n; i++) wt_hit_rec(px, py, kids[i], best);
+    return ui_widget_sib_sorted(&g_wt, parent, out);
 }
 
 static int wt_hit(float px, float py) {
-    int best = 0;
-    int roots[UI_MAX_WIDGETS];
-    int n = wt_sib_sorted(0, roots);
-    for (int i = 0; i < n; i++) wt_hit_rec(px, py, roots[i], &best);
-    return best;
+    return ui_widget_hit(&g_wt, g_WW, g_WH, px, py);
 }
 
 static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
@@ -191,24 +161,13 @@ static void wt_emit(RcVecShape *sh, int *n, float x, float y, float w, float h,
     memcpy(s->rgba, rgba, sizeof s->rgba);
 }
 
-static void wt_draw_node(RcVecShape *sh, int *n, int id) {
-    const UiWidget *w = widget_cget(&g_wt, id);
-    if (!w) return;
-    float x, y, ww, hh;
-    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
-    float col[4] = {w->style.bg[0], w->style.bg[1], w->style.bg[2],
-                    w->style.bg[3] * w->style.alpha};
-    if (col[3] > 0.001f) wt_emit(sh, n, x, y, ww, hh, col, w->style.rounding);
-    int kids[UI_MAX_WIDGETS];
-    int nk = wt_sib_sorted(id, kids); // дети — по слоям
-    for (int i = 0; i < nk; i++) wt_draw_node(sh, n, kids[i]);
-}
-
-// Виджеты (корни->дети по слоям), затем рамка выбора. Палитра — отдельно (поверх).
+// §14 F3c: заливки виджетов — из ОБЩЕГО рантайма (то же, что увидит игра);
+// поверх — рамка выбора и ручки: это ХРОМ РЕДАКТОРА, потому локально.
+// Палитра — отдельно (выше, своим слоем).
 static void wt_draw_all(RcVecShape *sh, int *n) {
-    int roots[UI_MAX_WIDGETS];
-    int nr = wt_sib_sorted(0, roots);
-    for (int i = 0; i < nr; i++) wt_draw_node(sh, n, roots[i]);
+    RcVecShape tmp[UI_MAX_PRIMS];
+    int m = ui_widget_build(&g_wt, g_WW, g_WH, tmp, UI_MAX_PRIMS);
+    for (int i = 0; i < m && *n < UI_MAX_PRIMS; i++) sh[(*n)++] = tmp[i];
     const UiWidget *s = widget_cget(&g_wt, g_wtSel);
     if (s) {
         float x, y, ww, hh;
@@ -1335,6 +1294,65 @@ int main(int argc, char **argv) {
             remove(tp);
             remove("/tmp/opencode/widget_dock.json");
             remove("/tmp/opencode/widget_bad.json");
+        }
+        // §14 F3c: ОБЩИЙ рантайм — сборка примитивов и верхний хит (то же,
+        // что увидит игра). Порядок (z,id) един для сборки, хита и дерева.
+        {
+            UiWidgetTree srn;
+            widget_tree_init(&srn);
+            UiWidgetStyle sst;
+            memset(&sst, 0, sizeof sst);
+            sst.bg[0] = 1.0f;
+            sst.bg[3] = 1.0f;
+            sst.alpha = 1.0f;
+            UiWidgetRect srect = {UI_A_LEFT | UI_A_TOP, 100, 100, 200, 200};
+            int sidA = widget_add(&srn, UI_W_PANEL, "RA", 0, &srect, &sst);
+            srect.x = 150;
+            srect.y = 150;
+            sst.bg[0] = 0.0f;
+            sst.bg[2] = 1.0f;
+            int sidB = widget_add(&srn, UI_W_PANEL, "RB", 0, &srect, &sst);
+            // Прозрачный не попадает в кадр: 2 непрозрачных -> 2, один alpha=0 -> 1.
+            RcVecShape sbuf[UI_MAX_PRIMS];
+            if (ui_widget_build(&srn, g_WW, g_WH, sbuf, UI_MAX_PRIMS) != 2) {
+                printf("SELF FAIL: rtb-n\n");
+                bad = 1;
+            }
+            widget_get(&srn, sidA)->style.alpha = 0.0f;
+            if (ui_widget_build(&srn, g_WW, g_WH, sbuf, UI_MAX_PRIMS) != 1) {
+                printf("SELF FAIL: rtb-alpha\n");
+                bad = 1;
+            }
+            widget_get(&srn, sidA)->style.alpha = 1.0f;
+            // Перекрытие 150..300: выше по (z,id) на старте — B (id больше).
+            if (ui_widget_hit(&srn, g_WW, g_WH, 200, 200) != sidB) {
+                printf("SELF FAIL: rtb-hit0\n");
+                bad = 1;
+            }
+            if (!widget_layer(&srn, sidA, +1)) {
+                printf("SELF FAIL: rtb-raise\n");
+                bad = 1;
+            }
+            if (ui_widget_hit(&srn, g_WW, g_WH, 200, 200) != sidA) {
+                printf("SELF FAIL: rtb-hit-top\n");
+                bad = 1;
+            }
+            if (ui_widget_hit(&srn, g_WW, g_WH, 110, 110) != sidA) { // B не покрывает
+                printf("SELF FAIL: rtb-hit-a\n");
+                bad = 1;
+            }
+            if (ui_widget_hit(&srn, g_WW, g_WH, 10, 10)) { // мимо обеих
+                printf("SELF FAIL: rtb-hit-miss\n");
+                bad = 1;
+            }
+            // Редакторская обёртка = тот же рантайм (не расходимся).
+            UiWidgetTree keepRT = g_wt;
+            g_wt = srn;
+            if (wt_hit(200, 200) != ui_widget_hit(&g_wt, g_WW, g_WH, 200, 200)) {
+                printf("SELF FAIL: rtb-wrap\n");
+                bad = 1;
+            }
+            g_wt = keepRT;
         }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.

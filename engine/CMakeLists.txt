@@ -48,6 +48,7 @@ add_library(engine_shared SHARED
   ui/ui_undo.c
   ui/ui_gizmo.c
   ui/ui_widget.c
+  ui/ui_widget_runtime.c
   wgsl_file.c
   project_db.c
   graph.c
