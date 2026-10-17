@@ -28,6 +28,9 @@ static RenderCore *g_vec = 0;
 static ScWorld g_scene;
 static GLFWcursor *g_curArrow = 0, *g_curResize = 0;
 static int g_quit = 0;
+static float g_fpsEma = 0;   // оверлей: живой FPS (жалоба «со временем деградирует»)
+static double g_lastT = 0;
+static int g_fullN = 0;      // счётчик полных edit_push (диагноз: full на MOVE = лаг)
 // Бенч драга (UI_EDIT_BENCH=rect|full): синтетический драг K шагов, замер FPS.
 #define BENCH_K 600
 static int g_benchK = BENCH_K; // переопределяется UI_EDIT_BENCH_K
@@ -457,6 +460,7 @@ static int build_shapes(RcVecShape *shapes) {
 static void edit_push(void) {
     RcVecShape shapes[UI_MAX_PRIMS];
     int n = build_shapes(shapes);
+    g_fullN++;
     if (n && g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
 }
 
@@ -1061,6 +1065,17 @@ int main(int argc, char **argv) {
     static const float voidCol[4] = {0.35f, 0.38f, 0.45f, 1.0f};
     while (!glfwWindowShouldClose(win) && !g_quit) {
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+        { // живой FPS (для жалобы «со временем деградирует»)
+            double nowT = glfwGetTime();
+            if (g_lastT > 0.0) {
+                float dt = (float)(nowT - g_lastT);
+                if (dt > 0.0f) {
+                    float f = 1.0f / dt;
+                    g_fpsEma = g_fpsEma > 0.0f ? g_fpsEma * 0.9f + f * 0.1f : f;
+                }
+            }
+            g_lastT = nowT;
+        }
         {
             int fw = 0, fh = 0, ww = 0, wh = 0;
             glfwGetFramebufferSize(win, &fw, &fh);
@@ -1119,6 +1134,11 @@ int main(int argc, char **argv) {
                          "frontedit: click palette=add | click widget=select | blue edges resize"
                          " | Tab collapse | Esc quit",
                          hintCol);
+            { // HUD: FPS + счётчик полных перерисовок (диагноз «съеденного fps»)
+                char hud[48];
+                snprintf(hud, sizeof hud, "FPS %.0f  full %d", (double)g_fpsEma, g_fullN);
+                ui_text_quad(text, (float)(g_WW - 150), 6.0f, hud, hintCol);
+            }
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
             ui_text_flush(text, g_WW, g_WH);
