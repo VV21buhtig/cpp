@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
@@ -304,16 +305,29 @@ static void wt_drag_apply(float mx, float my) {
             nh = WT_MIN;
         }
     }
-    // Dirty-регионы: перемещение -> старый+новый; ресайз -> полосы дельты по
-    // сдвинутым краям (цена ~ скорости драга, а не размеру виджета).
+    // Dirty-регионы = СИММЕТРИЧЕСКАЯ РАЗНОСТЬ старого и нового rect (полосы по
+    // сдвинутым краям) + срединные ручки, съезжающие ВНУТРИ неизменной середины.
+    // Цена ~ ДЕЛЬТЕ драга, не размеру виджета. Единый путь для move и resize:
+    // move = поехали все 4 края, resize = один-два. Если дельта огромная (флин),
+    // полосы дороже — откат на объединение/два rect'а (честный выбор по площади).
     {
         const float M = 12.0f;
         float oL = g_prevX, oT = g_prevY, oR = g_prevX + g_prevW, oB = g_prevY + g_prevH;
         float nL = nx, nT = ny, nR = nx + nw, nB = ny + nh;
+        float uL = oL < nL ? oL : nL, uT = oT < nT ? oT : nT;
+        float uR = oR > nR ? oR : nR, uB = oB > nB ? oB : nB;
+        float uh = uB - uT, uw = uR - uL;
+        float dL = fabsf(oL - nL), dR = fabsf(oR - nR);
+        float dT = fabsf(oT - nT), dB = fabsf(oB - nB);
+        float oCx = (oL + oR) * 0.5f, nCx = (nL + nR) * 0.5f;
+        float oCy = (oT + oB) * 0.5f, nCy = (nT + nB) * 0.5f;
+        float stripA = (dL + dR) * (uh + 2 * M) + (dT + dB) * (uw + 2 * M);
+        float twoA = (g_prevW + 2 * M) * (g_prevH + 2 * M) + (nw + 2 * M) * (nh + 2 * M);
+        float uniA = (uw + 2 * M) * (uh + 2 * M);
         g_dirtyN = 0;
 #define WT_ADD_RECT(X, Y, W, H)                                                        \
     do {                                                                               \
-        if (g_dirtyN < 8) {                                                            \
+        if (g_dirtyN < 12) {                                                           \
             g_dirtyR[g_dirtyN][0] = (int)(X);                                          \
             g_dirtyR[g_dirtyN][1] = (int)(Y);                                          \
             g_dirtyR[g_dirtyN][2] = (int)(W);                                          \
@@ -321,45 +335,30 @@ static void wt_drag_apply(float mx, float my) {
             g_dirtyN++;                                                                \
         }                                                                              \
     } while (0)
-        if (g_dragHandle == 0) { // перемещение: стереть старый, нарисовать новый
+        if (stripA <= twoA && stripA <= uniA) { // основной путь: полосы дельты
+            if (dL > 0.5f) WT_ADD_RECT(uL - M, uT - M, dL + 2 * M, uh + 2 * M);
+            if (dR > 0.5f) WT_ADD_RECT(uR - dR - M, uT - M, dR + 2 * M, uh + 2 * M);
+            if (dT > 0.5f) WT_ADD_RECT(uL - M, uT - M, uw + 2 * M, dT + 2 * M);
+            if (dB > 0.5f) WT_ADD_RECT(uL - M, uB - dB - M, uw + 2 * M, dB + 2 * M);
+            if (fabsf(nCx - oCx) > 0.5f) { // верх/низ срединные ручки съехали по X
+                float cx = (oCx < nCx ? oCx : nCx) - WT_HANDLE;
+                float cw = fabsf(nCx - oCx) + 2 * WT_HANDLE;
+                WT_ADD_RECT(cx, uT - M, cw, dT + 2 * M);
+                WT_ADD_RECT(cx, uB - dB - M, cw, dB + 2 * M);
+            }
+            if (fabsf(nCy - oCy) > 0.5f) { // лево/право срединные ручки съехали по Y
+                float cy = (oCy < nCy ? oCy : nCy) - WT_HANDLE;
+                float ch = fabsf(nCy - oCy) + 2 * WT_HANDLE;
+                WT_ADD_RECT(uL - M, cy, dL + 2 * M, ch);
+                WT_ADD_RECT(uR - dR - M, cy, dR + 2 * M, ch);
+            }
+            if (g_dirtyN == 0) // ничего не сдвинулось (клик без движения)
+                WT_ADD_RECT(nL - M, nT - M, nw + 2 * M, nh + 2 * M);
+        } else if (uniA <= twoA) { // флин: объединение одним rect'ом
+            WT_ADD_RECT(uL - M, uT - M, uw + 2 * M, uh + 2 * M);
+        } else { // флин: два rect'а (старый+новый)
             WT_ADD_RECT(oL - M, oT - M, g_prevW + 2 * M, g_prevH + 2 * M);
             WT_ADD_RECT(nL - M, nT - M, nw + 2 * M, nh + 2 * M);
-        } else {
-            float x0 = (oL < nL ? oL : nL) - M, y0 = (oT < nT ? oT : nT) - M;
-            float x1 = (oR > nR ? oR : nR) + M, y1 = (oB > nB ? oB : nB) + M;
-            float dL = oL < nL ? nL - oL : oL - nL;
-            float dR = oR < nR ? nR - oR : oR - nR;
-            float dT = oT < nT ? nT - oT : oT - nT;
-            float dB = oB < nB ? nB - oB : oB - nB;
-            float eL = oL < nL ? oL : nL, eR = oR > nR ? oR : nR;
-            float eT = oT < nT ? oT : nT, eB = oB > nB ? oB : nB;
-            if (g_dragHandle & 1) // левый край: вертикальная полоса
-                WT_ADD_RECT(eL - M, y0, dL + 2 * M, y1 - y0);
-            if (g_dragHandle & 2) // правый край
-                WT_ADD_RECT(eR - dR - M, y0, dR + 2 * M, y1 - y0);
-            if (g_dragHandle & 4) // верх
-                WT_ADD_RECT(x0, eT - M, x1 - x0, dT + 2 * M);
-            if (g_dragHandle & 8) // низ
-                WT_ADD_RECT(x0, eB - dB - M, x1 - x0, dB + 2 * M);
-            // Срединные ручки, которые съезжают ВНУТРИ неизменной части:
-            // верх/низ при смене ширины, лево/право при смене высоты.
-            int wchg = (g_dragHandle & 3) != 0, hchg = (g_dragHandle & 12) != 0;
-            float oCx = (oL + oR) * 0.5f, nCx = (nL + nR) * 0.5f;
-            float oCy = (oT + oB) * 0.5f, nCy = (nT + nB) * 0.5f;
-            if (wchg) {
-                float cx = (oCx < nCx ? oCx : nCx) - WT_HANDLE;
-                float cw = (oCx < nCx ? nCx - oCx : oCx - nCx) + 2 * WT_HANDLE;
-                if (!(g_dragHandle & 4)) WT_ADD_RECT(cx, y0, cw, 2 * M);
-                if (!(g_dragHandle & 8)) WT_ADD_RECT(cx, y1 - 2 * M, cw, 2 * M);
-            }
-            if (hchg) {
-                float cy = (oCy < nCy ? oCy : nCy) - WT_HANDLE;
-                float ch = (oCy < nCy ? nCy - oCy : oCy - nCy) + 2 * WT_HANDLE;
-                if (!(g_dragHandle & 1)) WT_ADD_RECT(x0, cy, 2 * M, ch);
-                if (!(g_dragHandle & 2)) WT_ADD_RECT(x1 - 2 * M, cy, 2 * M, ch);
-            }
-            if (g_dirtyN == 0) // ничего не сдвинулось (клик по ручке без движения)
-                WT_ADD_RECT(nL - M, nT - M, nw + 2 * M, nh + 2 * M);
         }
 #undef WT_ADD_RECT
         g_part = 1;
@@ -1051,6 +1050,43 @@ int main(int argc, char **argv) {
                 }
         }
         g_wtSel = g_benchId;
+        { // Диагностика: раздуть цель (UI_EDIT_BENCH_SIZE=925x530) и повесить детей
+            const char *bs = getenv("UI_EDIT_BENCH_SIZE");
+            if (bs && bs[0]) {
+                int sw = 0, sh = 0;
+                UiWidget *bw = widget_get(&g_wt, g_benchId);
+                if (bw && sscanf(bs, "%dx%d", &sw, &sh) == 2 && sw > 0 && sh > 0) {
+                    bw->rect.anchors |= UI_A_LEFT | UI_A_TOP;
+                    bw->rect.w = (float)sw;
+                    bw->rect.h = (float)sh;
+                }
+            }
+            const char *bkd = getenv("UI_EDIT_BENCH_KIDS");
+            if (bkd && bkd[0] == '1') {
+                UiWidgetRect cr;
+                UiWidgetStyle cs;
+                memset(&cr, 0, sizeof cr);
+                memset(&cs, 0, sizeof cs);
+                cr.anchors = UI_A_LEFT | UI_A_TOP;
+                cs.alpha = 1.0f;
+                cs.fontSize = 14.0f;
+                cr.x = 300;
+                cr.y = 150;
+                cr.w = 150;
+                cr.h = 22; // label
+                widget_add(&g_wt, UI_W_LABEL, "Label1", g_benchId, &cr, &cs);
+                cs.bg[0] = 0.22f;
+                cs.bg[1] = 0.34f;
+                cs.bg[2] = 0.62f;
+                cs.bg[3] = 1.0f;
+                cs.rounding = 4.0f;
+                cr.x = 380;
+                cr.y = 200;
+                cr.w = 300;
+                cr.h = 270; // button
+                widget_add(&g_wt, UI_W_BUTTON, "Button1", g_benchId, &cr, &cs);
+            }
+        }
         edit_push();
     }
     // Доказательство картинкой: UI_EDIT_SHOT=shot.ppm UI_EDIT_SHOT_AT=60.
