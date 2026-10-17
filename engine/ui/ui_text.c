@@ -24,6 +24,7 @@ struct UiText {
     int uVP, uTex;
     stbtt_bakedchar ch[UI_GLYPHS];
     float px;
+    float lift; // подъём: yoff stb считается от БАЗОВОЙ линии, а y у нас = ВЕРХ
     UiQ q[UI_TEXT_MAXQ];
     int nq;
 };
@@ -69,6 +70,14 @@ UiText *ui_text_init(const char *fontPath, float px) {
     printf("ui_text: bake rows=%d\n", bakeRows);
     free(ttf); // ttf больше не нужен (baked метрики скопированы)
     t->px = px;
+    // stb отдаёт yoff относительно БАЗОВОЙ линии (вверх = минус), а контракт
+    // ui_text.h — y = ВЕРХ строки. Без подъёма ВЕСЬ текст висел на ~12px выше
+    // своей строки: подписи панелей уезжали на тулбар, строки дерева — на
+    // предыдущую строку (тестер: «всё стоит криво», «панели съехали»).
+    float top = 0.0f;
+    for (int i = 0; i < UI_GLYPHS; i++)
+        if (t->ch[i].yoff < top) top = t->ch[i].yoff;
+    t->lift = -top;
     glGenTextures(1, &t->tex);
     glBindTexture(GL_TEXTURE_2D, t->tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -151,7 +160,7 @@ float ui_text_quad(UiText *t, float x, float y, const char *s, const float rgba[
         float bw = b->x1 - b->x0, bh = b->y1 - b->y0;
         UiQ *q = &t->q[t->nq++];
         q->x0 = ox + b->xoff;
-        q->y0 = y + b->yoff;
+        q->y0 = y + t->lift + b->yoff; // y = ВЕРХ строки (см. lift в init)
         q->x1 = q->x0 + bw;
         q->y1 = q->y0 + bh;
         q->u0 = b->x0 / (float)UI_ATLAS_W;
