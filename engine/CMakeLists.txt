@@ -3,6 +3,14 @@ project(voxengine LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Тип сборки по умолчанию — RelWithDebInfo (-O2 -g). Пустой тип = -O0, и это
+# был НАСТОЯЩИЙ источник лага: CPU-растр полного кадра 18 мс (-O0) против 2 мс
+# (-O2), полный аплоад кадра 55 мс против 13. Явно заданный тип не трогаем.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 find_package(glfw3 REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(SQLite3 REQUIRED)

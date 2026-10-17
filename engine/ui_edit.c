@@ -38,6 +38,7 @@ static int g_fullN = 0;      // счётчик полных edit_push (диаг�
 #define BENCH_K 600
 static int g_benchK = BENCH_K; // переопределяется UI_EDIT_BENCH_K
 static int g_bench = 0, g_forceFull = 0, g_benchId = 0, g_benchNoEv = 0;
+static int g_benchSpawn = 0, g_benchNSpawn = 10; // UI_EDIT_BENCH=spawn: залп спавнов
 static int g_noDirty = 0; // UI_EDIT_FULL=1: всегда полный кадр (диагностика шлейфа)
 static int g_benchResize = 0;
 static int g_benchCorner = 0;
@@ -316,15 +317,15 @@ static void tree_build(void) {
     if (g_treeScroll > maxs) g_treeScroll = maxs;
     if (g_treeScroll < 0) g_treeScroll = 0;
 }
-// row — индекс ВИДИМОЙ строки (0..rows-1): ширина = внутренняя ширина панели,
-// так строки не вылезают за хром-виджет (жалоба «строки вне виджета»).
+// row — индекс ВИДИМОЙ строки (0..rows-1): ширина = внутренняя ширина панели
+// минус место под индикатор прокрутки, так строки не вылезают за хром-виджет.
 static void tree_rect(int row, float *x, float *y, float *w, float *h) {
     float px, py, pw, ph;
     ed_rect(g_edTree, &px, &py, &pw, &ph);
     (void)ph;
     *x = px + PAL_PAD;
     *y = py + TREE_HDR + (float)(row * TREE_RH);
-    *w = pw - 2 * PAL_PAD;
+    *w = pw - 2 * PAL_PAD - 4;
     *h = (float)TREE_RH;
 }
 static int tree_hit(float px, float py) {
@@ -357,6 +358,25 @@ static void tree_draw(RcVecShape *sh, int *n) {
         float tc[4];
         type_col(wd->type, tc);
         wt_emit(sh, n, x + 4 + (float)(g_treeDepth[i] * 10), y + 4, 4, h - 8, tc, 0);
+    }
+    // Индикатор прокрутки (UE/Blender): сразу видно, что список — окно и где мы
+    // в нём. Без него «не листается» неотличимо от «листать нечего».
+    if (g_treeN > rows) {
+        float px, py, pw, ph;
+        ed_rect(g_edTree, &px, &py, &pw, &ph);
+        float track[4] = {0.16f, 0.18f, 0.22f, 0.85f};
+        float thumb[4] = {0.45f, 0.52f, 0.62f, 1.0f};
+        float barW = 3.0f;
+        float bx = px + pw - PAL_PAD + 1.0f;
+        float ty = py + TREE_HDR;
+        float thh = ph - TREE_HDR - PAL_PAD;
+        int maxs = g_treeN - rows;
+        float frac = maxs > 0 ? (float)g_treeScroll / (float)maxs : 0.0f;
+        float bh = thh * (float)rows / (float)g_treeN;
+        if (bh < 14.0f) bh = 14.0f;
+        float by = ty + (thh - bh) * (frac < 0 ? 0 : frac > 1 ? 1 : frac);
+        wt_emit(sh, n, bx, ty, barW, thh, track, 1.5f);
+        wt_emit(sh, n, bx, by, barW, bh, thumb, 1.5f);
     }
 }
 
@@ -673,12 +693,23 @@ static void edit_push_dirtyN(const int (*rects)[4], int cnt);
 // Персист §14 (F2a2): пишем виджеты в ТОТ ЖЕ layout.json, что и доки (§11).// widget_json_save заменяет только свою секцию, доки не трогает — и наоборот
 // (lay_save переносит "widgets"). Пишем на КОММИТ (конец драга/спавн), не на
 // каждый шаг. В seed/bench/скриншот-режимах файл не пачкаем (герметичность).
+// Куда персист виджетов пишет/читает. В бенчах/сид-режимах — НИКОГДА в документ
+// пользователя: уводим в отдельный файл (герметичность тестов). UI_EDIT_PERSIST=1
+// оставлен, чтобы мерить ЧЕСТНО (вместе с записью файла), но не по документу.
+static const char *wt_path(void) {
+    if (getenv("UI_EDIT_BENCH") || getenv("UI_EDIT_SEED"))
+        return "engine/assets/layout.bench.json";
+    return UI_LAYOUT_PATH;
+}
 static int wt_persist_ok(void) {
+    // UI_EDIT_PERSIST=1 — меряем ЧЕСТНО, с записью файла (бенч залпа спавнов).
+    const char *fp = getenv("UI_EDIT_PERSIST");
+    if (fp && fp[0] == '1') return 1;
     return !getenv("UI_EDIT_SEED") && !getenv("UI_EDIT_BENCH");
 }
 static void wt_persist(void) {
     if (g_editSelf) return; // хром редактора — вид инструмента, в layout.json не пишем
-    if (wt_persist_ok()) widget_json_save(&g_wt, UI_LAYOUT_PATH);
+    if (wt_persist_ok()) widget_json_save(&g_wt, wt_path());
 }
 
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
@@ -1840,7 +1871,7 @@ int main(int argc, char **argv) {
     glfwMaximizeWindow(win);
     glfwPollEvents();
     drain_ev();
-    if (wt_persist_ok()) widget_json_load(&g_wt, UI_LAYOUT_PATH); // персист §14
+    if (wt_persist_ok()) widget_json_load(&g_wt, wt_path()); // персист §14
     edit_push(); // первая заливка
     // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
     if (getenv("UI_EDIT_SEED")) {
@@ -1848,6 +1879,15 @@ int main(int argc, char **argv) {
         wt_spawn(UI_W_BUTTON);
         wt_spawn(UI_W_LABEL);
         edit_push();
+    }
+    { // UI_EDIT_SPAWN=N: сразу N кнопок — проверить/показать скролл списка
+        const char *sp = getenv("UI_EDIT_SPAWN");
+        if (sp && sp[0] > '0') {
+            int k = atoi(sp);
+            for (int i = 0; i < k; i++) wt_spawn(UI_W_BUTTON);
+            edit_push();
+            printf("ui_edit: spawn %d (widgets=%d)\n", k, g_wt.count);
+        }
     }
     // Бенч драга: без vsync-капа, синтетика в цикле (ниже).
     const char *bench = getenv("UI_EDIT_BENCH");
@@ -1858,7 +1898,12 @@ int main(int argc, char **argv) {
             const char *ff = getenv("UI_EDIT_BENCH_FULL"); // форс полного пути при той же траектории
             if (ff && ff[0] == '1') g_forceFull = 1;
         }
-        g_benchNoEv = !strcmp(bench, "none");
+        g_benchNoEv = !strcmp(bench, "none") || !strcmp(bench, "spawn");
+        g_benchSpawn = !strcmp(bench, "spawn");
+        {
+            const char *bn = getenv("UI_EDIT_BENCH_N"); // залп: сколько спавнов
+            if (bn && bn[0] > '0') g_benchNSpawn = atoi(bn);
+        }
         g_benchResize = !strcmp(bench, "resize");
         {
             const char *bc = getenv("UI_EDIT_BENCH_CORNER"); // тянуть угол (BR), не край
@@ -2065,7 +2110,7 @@ int main(int argc, char **argv) {
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
                          "frontedit: click palette=add | click widget=select | blue edges"
-                         " resize | F7 edit editor's own UI | Tab collapse | Esc quit",
+                         " resize | wheel over list=scroll | F7 editor UI | Tab collapse | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок (диагноз «съеденного fps»)
                 char hud[48];
@@ -2093,6 +2138,32 @@ int main(int argc, char **argv) {
                 }
                 free(px);
             }
+        }
+        // Бенч ЗАЛПА СПАВНОВ (жалоба: «лаг при создании +10 кнопок сразу»):
+        // N кликов по палитре в ОДНОМ кадре — худший случай. Меряем залп в мс и
+        // fps ПОСЛЕ (steady state с N виджетами). UI_EDIT_PERSIST=1 — честно, с файлом.
+        if (g_benchSpawn && frames == 10) {
+            double t0 = glfwGetTime();
+            for (int i = 0; i < g_benchNSpawn; i++) {
+                float px, py, pw, ph;
+                pal_rect(1, &px, &py, &pw, &ph); // кнопка «Button»
+                UiEvent be;
+                memset(&be, 0, sizeof be);
+                be.kind = UI_EV_DOWN;
+                be.x = px + 5;
+                be.y = py + 5;
+                double a0 = glfwGetTime();
+                route_event(&be);
+                double a1 = glfwGetTime();
+                if (getenv("UI_EDIT_TRACE"))
+                    printf("  spawn[%d] event=%.3f ms\n", i, (a1 - a0) * 1000.0);
+            }
+            double t1 = glfwGetTime();
+            RcVecShape tmp[UI_MAX_PRIMS];
+            printf("ui_edit: bench spawn n=%d dt=%.3f ms each=%.3f ms shapes=%d widgets=%d\n",
+                   g_benchNSpawn, (t1 - t0) * 1000.0,
+                   (t1 - t0) * 1000.0 / (double)g_benchNSpawn, build_shapes(tmp),
+                   g_wt.count);
         }
         // Бенч драга: DOWN в кадре 10, далее MOVE; замер FPS, выход по концу.
         if (g_bench && frames == 10) g_benchT0 = glfwGetTime();
@@ -2153,6 +2224,7 @@ int main(int argc, char **argv) {
             double dt = glfwGetTime() - g_benchT0;
             printf("ui_edit: bench %s steps=%d dt=%.3f fps=%.1f\n",
                    g_forceFull     ? "full"
+                   : g_benchSpawn  ? "spawn"
                    : g_benchResize ? "resize"
                    : g_benchNoEv   ? "none"
                                    : "bands",

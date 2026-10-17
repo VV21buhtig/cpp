@@ -3,10 +3,13 @@
 // Координаты пиксельные, начало СЛЕВА СВЕРХУ (экранная конвенция 2D).
 // Первое ядро на RHI движка: контекст/программа — из rhi_gl, не напрямую.
 // Бейдж циан.
+#define _POSIX_C_SOURCE 200809L
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
 #include "render_api.h"
 #include "rtarget.h"
 #include "gl_blit.h"
@@ -35,6 +38,42 @@ static void blend_px(uint8_t *fb, int w, int h, int x, int y, const float *rgba)
     p[3] = (uint8_t)((sa + da * (1.0f - sa)) * 255.0f + 0.5f);
 }
 
+// Быстрый ГОРИЗОНТАЛЬНЫЙ спан (ряд пикселей). Профиль полного кадра показал,
+// что весь лаг — в растре больших плашек (фон вьюпорта, панели доков): там на
+// КАЖДЫЙ пиксель считалась float-математика src-over. Здесь цвета источника
+// считаются один раз на спан, а непрозрачный случай пишет без чтения fb.
+static void blend_span(uint8_t *fb, int w, int x0, int x1, int y, const float *rgba) {
+    if (y < 0 || x1 <= x0) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 > w) x1 = w;
+    if (x1 <= x0) return;
+    float sa = rgba[3] < 0 ? 0 : (rgba[3] > 1 ? 1 : rgba[3]);
+    if (sa <= 0.0f) return;
+    uint8_t sc[3];
+    for (int i = 0; i < 3; i++)
+        sc[i] = (uint8_t)((rgba[i] < 0 ? 0 : (rgba[i] > 1 ? 1 : rgba[i])) * 255.0f + 0.5f);
+    uint8_t *row = fb + ((size_t)y * (size_t)w + (size_t)x0) * 4;
+    int n = x1 - x0;
+    if (sa >= 1.0f) { // непрозрачно: прямая запись (без чтения и float)
+        for (int x = 0; x < n; x++) {
+            uint8_t *p = row + (size_t)x * 4;
+            p[0] = sc[0];
+            p[1] = sc[1];
+            p[2] = sc[2];
+            p[3] = 255;
+        }
+        return;
+    }
+    float ia = 1.0f - sa;
+    uint8_t a8 = (uint8_t)(sa * 255.0f + 0.5f);
+    for (int x = 0; x < n; x++) {
+        uint8_t *p = row + (size_t)x * 4;
+        for (int i = 0; i < 3; i++)
+            p[i] = (uint8_t)((float)sc[i] * sa + (float)p[i] * ia + 0.5f);
+        p[3] = (uint8_t)(a8 + (float)p[3] * ia + 0.5f);
+    }
+}
+
 // Клип региона (dirty-rect): циклы растра гоняем только по нему, не по всему
 // bbox фигуры. Иначе фоновая плашка во весь экран растеризуется целиком каждый
 // шаг драга — и dirty-rect не экономит (это и был лаг). Для полной заливки
@@ -56,26 +95,33 @@ static void vec_rect(uint8_t *fb, int w, int h, const RcVecShape *s) {
     if (x1 > w) x1 = w;
     if (y1 > h) y1 = h;
     clip_bounds(&x0, &y0, &x1, &y1);
+    if (x1 <= x0 || y1 <= y0) return;
     float r = s->e;
     if (r < 0.0f) r = 0.0f;
     float maxr = (s->c < s->d ? s->c : s->d) * 0.5f;
     if (r > maxr) r = maxr;
+    if (r <= 0.0f) { // остро: спан на строку (панели/фон — главный случай)
+        for (int y = y0; y < y1; y++) blend_span(fb, w, x0, x1, y, s->rgba);
+        return;
+    }
+    // Скруглённые углы: на строку считаем ДОПУСТИМЫЙ интервал x по четверти
+    // круга (один sqrt на строку) и заливаем его спаном — вместо теста на
+    // каждый пиксель. Условие совпадает с прежним по-пиксельным.
     float r2 = r * r;
-    for (int y = y0; y < y1; y++)
-        for (int x = x0; x < x1; x++) {
-            if (r > 0.0f) {
-                float cx = x + 0.5f, cy = y + 0.5f;
-                // Ближайший центр угла: отступ r от каждого края.
-                float qx = cx - (s->a + r);
-                if (cx > s->a + s->c - r) qx = cx - (s->a + s->c - r);
-                else if (cx >= s->a + r) qx = 0.0f;
-                float qy = cy - (s->b + r);
-                if (cy > s->b + s->d - r) qy = cy - (s->b + s->d - r);
-                else if (cy >= s->b + r) qy = 0.0f;
-                if (qx * qx + qy * qy > r2) continue;
-            }
-            blend_px(fb, w, h, x, y, s->rgba);
-        }
+    float ax0 = s->a + r, ax1 = s->a + s->c - r;
+    float ay0 = s->b + r, ay1 = s->b + s->d - r;
+    for (int y = y0; y < y1; y++) {
+        float cy = (float)y + 0.5f;
+        float qy = cy < ay0 ? cy - ay0 : (cy > ay1 ? cy - ay1 : 0.0f);
+        float d2 = r2 - qy * qy;
+        if (d2 < 0.0f) continue;
+        float dx = sqrtf(d2);
+        int lo = (int)ceilf(ax0 - dx - 0.5f);
+        int hi = (int)floorf(ax1 + dx - 0.5f);
+        if (lo < x0) lo = x0;
+        if (hi > x1 - 1) hi = x1 - 1;
+        if (hi >= lo) blend_span(fb, w, lo, hi + 1, y, s->rgba);
+    }
 }
 
 static void vec_circle(uint8_t *fb, int w, int h, const RcVecShape *s) {
@@ -137,6 +183,12 @@ static void vec_tri(uint8_t *fb, int w, int h, float x0, float y0, float x1, flo
         }
 }
 
+static double prof_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
 static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     VecWrap *p = (VecWrap *)rc->ctx;
     if (!p->fb) { // upload раньше первого frame: дефолт, frame поправит
@@ -148,8 +200,11 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     int w = p->fw, h = p->fh;
     if (!shapes || n <= 0) return 0;
     if (n > 4096) n = 4096;
+    int prof = getenv("VEC_PROF") != 0;
+    double q0 = prof ? prof_now() : 0;
     // Фон: тёмный. Порядок массива = порядок рисования.
     memset(p->fb, 0, (size_t)w * h * 4);
+    double q1 = prof ? prof_now() : 0;
     g_cx0 = 0;
     g_cy0 = 0;
     g_cx1 = w;
@@ -162,6 +217,7 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
             vec_tri(p->fb, w, h, shapes[i].a, shapes[i].b, shapes[i].c, shapes[i].d,
                     shapes[i].e, shapes[i].f, shapes[i].rgba);
     }
+    double q2 = prof ? prof_now() : 0;
     // Верх вниз -> низ вверх под блит.
     static uint8_t *flip = 0;
     static int flipN = 0;
@@ -173,7 +229,15 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     if (!flip) return 0;
     for (int y = 0; y < h; y++)
         memcpy(flip + (size_t)y * w * 4, p->fb + (size_t)(h - 1 - y) * w * 4, (size_t)w * 4);
-    return blit_upload(&p->blit, flip, w, h);
+    double q3 = prof ? prof_now() : 0;
+    int ok = blit_upload(&p->blit, flip, w, h);
+    if (prof) {
+        double q4 = prof_now();
+        printf("vec: prof n=%d clr=%.2f rast=%.2f flip=%.2f tex=%.2f ms (sum=%.2f)\n", n,
+               (q1 - q0) * 1e3, (q2 - q1) * 1e3, (q3 - q2) * 1e3, (q4 - q3) * 1e3,
+               (q4 - q0) * 1e3);
+    }
+    return ok;
 }
 
 // Частичная заливка (dirty-rect): чистим и рисуем только регион, остальное fb
