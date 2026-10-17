@@ -211,6 +211,65 @@ static void pal_draw(RcVecShape *sh, int *n) {
     }
 }
 
+// --- F3: дерево виджетов (иерархия + выбор кликом) ---
+// Строки идут в том же порядке, что и отрисовка (корни -> дети, в глубину).
+#define TREE_W 180
+#define TREE_RH 20
+static int g_treeN = 0;
+static int g_treeId[UI_MAX_WIDGETS];
+static int g_treeDepth[UI_MAX_WIDGETS];
+
+static void tree_collect(int id, int depth) {
+    if (g_treeN >= UI_MAX_WIDGETS) return;
+    const UiWidget *w = widget_cget(&g_wt, id);
+    if (!w) return;
+    g_treeId[g_treeN] = id;
+    g_treeDepth[g_treeN] = depth;
+    g_treeN++;
+    for (int i = 0; i < w->nchildren; i++) tree_collect(w->children[i], depth + 1);
+}
+static void tree_build(void) {
+    g_treeN = 0;
+    for (int i = 0; i < UI_MAX_WIDGETS; i++)
+        if (g_wt.alive[i] && g_wt.items[i].parent == 0) tree_collect(i + 1, 0);
+}
+static void tree_rect(int row, float *x, float *y, float *w, float *h) {
+    *x = (float)(g_vpx + 10);
+    *y = (float)(g_vpy + 10 + PAL_N * (PAL_BH + PAL_GAP) + 8 + row * TREE_RH);
+    *w = (float)TREE_W;
+    *h = (float)TREE_RH;
+}
+static int tree_hit(float px, float py) {
+    for (int i = 0; i < g_treeN; i++) {
+        float x, y, w, h;
+        tree_rect(i, &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) return g_treeId[i];
+    }
+    return 0;
+}
+static void type_col(int type, float out[4]) {
+    if (type == UI_W_BUTTON) { out[0] = 0.35f; out[1] = 0.65f; out[2] = 0.90f; }
+    else if (type == UI_W_LABEL) { out[0] = 0.80f; out[1] = 0.75f; out[2] = 0.40f; }
+    else { out[0] = 0.55f; out[1] = 0.60f; out[2] = 0.70f; }
+    out[3] = 1.0f;
+}
+static void tree_draw(RcVecShape *sh, int *n) {
+    tree_build();
+    for (int i = 0; i < g_treeN; i++) {
+        float x, y, w, h;
+        tree_rect(i, &x, &y, &w, &h);
+        const UiWidget *wd = widget_cget(&g_wt, g_treeId[i]);
+        if (!wd) continue;
+        int sel = g_treeId[i] == g_wtSel;
+        float c[4] = {0.15f, 0.16f, 0.20f, 1.0f};
+        if (sel) { c[0] = 0.22f; c[1] = 0.34f; c[2] = 0.62f; }
+        wt_emit(sh, n, x, y, w, h, c, 3.0f);
+        float tc[4];
+        type_col(wd->type, tc);
+        wt_emit(sh, n, x + 4 + (float)(g_treeDepth[i] * 10), y + 4, 4, h - 8, tc, 0);
+    }
+}
+
 // --- F2b: драг/ресайз (frozen-frame как гизмо: якорь на DOWN) ---
 // Хэндл = битмаска краёв: L=1 R=2 T=4 B=8; 0 = перемещение.
 static int g_dragId = 0;
@@ -414,6 +473,12 @@ static int wt_event(const UiEvent *e) {
         wt_persist(); // коммит: новый виджет
         return 1;
     }
+    tree_build();
+    int ti = tree_hit(e->x, e->y);
+    if (ti) { // F3: выбор виджета из дерева
+        g_wtSel = ti;
+        return 1;
+    }
     int hb = wt_handle_hit(e->x, e->y);
     if (hb > 0 && g_wtSel) { // ручки выбранного — ресайз
         wt_drag_begin(g_wtSel, hb, e->x, e->y);
@@ -468,6 +533,7 @@ static int build_shapes(RcVecShape *shapes) {
     }
     (void)panelsDirty;
     wt_draw_all(shapes, &n);
+    tree_draw(shapes, &n); // F3: дерево (под палитрой)
     pal_draw(shapes, &n);
     return n;
 }
@@ -969,6 +1035,29 @@ int main(int argc, char **argv) {
                 ui_panels_destroy(pp);
                 remove(mp);
             }
+            // F3: порядок/глубина дерева (корни -> дети, в глубину).
+            {
+                UiWidgetTree keep = g_wt;
+                g_wt = wt; // локальное дерево: P + 8 детей
+                tree_build();
+                if (g_treeN != 9 || g_treeDepth[0] != 0 || g_treeId[0] != P) {
+                    printf("SELF FAIL: tree-order n=%d\n", g_treeN);
+                    bad = 1;
+                }
+                for (int i = 1; i < g_treeN; i++)
+                    if (g_treeDepth[i] != 1) {
+                        printf("SELF FAIL: tree-depth i=%d\n", i);
+                        bad = 1;
+                    }
+                // Клик по строке = выбор этого виджета (hit по центру строки 1).
+                float rx, ry, rw, rh;
+                tree_rect(1, &rx, &ry, &rw, &rh);
+                if (tree_hit(rx + rw * 0.5f, ry + rh * 0.5f) != g_treeId[1]) {
+                    printf("SELF FAIL: tree-hit\n");
+                    bad = 1;
+                }
+                g_wt = keep;
+            }
             UiWidgetTree rt;
             widget_tree_init(&rt);
             if (!widget_json_load(&rt, "/tmp/opencode/widget_dock.json") || rt.count != 9) {
@@ -1253,6 +1342,16 @@ int main(int argc, char **argv) {
                 float px, py, pw, ph;
                 pal_rect(i, &px, &py, &pw, &ph);
                 ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
+            }
+            // F3: подписи дерева виджетов.
+            tree_build();
+            for (int i = 0; i < g_treeN; i++) {
+                const UiWidget *wd = widget_cget(&g_wt, g_treeId[i]);
+                if (!wd) continue;
+                float tx, ty, tw, th;
+                tree_rect(i, &tx, &ty, &tw, &th);
+                ui_text_quad(text, tx + 16 + (float)(g_treeDepth[i] * 10), ty + 3, wd->name,
+                             tcol);
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
                          "frontedit: click palette=add | click widget=select | blue edges resize"
