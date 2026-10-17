@@ -128,6 +128,17 @@ static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, floa
                          const float rgba[4], float round);
 static const char *g_edTabName[3] = {"PALETTE", "WIDGETS", "INSPECTOR"};
 static int ed_panel_open(int i) { return i >= 0 && i < 3 && g_edOpen[i]; }
+// §14 F5l(5): ЖИВАЯ панель = открыта вкладкой И не вырождена. Закрытая получает
+// rect 0x0, и её содержимое ОБЯЗАНО молчать: ряды считают координаты от панели,
+// поэтому из нулевого rect они рисуются в угол (0,0) — «зебры» полосами 200x20
+// поверх палитры, «появляются при выделении» (баг тестера: закрытый инспектор
+// рисовал заголовок + IF_N полей). Тот же инвариант, что «скрытая вкладка не
+// рисуется» у Word/Blender: закрыто = нет ни пикселя, ни хитбокса.
+static int ed_live(int i) {
+    if (!ed_panel_open(i)) return 0;
+    const UiWidget *p = widget_cget(&g_edWt, g_edPanels[i]);
+    return p && p->rect.w > 1.0f && p->rect.h > 1.0f;
+}
 
 // §14 F5l(4): ПОЛОСЫ ДОКОВ. Инструмент В ДОКЕ занимает свою полосу — слева
 // палитра+дерево, справа инспектор, — а вьюпорт (экран игры) это ОСТАТОК окна.
@@ -231,6 +242,7 @@ static void pal_rect(int i, float *x, float *y, float *w, float *h) {
 }
 
 static int pal_hit(float px, float py) {
+    if (!ed_live(0)) return -1; // закрытая панель не ловит клик (rect 0x0)
     for (int i = 0; i < PAL_N; i++) {
         float x, y, w, h;
         pal_rect(i, &x, &y, &w, &h);
@@ -303,10 +315,17 @@ static UiWidgetStyle wt_spawn_style(int type) {
 
 static int wt_spawn(int type) {
     int k = type == UI_W_PANEL ? 0 : type == UI_W_BUTTON ? 1 : 2;
-    g_wtN[k]++;
+    // ИМЯ — МЕТКА, ИДЕНТИЧНОСТЬ — id (§14 F1). Но метки НЕ должны повторяться:
+    // тестер: «в дереве пять строк Panel1 — не понять, какую правлю, они же
+    // разные». Счётчик стартует с нуля каждый запуск, поэтому берём ПЕРВЫЙ
+    // свободный номер (как Figma «Frame 12» / UMG): занятые (в т.ч. из
+    // сохранённого документа) пропускаем.
+    const char *base = k == 0 ? "Panel" : k == 1 ? "Button" : "Label";
     char nm[UI_WIDGET_NAME];
-    snprintf(nm, sizeof nm, "%s%d", k == 0 ? "Panel" : k == 1 ? "Button" : "Label",
-             g_wtN[k]);
+    do {
+        g_wtN[k]++;
+        snprintf(nm, sizeof nm, "%s%d", base, g_wtN[k]);
+    } while (widget_find(&g_wt, nm) != 0 && g_wtN[k] < 10000);
     UiWidgetRect r = wt_spawn_rect(type);
     UiWidgetStyle s = wt_spawn_style(type);
     int id = widget_add(&g_wt, type, nm, 0, &r, &s);
@@ -516,6 +535,7 @@ static void wt_draw_sel(RcVecShape *sh, int *n) {
 }
 
 static void pal_draw(RcVecShape *sh, int *n) {
+    if (!ed_live(0)) return; // F5l(5): закрытая палитра — ни одной фигуры
     for (int i = 0; i < PAL_N; i++) {
         float x, y, w, h;
         pal_rect(i, &x, &y, &w, &h);
@@ -607,6 +627,7 @@ static void tree_rect(int row, float *x, float *y, float *w, float *h) {
     *h = (float)TREE_RH;
 }
 static int tree_hit(float px, float py) {
+    if (!ed_live(1)) return 0; // закрытое дерево не ловит клик
     int rows = tree_rows_fit();
     for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
         float x, y, w, h;
@@ -622,6 +643,7 @@ static void type_col(int type, float out[4]) {
     out[3] = 1.0f;
 }
 static void tree_draw(RcVecShape *sh, int *n) {
+    if (!ed_live(1)) return; // F5l(5): закрытое дерево — ни одной фигуры
     tree_build();
     int rows = tree_rows_fit();
     { // F5d: полоса крошек (под заголовком): «где я» отдельно от списка
@@ -925,7 +947,7 @@ static void ins_clamp(int f, float *v) {
     }
 }
 static int ins_hit(float px, float py) {
-    if (!g_wtSel) return -1;
+    if (!g_wtSel || !ed_live(2)) return -1;
     for (int i = 0; i < IF_N; i++) {
         float x, y, w, h;
         ins_rect(i, &x, &y, &w, &h);
@@ -945,7 +967,8 @@ static void ins_px(int *out) {
     out[3] = (int)(hh + 0.5f);
 }
 static void ins_draw(RcVecShape *sh, int *n) {
-    if (!g_wtSel) return;
+    // F5l(5): закрытая панель получает rect 0x0 — из него ряды уезжали в угол (0,0).
+    if (!g_wtSel || !ed_live(2)) return;
     const UiWidget *w = widget_cget(g_act, g_wtSel);
     if (!w) return;
     float tx, ty, tw, th;
@@ -999,12 +1022,18 @@ static int g_dragHandle = 0;
 static float g_dragMX = 0, g_dragMY = 0;             // мышь на DOWN (px окна)
 static float g_dragX = 0, g_dragY = 0, g_dragW = 0, g_dragH = 0; // rect на DOWN
 static float g_prevX = 0, g_prevY = 0, g_prevW = 0, g_prevH = 0; // прошлый шаг
-// Dirty-регионы шага драга: 1 = есть что заливать. Список до 8 rect (x,y,w,h).
-// Перемещение -> старый+новый; ресайз -> полосы дельты (что реально изменилось),
-// а не весь виджет — иначе цена растёт вместе с размером (это и был «лаг»).
+// Dirty-регионы шага драга: список rect (x,y,w,h). Перемещение -> старый+новый;
+// ресайз -> полосы дельты (что реально изменилось), а не весь виджет — иначе
+// цена растёт вместе с размером (это и был «лаг»).
+// ВАЖНО: массив и предел ОБЯЗАНЫ совпадать. Раньше было g_dirtyR[8][4], а макрос
+// писал до 12 — запись МИМО массива (затирало g_dirtyN и соседние статики: грязь
+// превращалась в мусорные регионы, на экране полосы). Теперь предел = размер, а
+// переполнение честно откатывает кадр в ПОЛНЫЙ (как UE: регионов много -> всё).
+#define WT_MAX_DIRTY 16
 static int g_part = 0;
-static int g_dirtyR[8][4];
+static int g_dirtyR[WT_MAX_DIRTY][4];
 static int g_dirtyN = 0;
+static int g_dirtyOver = 0; // 1 = регионов больше, чем влезает: рисуем кадр целиком
 
 #define WT_GRAB 9.0f
 #define WT_MIN 8.0f
@@ -1188,14 +1217,17 @@ static void wt_drag_apply(float mx, float my) {
         float twoA = (g_prevW + 2 * M) * (g_prevH + 2 * M) + (nw + 2 * M) * (nh + 2 * M);
         float uniA = (uw + 2 * M) * (uh + 2 * M);
         g_dirtyN = 0;
+        g_dirtyOver = 0;
 #define WT_ADD_RECT(X, Y, W, H)                                                        \
     do {                                                                               \
-        if (g_dirtyN < 12) {                                                           \
+        if (g_dirtyN < WT_MAX_DIRTY) {                                                 \
             g_dirtyR[g_dirtyN][0] = (int)((X) + (g_act == &g_wt ? doc_ox() : 0.0f));   \
             g_dirtyR[g_dirtyN][1] = (int)((Y) + (g_act == &g_wt ? doc_oy() : 0.0f));   \
             g_dirtyR[g_dirtyN][2] = (int)(W);                                          \
             g_dirtyR[g_dirtyN][3] = (int)(H);                                          \
             g_dirtyN++;                                                                \
+        } else {                                                                       \
+            g_dirtyOver = 1; /* не влезло -> полный кадр, а не «потеряли регион» */     \
         }                                                                              \
     } while (0)
         if (okids) { // F5l: группа — объединение старых и новых границ поддерева
@@ -1247,16 +1279,25 @@ static void wt_drag_apply(float mx, float my) {
 // Куда персист виджетов пишет/читает. В бенчах/сид-режимах — НИКОГДА в документ
 // пользователя: уводим в отдельный файл (герметичность тестов). UI_EDIT_PERSIST=1
 // оставлен, чтобы мерить ЧЕСТНО (вместе с записью файла), но не по документу.
+// Тест-ручки §14 (синтетический ввод/скрипты воспроизведения жалоб). Пока задана
+// ЛЮБАЯ из них — документ юзера не читаем и не пишем: иначе прогон «а что если
+// кликнуть сюда» тихо дописывает его раскладку (своими руками уже раз так сделал:
+// 5 панелей из теста остались в его файле).
+static int ed_test_knobs(void) {
+    return getenv("UI_EDIT_BENCH") || getenv("UI_EDIT_SEED") || getenv("UI_EDIT_SCRIPT") ||
+           getenv("UI_EDIT_DRAG") || getenv("UI_EDIT_HOLD") || getenv("UI_EDIT_CLICK") ||
+           getenv("UI_EDIT_CLICK2") || getenv("UI_EDIT_TDRAG") || getenv("UI_EDIT_TDROP") ||
+           getenv("UI_EDIT_RENAME") || getenv("UI_EDIT_SPAWN");
+}
 static const char *wt_path(void) {
-    if (getenv("UI_EDIT_BENCH") || getenv("UI_EDIT_SEED"))
-        return "engine/assets/layout.bench.json";
+    if (ed_test_knobs()) return "engine/assets/layout.bench.json";
     return UI_LAYOUT_PATH;
 }
 static int wt_persist_ok(void) {
     // UI_EDIT_PERSIST=1 — меряем ЧЕСТНО, с записью файла (бенч залпа спавнов).
     const char *fp = getenv("UI_EDIT_PERSIST");
     if (fp && fp[0] == '1') return 1;
-    return !getenv("UI_EDIT_SEED") && !getenv("UI_EDIT_BENCH");
+    return !ed_test_knobs();
 }
 static void wt_persist(void) {
     if (g_editSelf) return; // хром редактора — вид инструмента, в layout.json не пишем
@@ -1440,7 +1481,7 @@ static int name_edit_key(int key, int mods) {
 }
 // Клик по заголовку инспектора (имя выбранного) = начать правку.
 static int ins_head_hit(float px, float py) {
-    if (!g_wtSel) return 0;
+    if (!g_wtSel || !ed_live(2)) return 0;
     float x, y, w, h;
     ins_rect(-1, &x, &y, &w, &h);
     return px >= x && px < x + w && py >= y && py < y + h;
@@ -2042,11 +2083,30 @@ static int build_shapes(RcVecShape *shapes) {
     return n;
 }
 
+// UI_EDIT_SHAPES=1: печать всех фигур кадра (диагноз «полосы/зебра»: ищем фигуру,
+// которая вылезла за вьюпорт). Печатает только подозрительные при =1, все при =2.
+static void shapes_dump(const RcVecShape *s, int n) {
+    const char *e = getenv("UI_EDIT_SHAPES");
+    if (!e || !e[0]) return;
+    int all = e[0] >= '2';
+    printf("ui_edit: shapes n=%d vp=%d,%d %dx%d win=%dx%d\n", n, g_vpx, g_vpy, g_vpw, g_vph,
+           g_WW, g_WH);
+    for (int i = 0; i < n; i++) {
+        float x = s[i].a, y = s[i].b, w = s[i].c, h = s[i].d;
+        int bad = (y < (float)g_vpy - 0.5f && y + h > (float)g_vpy - 0.5f) || x < 0.0f ||
+                  y < 0.0f || x + w > (float)g_WW + 0.5f || y + h > (float)g_WH + 0.5f ||
+                  w > (float)g_vpw + 0.5f;
+        if (all || bad)
+            printf("  [%d] kind=%d x=%.1f y=%.1f w=%.1f h=%.1f %s a=%.2f\n", i, s[i].kind, x,
+                   y, w, h, bad ? "LEAK" : "ok", (double)s[i].rgba[3]);
+    }
+}
 static void edit_push(void) {
     if (!g_vec) return; // selftest: без GL
     RcVecShape shapes[UI_MAX_PRIMS];
     int n = build_shapes(shapes);
     g_fullN++;
+    shapes_dump(shapes, n);
     if (n && g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
 }
 
@@ -2089,7 +2149,7 @@ static void route_event(const UiEvent *e) {
         edit_push();
         return;
     }
-    if (g_part && !g_forceFull && !g_noDirty) { // шаг драга: только регионы (dirty-rect)
+    if (g_part && !g_forceFull && !g_noDirty && !g_dirtyOver) { // шаг драга: только регионы
         edit_push_dirtyN(g_dirtyR, g_dirtyN);
         return;
     }
@@ -2252,6 +2312,19 @@ static void on_char(GLFWwindow *win, unsigned cp) {
     (void)win;
     if (!g_nameEdit) return;
     name_edit_char(cp);
+}
+
+// §14 F5l(5): содержимое панели обязано лежать ВНУТРИ её прямоугольника. Закрытая
+// панель имеет rect 0x0 — содержимое из неё рисуется в угол (0,0) («зебры»). Тест
+// селфтеста проверяет обе стороны инварианта этой функцией.
+static int panel_content_inside(const RcVecShape *s, int n, int panelId) {
+    float bx, by, bw, bh;
+    ed_rect(panelId, &bx, &by, &bw, &bh);
+    for (int i = 0; i < n; i++)
+        if (s[i].a < bx - 2.0f || s[i].b < by - 2.0f || s[i].a + s[i].c > bx + bw + 2.0f ||
+            s[i].b + s[i].d > by + bh + 2.0f)
+            return 0;
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -3264,6 +3337,79 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
         }
+        // §14 F5l(5): ЗАКРЫТАЯ ПАНЕЛЬ НЕ РИСУЕТ СОДЕРЖИМОЕ (и не ловит клик).
+        // Баг тестера: у закрытого инспектора rect обнулялся, а ряды продолжали
+        // строиться от него — 1 заголовок + IF_N полей «зебрами» 200x20 из угла
+        // (0,0) поверх палитры, «появляются только при выделении». Вторая сторона
+        // инварианта: ОТКРЫТАЯ панель рисует содержимое ВНУТРИ своего прямоугольника
+        // (если содержимое когда-нибудь «уедет» от панели — тест это поймает).
+        {
+            static RcVecShape pc[UI_MAX_PRIMS]; // закрытые панели: сюда писать нечем
+            static RcVecShape p0[UI_MAX_PRIMS], p1[UI_MAX_PRIMS], p2[UI_MAX_PRIMS];
+            int saveOpen[3] = {g_edOpen[0], g_edOpen[1], g_edOpen[2]};
+            UiWidgetTree *saveAct = g_act;
+            int saveSel = g_wtSel;
+            int saveSelf = g_editSelf;
+            memset(g_edMoved, 0, sizeof g_edMoved); // каноническая док-раскладка
+            widget_tree_init(&g_wt);
+            UiWidgetRect rr;
+            UiWidgetStyle ss;
+            memset(&rr, 0, sizeof rr);
+            memset(&ss, 0, sizeof ss);
+            ss.alpha = 1.0f;
+            rr.anchors = UI_A_LEFT | UI_A_TOP;
+            rr.x = 40;
+            rr.y = 40;
+            rr.w = 120;
+            rr.h = 48;
+            int probe = widget_add(&g_wt, UI_W_BUTTON, "Probe", 0, &rr, &ss);
+            g_act = &g_wt;
+            g_editSelf = 0;
+            g_wtSel = probe; // выделение есть: именно при нём и всплывал баг
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 0;
+            ed_chrome_sync();
+            int c0 = 0, c1 = 0, c2 = 0;
+            pal_draw(pc, &c0);
+            tree_draw(pc, &c1);
+            ins_draw(pc, &c2);
+            if (c0 || c1 || c2) {
+                printf("SELF FAIL: closed-panel-draws pal=%d tree=%d insp=%d\n", c0, c1, c2);
+                bad = 1;
+            }
+            // Закрытая панель не только не рисуется, но и не кликается: точка, где
+            // росли «зебры» (угол 8,30+), обязана быть пустой. У инспектора ширина
+            // строки фиксированная (INS_W), поэтому без гейта хит бы СРАБОТАЛ.
+            if (ins_hit(30, 40) != -1 || ins_head_hit(30, 40)) {
+                printf("SELF FAIL: closed-panel-hit\n");
+                bad = 1;
+            }
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1;
+            ed_chrome_sync();
+            int n0 = 0, n1 = 0, n2 = 0;
+            pal_draw(p0, &n0);
+            tree_draw(p1, &n1);
+            ins_draw(p2, &n2);
+            // Инспектор: заголовок поля-имени + IF_N строк + 3 плашки bg (r/g/b).
+            if (n0 < PAL_N || n1 < 1 || n2 != 1 + IF_N + 3) {
+                printf("SELF FAIL: open-panel-draws pal=%d tree=%d insp=%d want %d\n", n0, n1, n2,
+                       1 + IF_N + 3);
+                bad = 1;
+            }
+            if (!panel_content_inside(p0, n0, g_edPal) ||
+                !panel_content_inside(p1, n1, g_edTree) ||
+                !panel_content_inside(p2, n2, g_edIns)) {
+                printf("SELF FAIL: panel-content-escape\n");
+                bad = 1;
+            }
+            widget_tree_init(&g_wt);
+            g_edOpen[0] = saveOpen[0];
+            g_edOpen[1] = saveOpen[1];
+            g_edOpen[2] = saveOpen[2];
+            g_act = saveAct;
+            g_wtSel = saveSel;
+            g_editSelf = saveSelf;
+            ed_chrome_sync();
+        }
         // §14 F5d: ИЕРАРХИЯ — крошки предков (клик = выбрать предка), обрезка
         // слева при нехватке места, Ctrl+клик «сквозь» верхний в стопке.
         {
@@ -4263,7 +4409,10 @@ int main(int argc, char **argv) {
     if (!getenv("UI_EDIT_WIN")) glfwMaximizeWindow(win); // WIN=WxH: окно как просили
     glfwPollEvents();
     drain_ev();
-    if (wt_persist_ok()) widget_json_load(&g_wt, wt_path()); // персист §14
+    // §14 F2a2: документ ЧИТАЕМ всегда из wt_path() (в тест-режиме это bench-файл,
+    // файл юзера не трогаем). Раньше чтение было завязано на wt_persist_ok() — и
+    // тест-прогон вообще не видел документа (клик «не выделял» ничего).
+    widget_json_load(&g_wt, wt_path());
     ui_wundo_init(&g_undo);
     undo_commit("load"); // нулевое состояние истории = загруженный документ
     edit_push(); // первая заливка
@@ -4521,6 +4670,43 @@ int main(int argc, char **argv) {
                        g_edGrab, ed_panel_float(0) || ed_panel_float(1) || ed_panel_float(2));
             }
         }
+        { // §14 F5l(5): «ВЗЯЛ И ДЕРЖУ» — как РУКА тестера: клик (выбор) -> DOWN по
+            // ручке -> по одному MOVE на кадр, БЕЗ отпускания. Обычный драг делает
+            // DOWN+8 MOVE+UP в одном кадре и следа не оставляет, а артефакты
+            // («полосы фона вылезают за вьюпорт») видны ТОЛЬКО в удержании.
+            // Раскладка шагов: 0 = клик (выбор, если ничего не выбрано),
+            // 1 = DOWN (теперь ловятся ручки выбранного = resize), 2..10 = MOVE.
+            static const char *hdEnv = 0;
+            static int hdStep = -1;
+            static float hx1 = 0, hy1 = 0, hx2 = 0, hy2 = 0;
+            if (!hdEnv && tdcnt == 3) hdEnv = getenv("UI_EDIT_HOLD");
+            if (hdEnv && hdEnv[0] && hdStep < 0 &&
+                sscanf(hdEnv, "%f:%f:%f:%f", &hx1, &hy1, &hx2, &hy2) == 4)
+                hdStep = 0;
+            if (hdStep >= 0 && hdStep <= 10 && tdcnt >= 3) {
+                UiEvent he;
+                memset(&he, 0, sizeof he);
+                float t = hdStep <= 1 ? 0.0f : (float)(hdStep - 1) / 9.0f;
+                he.x = hx1 + (hx2 - hx1) * t;
+                he.y = hy1 + (hy2 - hy1) * t;
+                if (hdStep == 0) { // клик: выбрать то, за что будем тянуть
+                    he.kind = UI_EV_DOWN;
+                    g_mouseDown = 1;
+                    route_event(&he);
+                    he.kind = UI_EV_UP;
+                    g_mouseDown = 0;
+                } else if (hdStep == 1) {
+                    he.kind = UI_EV_DOWN;
+                    g_mouseDown = 1;
+                } else {
+                    he.kind = UI_EV_MOVE;
+                }
+                route_event(&he);
+                printf("ui_edit: hold step=%d %.0f,%.0f part=%d n=%d over=%d sel=%d\n", hdStep,
+                       (double)he.x, (double)he.y, g_part, g_dirtyN, g_dirtyOver, g_wtSel);
+                hdStep++;
+            }
+        }
         if (scP && tdcnt >= 3) { // §14 F5k2: СКРИПТ действий — воспроизведение
             // жалоб тестера (клик/драг по шагам, ОДИН шаг на кадр). Формат:
             //   UI_EDIT_SCRIPT="c:x:y;d:x1:y1:x2:y2;c:x:y"
@@ -4719,17 +4905,6 @@ int main(int argc, char **argv) {
                                  "pick in WIDGETS", dcol);
                 }
             }
-            for (int i = 0; i < UI_MAX_WIDGETS; i++) {
-                const UiWidget *w = widget_cget(&g_wt, i + 1);
-                if (!w || w->type == UI_W_PANEL) continue;
-                float wx, wy, ww, hh;
-                doc_px(w, &wx, &wy, &ww, &hh); // F5l(3): координаты экрана игры
-                if (wx < (float)g_vpx || wy < (float)g_vpy ||
-                    wx >= (float)(g_vpx + g_vpw) || wy >= (float)(g_vpy + g_vph))
-                    continue; // за вьюпортом подписи нет (документ туда обрезан)
-                if (ed_text_vis(-1, wx + 6, wy + (hh - 16) / 2))
-                    ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
-            }
             for (int i = 0; ed_panel_open(0) && i < PAL_N; i++) {
                 float px, py, pw, ph;
                 pal_rect(i, &px, &py, &pw, &ph);
@@ -4840,8 +5015,26 @@ int main(int argc, char **argv) {
                          ui_wundo_redo_depth(&g_undo));
                 ui_text_quad(text, (float)(g_WW - 250), 6.0f, hud, hintCol);
             }
+            // §14 F5l(5): ПОДПИСИ ДОКУМЕНТА — ПОСЛЕ хрома. Бюджет квадов общий на
+            // кадр, и у ИНСТРУМЕНТА приоритет перед содержимым (UE/Figma): раньше
+            // подписи шли первыми, и у документа с десятками виджетов надписи панелей
+            // (палитра/дерево/инспектор) не рисовались вообще (баг тестера «сломал
+            // отображение текста»). Теперь при переполнении теряется содержимое.
+            for (int i = 0; i < UI_MAX_WIDGETS; i++) {
+                const UiWidget *w = widget_cget(&g_wt, i + 1);
+                if (!w || w->type == UI_W_PANEL) continue;
+                float wx, wy, ww, hh;
+                doc_px(w, &wx, &wy, &ww, &hh); // F5l(3): координаты экрана игры
+                if (wx < (float)g_vpx || wy < (float)g_vpy ||
+                    wx >= (float)(g_vpx + g_vpw) || wy >= (float)(g_vpy + g_vph))
+                    continue; // за вьюпортом подписи нет (документ туда обрезан)
+                if (ed_text_vis(-1, wx + 6, wy + (hh - 16) / 2))
+                    ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
+            }
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
+            if (getenv("UI_EDIT_SHAPES")) // диагноз «текст пропал»: бюджет числом
+                printf("ui_edit: text quads %d/%d\n", ui_text_quads(text), UI_TEXT_MAXQ);
             ui_text_flush(text, g_WW, g_WH);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }

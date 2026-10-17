@@ -170,7 +170,16 @@ float ui_text_quad(UiText *t, float x, float y, const char *s, const float rgba[
     if (g_occN > 0 && ui_text_occluded(x, y)) return 0.0f; // F5k: под окном не пишем
     float ox = x;
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        if (t->nq >= UI_TEXT_MAXQ) break;
+        if (t->nq >= UI_TEXT_MAXQ) {
+            // Текст НИКОГДА не теряем молча: обрезание — всегда с причиной в логе.
+            static int warned = 0;
+            if (!warned) {
+                warned = 1;
+                fprintf(stderr, "ui_text: quad budget %d full — текст обрезан\n",
+                        UI_TEXT_MAXQ);
+            }
+            break;
+        }
         if (*p < 32 || *p > 126) {
             ox += t->px * 0.5f;
             continue;
@@ -199,6 +208,8 @@ float ui_text_quad(UiText *t, float x, float y, const char *s, const float rgba[
     }
     return ox - x;
 }
+
+int ui_text_quads(const UiText *t) { return t ? t->nq : 0; }
 
 void ui_text_flush(UiText *t, int w, int h) {
     if (!t || !t->nq || w <= 0 || h <= 0) {
