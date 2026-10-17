@@ -837,6 +837,13 @@ int ui_panels_tool(const UiPanels *p) {
     return p ? p->tool : 0;
 }
 
+void ui_panels_set_tool(UiPanels *p, int t) {
+    if (!p) return;
+    if (t < 0) t = 0;
+    if (t > 3) t = 3;
+    p->tool = t;
+}
+
 int ui_panels_edit(const UiPanels *p) {
     return p ? p->editMode : 0;
 }

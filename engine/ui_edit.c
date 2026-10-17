@@ -29,8 +29,13 @@
 static int g_WW = W, g_WH = H; // живой размер (фреймбуферные пиксели)
 static float g_mouseKx = 1.0f, g_mouseKy = 1.0f;
 static double g_mx = 0, g_my = 0;
-static UiPanels *g_panels = 0;
+static UiPanels *g_panels = 0; // НЕ рисуется в окне: только РЕЖИМ инструмента сцены
 static RenderCore *g_vec = 0;
+// Игровой мир (§14): то, на что смотрят инструменты ленты MODEL (Move/Rotate/Scale).
+// Фронт-редактор его НЕ рисует — вьюпорт показывает ЭКРАН ИГРЫ (документ UI), а
+// сам мир рисует игра/игровой редактор (там же живёт гизмо). Держим мир здесь как
+// адрес правки, чтобы домены не смешивались: MODEL правит сцену, HOME/UI — фронт.
+// Точка замены: вид сцены в редакторе (§14 F3c(1c) — игрок/мир в отдельном окне).
 static ScWorld g_scene;
 static GLFWcursor *g_curArrow = 0, *g_curResize = 0;
 static int g_quit = 0;
@@ -68,12 +73,12 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 // (ed_pal_n/ed_pal_act ниже). Числа строк здесь нет — оно вычисляется.
 #define PAL_PAD 8    // внутренние поля хром-панели
 #define PAL_TITLE 22 // строка заголовка панели
-// Верх легаси-хрома редактора (ui_panels): меню 0..26, тулбар 26..58, строка
-// коллапса доков 58..84 (текст на y=62). Панели ИНСТРУМЕНТА ставим ниже неё —
-// иначе «PALETTE» налезает на строку коллапса (тестер: «всё стоит криво»).
-// Точка замены: когда хром редактора станет виджетами (F10/self-host), легаси-
-// строки исчезнут и отступ уйдёт вместе с ними.
-#define ED_TOP_CHROME 84
+// Верх легаси-хрома редактора. БЫЛО 84 (меню 0..26 + тулбар 26..58 + строка
+// коллапса 58..84 из ui_panels). Теперь 0: легаси-полос в окне редактора НЕТ —
+// их функции несёт наша лента (HOME/UI/VIEW — фронт редактора, MODEL — сцена
+// игры), поэтому окно начинается сразу с полосы заголовков лент. Тестер: «ты
+// убрал нормальные и оставил легаси».
+#define ED_TOP_CHROME 0
 #define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
 #define TREE_W 200     // ширина панели дока (палитра/дерево/инспектор считают от неё)
 // §14 F5k: ПОЛОСА ВКЛАДОК-ИНСТРУМЕНТОВ (как View в Word / панели в Roblox
@@ -139,15 +144,17 @@ static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, floa
 // ленты. Кнопки строятся из РЕЕСТРА ДЕЙСТВИЙ (одна таблица = лента + шпаргалка
 // клавиш + тултипы + горячие клавиши). В UE 4.22 это TCommands/FUICommandInfo:
 // объявил действие один раз — получил команду, клавишу и подсказку.
-#define ED_TABS_N 3
+#define ED_TABS_N 4
 #define ED_RIBBON_H 40      // высота полосы кнопок активной ленты
 #define ED_RIBBON_ITEM_H 20 // высота кнопки ленты
 #define ED_RIBBON_GAP 4
 #define ED_RIBBON_SEP 8 // зазор между группами
-// Ленты/вкладки ленты. MODEL и SCRIPT появятся вместе со СВОИМИ инструментами
-// (трансформ/снап, запуск) — пустых вкладок-заглушек не держим: в ленте нет ни
-// одной кнопки без действия (правило «нет мёртвых кнопок»).
-static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "UI", "VIEW"};
+// Ленты/вкладки. Разделение по ДОМЕНУ: HOME/UI/VIEW — САМ РЕДАКТОР и интерфейс,
+// который в нём строят (фронт); MODEL — инструменты РЕДАКТОРА СЦЕНЫ (игровой мир).
+// Тестер: «для самого редактора отдельно ... разделить, но чтобы функционал
+// сохранился». Пустых вкладок-заглушек не держим: в ленте нет ни одной кнопки без
+// действия (SCRIPT не заводим — запуска/скриптов ещё нет).
+static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "MODEL", "UI", "VIEW"};
 static int g_edTab = 0;      // активная лента (0..ED_TABS_N-1)
 static int g_edShowKeys = 0; // F5l(2): шпаргалка клавиш (F1) поверх всего
 static int g_rbHot = -1;     // id действия под курсором (тултип), -1 = нет
@@ -903,9 +910,11 @@ static void ed_panels_save(void) {
     if (!f) return;
     fprintf(f,
             "{\n  \"_note\": \"ui_edit tools (#14 F5k): 1 = panel open, "
-            "edTab = active ribbon. Editor state, not a document.\",\n  \"edOpen\": "
-            "[%d, %d, %d],\n  \"edTab\": %d\n}\n",
-            g_edOpen[0], g_edOpen[1], g_edOpen[2], g_edTab);
+            "edTab = active ribbon, edTool = scene tool mode. Editor state, not "
+            "a document.\",\n  \"edOpen\": "
+            "[%d, %d, %d],\n  \"edTab\": %d,\n  \"edTool\": %d\n}\n",
+            g_edOpen[0], g_edOpen[1], g_edOpen[2], g_edTab,
+            g_panels ? ui_panels_tool(g_panels) : 0);
     fclose(f);
 }
 static void ed_panels_load(void) {
@@ -916,6 +925,15 @@ static void ed_panels_load(void) {
     size_t n = fread(s, 1, sizeof s - 1, f);
     fclose(f);
     s[n] = 0;
+    { // режим инструмента сцены (лента MODEL) — состояние движка, не документа
+        const char *tt = strstr(s, "\"edTool\"");
+        if (tt) {
+            int tv = -1;
+            tt = strchr(tt, ':');
+            if (tt && sscanf(tt + 1, "%d", &tv) == 1 && tv >= 0 && tv <= 3)
+                ui_panels_set_tool(g_panels, tv);
+        }
+    }
     const char *q = strstr(s, "\"edOpen\"");
     if (!q) return;
     q = strchr(q, '[');
@@ -961,7 +979,14 @@ static void tabs_toggle(int i) {
 // (Ctrl+Shift+Z для Redo), поэтому клавиша и команда не разъезжаются.
 // ============================================================================
 enum { ED_WHEN_ALWAYS = 0, ED_WHEN_SEL = 1, ED_WHEN_UNDO = 2, ED_WHEN_REDO = 3 };
-enum { ED_K_CMD = 0, ED_K_SPAWN = 1, ED_K_TOGGLE = 2 };
+enum { ED_K_CMD = 0, ED_K_SPAWN = 1, ED_K_TOGGLE = 2, ED_K_TOOL = 3 };
+// ДОМЕН действия: ЧЕЙ это инструмент. Граница, о которой просил тестер («для
+// самого редактора отдельно ... разделить, но чтобы функционал сохранился»):
+// SCENE = игровой мир (то, что делает игра: режимы Move/Rotate/Scale), FRONT =
+// сам редактор и интерфейс, который в нём строят (панели/виджеты/панели-доки).
+// Ради этого поля реестр не сваливается в одну кучу: у доменов СВОИ ленты, а
+// запись одна на все виды (лента/клавиша/шпаргалка/строка палитры).
+enum { ED_DM_FRONT = 0, ED_DM_SCENE = 1 };
 enum { ED_CMD_RENAME = 1, ED_CMD_DELETE = 2, ED_CMD_UNDO = 3, ED_CMD_REDO = 4, ED_CMD_KEYS = 5 };
 // Запись реестра, которая живёт ещё и в ПАНЕЛИ-ПАЛИТРЕ: палитра — второй ВИД той
 // же таблицы (как Place Actors и меню во UE), а не второй список строк.
@@ -977,6 +1002,7 @@ typedef struct {
     unsigned char views; // ED_V_PALETTE
     short arg;           // spawn-тип / индекс панели / ED_TOG_SELF / ED_CMD_*
     int key, mods, key2, mods2;
+    unsigned char domain; // ED_DM_* (по умолчанию FRONT — редактор и его UI)
 } EdAction;
 #define ED_MOD_CTRL GLFW_MOD_CONTROL
 #define ED_MOD_CTRLSHIFT (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
@@ -986,32 +1012,45 @@ typedef struct {
 // заглушек-пустышек нет — действие попадает сюда вместе со своим исполнением.
 static const EdAction ED_ACT[] = {
     // UI: чем правим интерфейс (лента UI + строки палитры Panel/Button/Label)
-    {"ui.spawn.panel", "Panel", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
-     UI_W_PANEL, 0, 0, 0, 0},
-    {"ui.spawn.button", "Button", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
-     UI_W_BUTTON, 0, 0, 0, 0},
-    {"ui.spawn.label", "Label", "Create", 1, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
-     UI_W_LABEL, 0, 0, 0, 0},
+    {"ui.spawn.panel", "Panel", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_PANEL, 0, 0, 0, 0, ED_DM_FRONT},
+    {"ui.spawn.button", "Button", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_BUTTON, 0, 0, 0, 0, ED_DM_FRONT},
+    {"ui.spawn.label", "Label", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+     UI_W_LABEL, 0, 0, 0, 0, ED_DM_FRONT},
     // HOME: правка выделения + история + инструменты
     {"edit.rename", "Rename", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, 0, ED_CMD_RENAME, GLFW_KEY_F2,
-     0, 0, 0},
+     0, 0, 0, ED_DM_FRONT},
     {"edit.delete", "Delete", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_V_PALETTE, ED_CMD_DELETE,
-     GLFW_KEY_DELETE, 0, 0, 0},
+     GLFW_KEY_DELETE, 0, 0, 0, ED_DM_FRONT},
     {"hist.undo", "Undo", "History", 0, ED_WHEN_UNDO, ED_K_CMD, 0, ED_CMD_UNDO, GLFW_KEY_Z,
-     ED_MOD_CTRL, 0, 0},
+     ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
     {"hist.redo", "Redo", "History", 0, ED_WHEN_REDO, ED_K_CMD, 0, ED_CMD_REDO, GLFW_KEY_Y,
-     ED_MOD_CTRL, GLFW_KEY_Z, ED_MOD_CTRLSHIFT},
+     ED_MOD_CTRL, GLFW_KEY_Z, ED_MOD_CTRLSHIFT, ED_DM_FRONT},
     {"tools.self", "Editor UI", "Tools", 0, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, ED_TOG_SELF,
-     GLFW_KEY_F7, 0, 0, 0},
+     GLFW_KEY_F7, 0, 0, 0, ED_DM_FRONT},
     {"tools.keys", "Cheatsheet", "Tools", 0, ED_WHEN_ALWAYS, ED_K_CMD, 0, ED_CMD_KEYS,
-     GLFW_KEY_F1, 0, 0, 0},
+     GLFW_KEY_F1, 0, 0, 0, ED_DM_FRONT},
     // VIEW: галочки инструментов (View в Word / панели в Roblox Studio)
-    {"view.panel.palette", "Palette", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 0,
-     GLFW_KEY_1, ED_MOD_CTRL, 0, 0},
-    {"view.panel.tree", "Tree", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 1, GLFW_KEY_2,
-     ED_MOD_CTRL, 0, 0},
-    {"view.panel.inspector", "Inspector", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 2,
-     GLFW_KEY_3, ED_MOD_CTRL, 0, 0},
+    {"view.panel.palette", "Palette", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 0,
+     GLFW_KEY_1, ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
+    {"view.panel.tree", "Tree", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 1, GLFW_KEY_2,
+     ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
+    {"view.panel.inspector", "Inspector", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 2,
+     GLFW_KEY_3, ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
+    // MODEL: инструменты РЕДАКТОРА СЦЕНЫ = режим инструмента (radio). Домен SCENE.
+    // Эти же четыре режима раньше дублировал легаси-тулбар ui_panels (Q:Sel/W:Move/
+    // E:Rot/R:Scale) — теперь источник ОДИН (реестр), а легаси-полос в окне нет.
+    // Режим — состояние движка (ui_panels_set_tool): его читает гизмо в игре.
+    // Snap здесь НЕ стоит: сетки/шага ещё нет (F5i) — кнопок-пустышек не заводим.
+    {"scene.select", "Select", "Tool", 1, ED_WHEN_ALWAYS, ED_K_TOOL, 0, 0, GLFW_KEY_Q, 0, 0, 0,
+     ED_DM_SCENE},
+    {"scene.move", "Move", "Tool", 1, ED_WHEN_ALWAYS, ED_K_TOOL, 0, 1, GLFW_KEY_W, 0, 0, 0,
+     ED_DM_SCENE},
+    {"scene.rotate", "Rotate", "Tool", 1, ED_WHEN_ALWAYS, ED_K_TOOL, 0, 2, GLFW_KEY_E, 0, 0, 0,
+     ED_DM_SCENE},
+    {"scene.scale", "Scale", "Tool", 1, ED_WHEN_ALWAYS, ED_K_TOOL, 0, 3, GLFW_KEY_R, 0, 0, 0,
+     ED_DM_SCENE},
 };
 #define ED_ACT_N ((int)(sizeof ED_ACT / sizeof ED_ACT[0]))
 
@@ -1067,7 +1106,10 @@ static const char *wt_type_name(int type) {
 }
 // Тумблер включён? — одна точка правды для галочки на ленте.
 static int ed_act_on(int i) {
-    if (i < 0 || i >= ED_ACT_N || ED_ACT[i].kind != ED_K_TOGGLE) return 0;
+    if (i < 0 || i >= ED_ACT_N) return 0;
+    if (ED_ACT[i].kind == ED_K_TOOL) // режим сцены: включён ровно один
+        return g_panels && ED_ACT[i].arg >= 0 && ui_panels_tool(g_panels) == ED_ACT[i].arg;
+    if (ED_ACT[i].kind != ED_K_TOGGLE) return 0;
     if (ED_ACT[i].arg >= 0 && ED_ACT[i].arg < 3) return g_edOpen[ED_ACT[i].arg];
     return g_editSelf; // ED_TOG_SELF
 }
@@ -1155,6 +1197,13 @@ static int ed_act_run(int i) {
         edit_push();
         return 1;
     }
+    if (a->kind == ED_K_TOOL) { // режим инструмента сцены — в движок (его читает гизмо)
+        if (!g_panels) return 0;
+        ui_panels_set_tool(g_panels, a->arg);
+        ed_panels_save();
+        edit_push();
+        return 1;
+    }
     if (a->kind == ED_K_TOGGLE) {
         if (a->arg == ED_TOG_SELF) ed_self_toggle(!g_editSelf);
         else tabs_toggle(a->arg);
@@ -1171,7 +1220,8 @@ static void ed_ribbon_band(float *x, float *y, float *w, float *h) {
 }
 static float ed_ribbon_item_w(const EdAction *a) {
     float tw = ed_txt_w(a->label);
-    if (a->kind == ED_K_TOGGLE) return tw + 34.0f; // квадрат-галочка + поля
+    if (a->kind == ED_K_TOGGLE || a->kind == ED_K_TOOL)
+        return tw + 34.0f; // метка-галочка/радио + поля
     return tw + 22.0f;
 }
 #define ED_RB_MAX 64
@@ -1338,10 +1388,13 @@ static void ed_ribbon_draw(RcVecShape *sh, int *n) {
         int on = ed_act_on(g_rbAct[s]);
         const float *col = !en ? dim : (on ? ton : (g_rbHot == g_rbAct[s] ? hot : btn));
         wt_emit(sh, n, x, y, w, h, col, 3.0f);
-        if (a->kind == ED_K_TOGGLE) { // квадрат-галочка инструмента
+        if (a->kind == ED_K_TOGGLE || a->kind == ED_K_TOOL) {
+            // Тумблер — квадрат-галочка, режим сцены — КРУГ (radio): сразу видно,
+            // что включён ровно один инструмент, а не набор независимых галочек.
+            int tool = a->kind == ED_K_TOOL;
             float cx = x + 7.0f, cy = y + (h - 9.0f) * 0.5f;
-            wt_emit(sh, n, cx, cy, 9.0f, 9.0f, btn, 1.0f);
-            if (on) wt_emit(sh, n, cx + 2.0f, cy + 2.0f, 5.0f, 5.0f, mark, 1.0f);
+            wt_emit(sh, n, cx, cy, 9.0f, 9.0f, btn, tool ? 4.5f : 1.0f);
+            if (on) wt_emit(sh, n, cx + 2.0f, cy + 2.0f, 5.0f, 5.0f, mark, tool ? 2.5f : 1.0f);
         }
     }
 }
@@ -2508,7 +2561,6 @@ static int wt_event(const UiEvent *e) {
 // панели дёшевы). Плейсхолдер вьюпорта — тёмной плашкой поверх пустоты.
 // Собрать кадр примитивов (панели -> плейсхолдер -> виджеты -> палитра).
 static int build_shapes(RcVecShape *shapes) {
-    const UiFrame *fr = 0;
     int n = 0;
     ed_viewport_compute(); // F5l(4): доки решают, где экран игры (до всего)
     // §14 F5l(3): вокруг экрана игры — фон ОКНА РЕДАКТОРА. Раньше там была
@@ -2517,21 +2569,9 @@ static int build_shapes(RcVecShape *shapes) {
         static const float chromeCol[4] = {0.10f, 0.11f, 0.14f, 1.0f};
         wt_emit(shapes, &n, 0.0f, 0.0f, (float)g_WW, (float)g_WH, chromeCol, 0.0f);
     }
-    int panelsDirty = ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr);
-    if (fr) {
-        for (int i = 0; i < fr->n && n < UI_MAX_PRIMS; i++, n++) {
-            shapes[n].kind = fr->prims[i].kind;
-            shapes[n].a = fr->prims[i].a;
-            shapes[n].b = fr->prims[i].b;
-            shapes[n].c = fr->prims[i].c;
-            shapes[n].d = fr->prims[i].d;
-            shapes[n].e = fr->prims[i].e;
-            shapes[n].f = fr->prims[i].f;
-            memcpy(shapes[n].rgba, fr->prims[i].rgba, sizeof shapes[n].rgba);
-        }
-    }
-    ui_panels_viewport(g_panels, g_WW, g_WH, &g_vpx, &g_vpy, &g_vpw, &g_vph);
-    ed_viewport_compute(); // F5l(4): у редактора свой вьюпорт (легаси-доки скрыты)
+    // Легаси-хром (menu/toolbar/collapse/hierarchy/status из ui_panels) в окно
+    // редактора НЕ собираем: он был ВТОРЫМ способом задать те же Edit/View и тот же
+    // режим инструмента (тестер: «оставил легаси»). Вьюпорт считают НАШИ доки.
     if (n < UI_MAX_PRIMS && g_vpw > 0 && g_vph > 0) {
         // Плашка вместо 3D (игровой редактор подставит сюда frame_to).
         static const float voidCol[4] = {0.03f, 0.04f, 0.07f, 1.0f};
@@ -2544,7 +2584,6 @@ static int build_shapes(RcVecShape *shapes) {
         memcpy(shapes[n].rgba, voidCol, sizeof shapes[n].rgba);
         n++;
     }
-    (void)panelsDirty;
     ed_chrome_sync(); // §14 F3c: раскладка панелей хрома (док мог поменяться)
     wt_draw_all(shapes, &n); // документ — тем же рантаймом, что и игра
     // F5j: рамка/ручки активного — над документом, но ПОД панелями: панель это
@@ -2624,8 +2663,12 @@ static void edit_push_dirtyN(const int (*rects)[4], int cnt) {
 }
 
 static void route_event(const UiEvent *e) {
-    // Порядок §14: виджеты/палитра -> доки. DOWN/UP, съеденный холстом,
+    // Порядок §14: виджеты/палитра/лента -> доки. DOWN/UP, съеденный холстом,
     // в доки не идёт; MOVE форвардим обоим (ховер и там, и там).
+    // Легаси-панели событий больше НЕ получают: в окне их нет, а их обработчик
+    // (Tab-коллапс, меню, клавиши W/E/R) — СКРЫТЫЙ ДУБЛЬ ленты, из-за которого
+    // «убранное» легаси продолжало работать за спиной. UiPanels остаётся только
+    // как состояние режима инструмента сцены (ui_panels_tool/set_tool).
     g_part = 0;
     int mine = wt_event(e);
     if (mine && e->kind != UI_EV_MOVE) {
@@ -2636,8 +2679,7 @@ static void route_event(const UiEvent *e) {
         edit_push_dirtyN(g_dirtyR, g_dirtyN);
         return;
     }
-    UiReply r = ui_panels_event(g_panels, &g_scene, e);
-    if (mine || r.dirty) edit_push();
+    if (mine) edit_push();
 }
 
 // Коалесинг ввода (как UE/Unity): реальная мышь шлёт десятки MOVE-событий за
@@ -2700,8 +2742,7 @@ static void on_move(GLFWwindow *win, double x, double y) {
     g_my = y * g_mouseKy;
     {
         static int lastHov = -1;
-        int hov = g_panels ? ui_panels_hover(g_panels, (float)g_mx, (float)g_my) : 0;
-        if (wt_handle_hit((float)g_mx, (float)g_my) > 0) hov = 1; // ручка = resize
+        int hov = wt_handle_hit((float)g_mx, (float)g_my) > 0 ? 1 : 0; // ручка = resize
         if (hov != lastHov) {
             lastHov = hov;
             if (g_curArrow && g_curResize) glfwSetCursor(win, hov ? g_curResize : g_curArrow);
@@ -2778,16 +2819,9 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
             if (!passthru) return; // выключено, но клавиша принадлежит редактору
         }
     }
-    // Инструменту нужны: Tab (коллапс), Z/Y (undo), L (уже в EDIT — no-op).
-    // QWER без гизмо бессмысленны — не форвардим.
-    if (key == GLFW_KEY_TAB || key == GLFW_KEY_Z || key == GLFW_KEY_Y || key == GLFW_KEY_L) {
-        UiEvent e;
-        memset(&e, 0, sizeof e);
-        e.kind = UI_EV_KEY;
-        e.key = key;
-        e.mods = mods;
-        push_ev(&e);
-    }
+    // Легаси-панелям клавиши больше не форвардим (их в окне нет): Tab (коллапс
+    // доков) — легаси-модель, у нас панели прячутся галочками VIEW; Q/W/E/R —
+    // инструменты сцены, они теперь ИЗ РЕЕСТРА (лента MODEL), а не из панелей.
 }
 
 // F5a: символы (раскладка/шифт/юникод — GLFW отдаёт codepoint). Иначе буквы не
@@ -3828,10 +3862,10 @@ int main(int argc, char **argv) {
             ed_rect(g_edIns, &cx, &cy, &cw, &ch);
             int ov = (ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah) ||
                      (ax < cx + cw && cx < ax + aw && ay < cy + ch && cy < ay + ah);
-            if (ov || ay < (float)ED_TOP_CHROME || cy < (float)ED_TOP_CHROME) {
+            if (ov || ay < (float)ed_top() || cy < (float)ed_top()) {
                 printf("SELF FAIL: chrome-geom pal=%.0f,%.0f tree=%.0f,%.0f ins=%.0f,%.0f "
                        "top=%d\n",
-                       ax, ay, bx, by, cx, cy, ED_TOP_CHROME);
+                       ax, ay, bx, by, cx, cy, ed_top());
                 bad = 1;
             }
             if (bh < (float)(TREE_HDR + TREE_PATH + 3 * TREE_RH)) {
@@ -4594,12 +4628,22 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: doc-clip n=%d leak=%d\n", dn, leak);
                 bad = 1;
             }
-            // (300,250) — внутри экрана игры и попадает в виджет; (150,250) —
-            // левее вьюпорта (в доке) и не должен попадать, хотя по координатам
-            // документа та же точка.
-            if (!wt_hit(300.0f, 250.0f) || wt_hit(150.0f, 250.0f)) {
-                printf("SELF FAIL: doc-hit-out\n");
-                bad = 1;
+            // Точка ВНУТРИ экрана игры попадает в виджет; та же точка документа,
+            // но левее вьюпорта (в доке) — не попадает (клип документа). Координаты
+            // берём ОТ ВИДЖЕТА: хром/вьюпорт могут менять высоту, а константа тогда
+            // перестаёт попадать в виджет (так и было, когда убрали легаси-полосы).
+            {
+                float sx, sy, sw, sh;
+                doc_px(widget_cget(&g_wt, sid), &sx, &sy, &sw, &sh);
+                float hy = sy + sh * 0.5f;      // середина виджета по вертикали
+                float hxIn = sx + sw * 0.5f;    // внутри экрана игры
+                float hxOut = sx + 20.0f;       // тот же виджет, но в доке (клип)
+                if (!wt_hit(hxIn, hy) || wt_hit(hxOut, hy) ||
+                    hxOut >= (float)g_vpx) {
+                    printf("SELF FAIL: doc-hit-out %.0f,%.0f %.0f..%.0f vp=%d\n", (double)sx,
+                           (double)sy, (double)hxIn, (double)hxOut, g_vpx);
+                    bad = 1;
+                }
             }
             // (5) тесное окно: доки и экран игры помещаются, а новый виджет
             // зажимается внутрь маленького экрана (раньше рождался за окном)
@@ -4883,13 +4927,13 @@ int main(int argc, char **argv) {
             // полосы заголовков (в свою полосу)
             {
                 float tx, ty, tw, th;
-                tab_rect(1, &tx, &ty, &tw, &th); // UI
+                tab_rect(2, &tx, &ty, &tw, &th); // UI (0 HOME, 1 MODEL)
                 UiEvent te;
                 memset(&te, 0, sizeof te);
                 te.kind = UI_EV_DOWN;
                 te.x = tx + 20;
                 te.y = ty + 5;
-                if (!wt_event(&te) || g_edTab != 1) {
+                if (!wt_event(&te) || g_edTab != 2) {
                     printf("SELF FAIL: ribbon-tab tab=%d\n", g_edTab);
                     bad = 1;
                 }
@@ -4903,7 +4947,7 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 // другая лента = ДРУГОЙ НАБОР кнопок (лента, а не одна полоса)
-                g_edTab = 2; // VIEW
+                g_edTab = 3; // VIEW
                 ed_ribbon_layout();
                 ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
                 float p2x, p2y, p2w, p2h;
@@ -4911,6 +4955,58 @@ int main(int argc, char **argv) {
                 if (tw != 0 || p2w <= 0) {
                     printf("SELF FAIL: ribbon-tab-set spawn_w=%.0f pal_w=%.0f\n", (double)tw,
                            (double)p2w);
+                    bad = 1;
+                }
+                // MODEL — лента ДРУГОГО ДОМЕНА (игровая сцена, не UI редактора): на ней
+                // только записи ED_DM_SCENE, ровно четыре РЕЖИМА инструмента (radio) и
+                // ни одной кнопки создания виджета. Тестер: «для самого редактора
+                // отдельно ... разделить, но чтобы функционал сохранился».
+                g_edTab = 1; // MODEL
+                ed_ribbon_layout();
+                int mscn = g_rbN, domOk = 1, toolOk = 1;
+                for (int s = 0; s < mscn; s++) {
+                    const EdAction *ma = &ED_ACT[g_rbAct[s]];
+                    if (ma->domain != ED_DM_SCENE) domOk = 0;
+                    if (ma->kind != ED_K_TOOL) toolOk = 0;
+                }
+                ed_ribbon_item_rect(ed_act_find("scene.move"), &tx, &ty, &tw, &th);
+                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &p2x, &p2y, &p2w, &p2h);
+                // домены не смешаны и в обратную сторону: на UI нет инструментов сцены
+                int frontHasScene = 0;
+                g_edTab = 2;
+                ed_ribbon_layout();
+                for (int s = 0; s < g_rbN; s++)
+                    if (ED_ACT[g_rbAct[s]].domain == ED_DM_SCENE) frontHasScene++;
+                if (mscn != 4 || !domOk || !toolOk || tw <= 0 || p2w != 0 || frontHasScene) {
+                    printf("SELF FAIL: ribbon-model n=%d dom=%d tool=%d w=%.0f front_w=%.0f "
+                           "mixed=%d\n",
+                           mscn, domOk, toolOk, (double)tw, (double)p2w, frontHasScene);
+                    bad = 1;
+                }
+                g_edTab = 0;
+            }
+            // (3b) ЛЕГАСИ-ХРОМА В ОКНЕ НЕТ. Было: полосы ui_panels — меню «File
+            // Edit View» (0..26), тулбар «Q:Sel W:Move E:Rot R:Scale» (26..58),
+            // строка коллапса доков (58..84). Тестер: «ты убрал нормальные и оставил
+            // легаси». Числа: ED_TOP_CHROME = 0, полоса заголовков НАЧИНАЕТСЯ от края
+            // окна (y=0), и клик в самой верхней точке слева (там жило легаси-меню
+            // «File») попадает в НАШ заголовок.
+            {
+                float bx, by, bw, bh;
+                tabs_rect(&bx, &by, &bw, &bh);
+                int topOk = ED_TOP_CHROME == 0 && by == 0.0f &&
+                            ed_top() == ED_TABS_H + ED_RIBBON_H + PAL_PAD;
+                g_edTab = 2;
+                UiEvent le;
+                memset(&le, 0, sizeof le);
+                le.kind = UI_EV_DOWN;
+                le.x = 60.0f; // там, где у легаси жило меню «File»
+                le.y = 10.0f;
+                int hit = wt_event(&le);
+                if (!topOk || !hit || g_edTab != 0) {
+                    printf("SELF FAIL: ribbon-nolegacy chrome=%d top=%d tabY=%.0f hit=%d "
+                           "tab=%d\n",
+                           ED_TOP_CHROME, ed_top(), (double)by, hit, g_edTab);
                     bad = 1;
                 }
                 g_edTab = 0;
@@ -5027,7 +5123,7 @@ int main(int argc, char **argv) {
             // (9) тултип: у включённой кнопки — метка и клавиша, у выключенной —
             // честная пометка [off]; плашка не вылезает за окно
             {
-                g_edTab = 2; // VIEW
+                g_edTab = 3; // VIEW
                 g_rbHot = ed_act_find("view.panel.tree");
                 char tip[160];
                 ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
@@ -5072,6 +5168,65 @@ int main(int argc, char **argv) {
                     printf("SELF FAIL: ribbon-space vpTop=%d top=%d\n", g_vpy, ed_top());
                     bad = 1;
                 }
+            }
+            // (12) MODEL — РАБОЧИЕ инструменты сцены, а не кнопки для вида: режим
+            // живёт в движке (ui_panels_set_tool), включён ровно один (radio),
+            // клавиши Q/W/E/R берутся ИЗ РЕЕСТРА, режим переживает запуск. Гизмо
+            // этого режима живёт в игровом редакторе — здесь проверяем состояние,
+            // которое он читает (раньше те же 4 режима задавал легаси-тулбар).
+            {
+                UiPanels *sp = ui_panels_create();
+                UiPanels *keep = g_panels;
+                g_panels = sp;
+                int mv = ed_act_find("scene.move");
+                int srt = ed_act_find("scene.rotate");
+                int sca = ed_act_find("scene.scale");
+                int ssl = ed_act_find("scene.select");
+                int pan = ed_act_find("ui.spawn.panel");
+                int domBad = !(mv >= 0 && srt >= 0 && sca >= 0 && ssl >= 0 && pan >= 0) ||
+                             ED_ACT[mv].domain != ED_DM_SCENE ||
+                             ED_ACT[pan].domain != ED_DM_FRONT ||
+                             ED_ACT[mv].kind != ED_K_TOOL;
+                ui_panels_set_tool(sp, 1);
+                int onN = 0;
+                for (int i = 0; i < ED_ACT_N; i++)
+                    if (ED_ACT[i].domain == ED_DM_SCENE && ed_act_on(i)) onN++;
+                if (domBad || onN != 1 || !ed_act_on(mv) || ed_act_on(ssl)) {
+                    printf("SELF FAIL: scene-radio dom=%d on=%d mv=%d sel=%d\n", domBad, onN,
+                           ed_act_on(mv), ed_act_on(ssl));
+                    bad = 1;
+                }
+                // клик по кнопке ленты MODEL переключает режим ДВИЖКА (тот же путь,
+                // что у легаси-тулбара) и клавиша из реестра — тоже
+                if (!sel_clip_click("scene.rotate") || ui_panels_tool(sp) != 2) {
+                    printf("SELF FAIL: scene-click tool=%d\n", ui_panels_tool(sp));
+                    bad = 1;
+                }
+                g_nameEdit = 0;
+                on_key(0, GLFW_KEY_R, 0, GLFW_PRESS, 0); // R = Scale (из реестра)
+                if (ui_panels_tool(sp) != 3) {
+                    printf("SELF FAIL: scene-key tool=%d\n", ui_panels_tool(sp));
+                    bad = 1;
+                }
+                int ai = ed_act_by_key(0, GLFW_KEY_Q); // Q = Select
+                if (ai < 0 || strcmp(ED_ACT[ai].id, "scene.select") != 0) {
+                    printf("SELF FAIL: scene-keyroute ai=%d\n", ai);
+                    bad = 1;
+                }
+                // режим — состояние ИНСТРУМЕНТА: переживает запуск (edTool)
+                setenv("UI_EDIT_BENCH", "1", 1);
+                ed_panels_save();
+                ui_panels_set_tool(sp, 0);
+                ed_panels_load();
+                if (ui_panels_tool(sp) != 3) {
+                    printf("SELF FAIL: scene-persist tool=%d\n", ui_panels_tool(sp));
+                    bad = 1;
+                }
+                remove(ED_PANELS_BENCH);
+                unsetenv("UI_EDIT_BENCH");
+                g_panels = keep;
+                ui_panels_destroy(sp);
+                g_edTab = 0;
             }
             g_edTab = 0;
             g_edShowKeys = 0;
@@ -5140,7 +5295,6 @@ int main(int argc, char **argv) {
     widget_tree_init(&g_wt); // §14: пусто до создания из палитры
     ed_chrome_init();        // §14 F3c(1b): собственный UI редактора — тоже виджеты
     ed_panels_load();        // §14 F5k: какие инструменты были открыты (переживают запуск)
-    ui_panels_viewport(g_panels, g_WW, g_WH, &g_vpx, &g_vpy, &g_vpw, &g_vph);
     ed_viewport_compute(); // F5l(4): вьюпорт редактора считают ДОКИ, а не легаси-панели
     ed_chrome_sync();
     {
@@ -5675,24 +5829,8 @@ int main(int argc, char **argv) {
         eng_pass_begin(&t, 0.05f, 0.07f, 0.12f, 1.0f, 1.0f, 0);
         if (vec->frame_to) vec->frame_to(vec, &v, &t);
         if (text) {
-            // §14 F5k: легаси-хром (ui_panels) пишет свой текст ВСЛЕПУЮ, а текст у
-            // нас отдельным проходом ПОВЕРХ всех фигур — поэтому «File Edit View»
-            // просвечивал сквозь панель-окно. Пока пишем легаси-текст, перекрытия =
-            // открытые панели; дальше снимаем — у хрома редактора своя проверка
-            // «своя панель / верхняя» (ed_text_vis).
-            {
-                float occ[3][4];
-                int no = 0;
-                for (int i = 0; i < 3; i++) {
-                    if (!ed_panel_open(i)) continue;
-                    ed_rect(g_edPanels[i], &occ[no][0], &occ[no][1], &occ[no][2],
-                            &occ[no][3]);
-                    if (occ[no][2] > 0.0f && occ[no][3] > 0.0f) no++;
-                }
-                ui_text_occluders(occ, no);
-            }
-            ui_panels_text(g_panels, &g_scene, text, g_WW, g_WH);
-            ui_text_occluders(0, 0);
+            // Легаси-хром в окне редактора не рисуется (см. build_shapes), значит
+            // и текста под ним нет: ни его подписей, ни окклюдеров для них.
             { // §14 F5l(2): тултип и шпаргалка — тоже ПОВЕРХНОСТЬ: текст под ними не
                 // пишем, иначе подписи панелей просвечивают сквозь плашку (тот же
                 // класс бага, что F5l(5) «текст под закрытой панелью»). Свой текст
@@ -5742,7 +5880,9 @@ int main(int argc, char **argv) {
                     ed_ribbon_item_rect(g_rbAct[s], &x, &y, &w, &h);
                     if (w <= 0) continue;
                     float tw = ed_txt_w(a->label);
-                    float tx = a->kind == ED_K_TOGGLE ? x + 20.0f : x + (w - tw) * 0.5f;
+                    float tx = (a->kind == ED_K_TOGGLE || a->kind == ED_K_TOOL)
+                                   ? x + 20.0f
+                                   : x + (w - tw) * 0.5f;
                     ui_text_quad(text, tx, y + 2.0f, a->label,
                                  ed_act_enabled(g_rbAct[s]) ? tcol : ocol);
                 }
@@ -5880,7 +6020,8 @@ int main(int argc, char **argv) {
                          "frontedit: click=select | Ctrl+click=under | drag=move |"
                          " edges=resize | tree-row drag=reparent/order | panel head"
                          " drag=float | dock chip=back | F2=rename | Del | Ctrl+Z/Y undo"
-                         " | ribbon: tabs+buttons (VIEW=panel checkboxes) | F1 keys |"
+                         " | ribbon: HOME/MODEL/UI/VIEW (MODEL=Q/W/E/R scene tool,"
+                         " VIEW=panel checkboxes) | F1 keys |"
                          " F7 self | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)

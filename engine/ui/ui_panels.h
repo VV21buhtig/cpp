@@ -26,6 +26,9 @@ void ui_panels_text(UiPanels *p, ScWorld *scene, UiText *text, int w, int h);
 
 unsigned ui_panels_selected(const UiPanels *p);
 int ui_panels_tool(const UiPanels *p); // 0 select 1 move 2 rotate 3 scale
+// Задать режим инструмента (0..3). Раньше его переключал ТОЛЬКО тулбар панелей;
+// теперь режим — общее состояние, и его может задать любой хост (лента редактора).
+void ui_panels_set_tool(UiPanels *p, int t);
 int ui_panels_edit(const UiPanels *p); // 1 ручной режим (§11): гизмо скрыто
 // Ховер хрома (1 над сплиттером/коллапсом — курсор-резайз, иначе 0).
 int ui_panels_hover(const UiPanels *p, float x, float y);
