@@ -38,6 +38,7 @@ static int g_fullN = 0;      // счётчик полных edit_push (диаг�
 #define BENCH_K 600
 static int g_benchK = BENCH_K; // переопределяется UI_EDIT_BENCH_K
 static int g_bench = 0, g_forceFull = 0, g_benchId = 0, g_benchNoEv = 0;
+static int g_noDirty = 0; // UI_EDIT_FULL=1: всегда полный кадр (диагностика шлейфа)
 static int g_benchResize = 0;
 static int g_benchCorner = 0;
 static int g_benchEvents = 1;  // MOVE-событий за кадр (реальная мышь)
@@ -274,6 +275,18 @@ static void pal_draw(RcVecShape *sh, int *n) {
 static int g_treeN = 0;
 static int g_treeId[UI_MAX_WIDGETS];
 static int g_treeDepth[UI_MAX_WIDGETS];
+static int g_treeScroll = 0; // первая видимая строка: панель — окно со скроллом
+
+// Сколько строк влезает в панель дерева (высота — из хром-виджета).
+static int tree_rows_fit(void) {
+    float px, py, pw, ph;
+    ed_rect(g_edTree, &px, &py, &pw, &ph);
+    (void)px;
+    (void)py;
+    (void)pw;
+    int rows = (int)((ph - TREE_HDR - PAL_PAD) / TREE_RH);
+    return rows < 1 ? 1 : rows;
+}
 
 static void tree_collect(int id, int depth) {
     if (g_treeN >= UI_MAX_WIDGETS) return;
@@ -291,21 +304,34 @@ static void tree_build(void) {
     int roots[UI_MAX_WIDGETS];
     int nr = wt_sib_sorted(0, roots);
     for (int i = 0; i < nr; i++) tree_collect(roots[i], 0);
+    // Прокрутка: выбранного держим в кадре, за края списка не вылезаем.
+    int rows = tree_rows_fit();
+    for (int i = 0; i < g_treeN; i++)
+        if (g_treeId[i] == g_wtSel) {
+            if (i < g_treeScroll) g_treeScroll = i;
+            if (i >= g_treeScroll + rows) g_treeScroll = i - rows + 1;
+        }
+    int maxs = g_treeN - rows;
+    if (maxs < 0) maxs = 0;
+    if (g_treeScroll > maxs) g_treeScroll = maxs;
+    if (g_treeScroll < 0) g_treeScroll = 0;
 }
+// row — индекс ВИДИМОЙ строки (0..rows-1): ширина = внутренняя ширина панели,
+// так строки не вылезают за хром-виджет (жалоба «строки вне виджета»).
 static void tree_rect(int row, float *x, float *y, float *w, float *h) {
     float px, py, pw, ph;
     ed_rect(g_edTree, &px, &py, &pw, &ph);
-    (void)pw;
     (void)ph;
     *x = px + PAL_PAD;
     *y = py + TREE_HDR + (float)(row * TREE_RH);
-    *w = (float)TREE_W;
+    *w = pw - 2 * PAL_PAD;
     *h = (float)TREE_RH;
 }
 static int tree_hit(float px, float py) {
-    for (int i = 0; i < g_treeN; i++) {
+    int rows = tree_rows_fit();
+    for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
         float x, y, w, h;
-        tree_rect(i, &x, &y, &w, &h);
+        tree_rect(i - g_treeScroll, &x, &y, &w, &h);
         if (px >= x && px < x + w && py >= y && py < y + h) return g_treeId[i];
     }
     return 0;
@@ -318,9 +344,10 @@ static void type_col(int type, float out[4]) {
 }
 static void tree_draw(RcVecShape *sh, int *n) {
     tree_build();
-    for (int i = 0; i < g_treeN; i++) {
+    int rows = tree_rows_fit();
+    for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
         float x, y, w, h;
-        tree_rect(i, &x, &y, &w, &h);
+        tree_rect(i - g_treeScroll, &x, &y, &w, &h);
         const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
         if (!wd) continue;
         int sel = g_treeId[i] == g_wtSel;
@@ -382,7 +409,13 @@ static void ed_chrome_sync(void) {
     d[1].x = x0;
     d[1].y = y0 + palH + 10;
     d[1].w = palW;
-    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH * 8);
+    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH * 10); // ~10 строк, дальше скролл
+    { // не вылезаем за низ окна
+        float avail = (float)(g_vpy + g_vph) - (y0 + palH + 10) - PAL_PAD;
+        float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_RH);
+        if (d[1].h > avail) d[1].h = avail;
+        if (d[1].h < one) d[1].h = one;
+    }
     d[2].id = g_edIns;
     d[2].w = (float)(INS_W + 2 * PAL_PAD);
     d[2].x = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
@@ -650,6 +683,18 @@ static void wt_persist(void) {
 
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
+    if (e->kind == UI_EV_WHEEL) { // скролл списка над панелью дерева
+        float px, py, pw, ph;
+        ed_rect(g_edTree, &px, &py, &pw, &ph);
+        if (e->x >= px && e->x < px + pw && e->y >= py && e->y < py + ph) {
+            int step = e->value > 0 ? -3 : e->value < 0 ? 3 : 0;
+            g_treeScroll += step;
+            tree_build(); // клампы: по длине списка и видимости выбранного
+            edit_push();
+            return 1;
+        }
+        return 0;
+    }
     if (e->kind == UI_EV_MOVE) {
         if (g_insField >= 0) { // F3b: scrub поля инспектора (правит АКТИВНОЕ дерево)
             UiWidget *w = widget_get(g_act, g_wtSel);
@@ -866,7 +911,7 @@ static void route_event(const UiEvent *e) {
         edit_push();
         return;
     }
-    if (g_part && !g_forceFull) { // шаг драга: только регионы (dirty-rect)
+    if (g_part && !g_forceFull && !g_noDirty) { // шаг драга: только регионы (dirty-rect)
         edit_push_dirtyN(g_dirtyR, g_dirtyN);
         return;
     }
@@ -913,6 +958,18 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
         e.kind = UI_EV_UP;
         push_ev(&e);
     }
+}
+
+static void on_scroll(GLFWwindow *win, double dx, double dy) {
+    (void)win;
+    (void)dx;
+    UiEvent e;
+    memset(&e, 0, sizeof e);
+    e.kind = UI_EV_WHEEL;
+    e.x = (float)g_mx;
+    e.y = (float)g_my;
+    e.value = (float)dy;
+    push_ev(&e);
 }
 
 static void on_move(GLFWwindow *win, double x, double y) {
@@ -1599,6 +1656,90 @@ int main(int argc, char **argv) {
             ed_chrome_init();
             ed_chrome_sync();
         }
+        // §14 F3c(1b): список виджетов — ОКНО СО СКРОЛЛОМ (жалоба: строки
+        // вылезали за панель; листать было нельзя).
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            g_treeScroll = 0;
+            g_palHot = -1;
+            for (int i = 0; i < 12; i++) wt_spawn(UI_W_BUTTON);
+            int last = g_wtSel;
+            tree_build();
+            int rows = tree_rows_fit();
+            if (g_treeN != 12 || rows < 1) {
+                printf("SELF FAIL: tree-scroll-n %d rows %d\n", g_treeN, rows);
+                bad = 1;
+            }
+            // Выбран последний -> он автоматически в кадре.
+            g_wtSel = last;
+            tree_build();
+            {
+                int idx = -1;
+                for (int i = 0; i < g_treeN; i++)
+                    if (g_treeId[i] == g_wtSel) idx = i;
+                if (idx < 0 || idx < g_treeScroll || idx >= g_treeScroll + rows) {
+                    printf("SELF FAIL: tree-scroll-sel %d sc %d rows %d\n", idx,
+                           g_treeScroll, rows);
+                    bad = 1;
+                }
+            }
+            // Строка ниже последней видимой — мимо (не «вылезает» за панель).
+            {
+                float x, y, w, h;
+                tree_rect(rows, &x, &y, &w, &h); // виртуальная строка вне окна
+                float px, py, pw, ph;
+                ed_rect(g_edTree, &px, &py, &pw, &ph);
+                if (y + h <= py + ph) { // она вообще внутри панели -> не наш случай
+                } else if (tree_hit(x + w * 0.5f, y + h * 0.5f)) {
+                    printf("SELF FAIL: tree-scroll-clip\n");
+                    bad = 1;
+                }
+            }
+            // Колесо над панелью — листает; над пустотой — нет.
+            {
+                float px, py, pw, ph;
+                ed_rect(g_edTree, &px, &py, &pw, &ph);
+                g_wtSel = 0; // без выбора нет автоскролла к нему
+                g_treeScroll = 0;
+                tree_build();
+                UiEvent we;
+                memset(&we, 0, sizeof we);
+                we.kind = UI_EV_WHEEL;
+                we.value = -1.0f; // вниз
+                we.x = px + pw * 0.5f;
+                we.y = py + ph * 0.5f;
+                int sc0 = g_treeScroll;
+                if (!wt_event(&we) || g_treeScroll <= sc0) {
+                    printf("SELF FAIL: tree-wheel %d -> %d\n", sc0, g_treeScroll);
+                    bad = 1;
+                }
+                memset(&we, 0, sizeof we);
+                we.kind = UI_EV_WHEEL;
+                we.value = 1.0f;
+                we.x = px + pw * 0.5f;
+                we.y = py + ph * 0.5f;
+                wt_event(&we);
+                if (g_treeScroll != 0) {
+                    printf("SELF FAIL: tree-wheel-back %d\n", g_treeScroll);
+                    bad = 1;
+                }
+                memset(&we, 0, sizeof we);
+                we.kind = UI_EV_WHEEL;
+                we.value = -1.0f;
+                we.x = (float)(g_vpx + 5);
+                we.y = (float)(g_vpy + g_vph - 60);
+                if (wt_event(&we)) {
+                    printf("SELF FAIL: tree-wheel-steal\n");
+                    bad = 1;
+                }
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            g_treeScroll = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -1677,7 +1818,22 @@ int main(int argc, char **argv) {
     v.resH = H;
     glfwSetMouseButtonCallback(win, on_mouse);
     glfwSetCursorPosCallback(win, on_move);
+    glfwSetScrollCallback(win, on_scroll);
     glfwSetKeyCallback(win, on_key);
+    // Синхронизация кадра с дисплеем (по умолчанию ВКЛ). Без неё на слабом iGPU
+    // кадр может попасть в композитор «полусобранным» — это и выглядит как
+    // шлейф/косынка при драге. Бенчи/диагностика снимают: UI_EDIT_VSYNC=0.
+    {
+        const char *vs = getenv("UI_EDIT_VSYNC");
+        glfwSwapInterval(vs && vs[0] == '0' ? 0 : 1);
+    }
+    {
+        const char *nf = getenv("UI_EDIT_FULL");
+        if (nf && nf[0] == '1') {
+            g_noDirty = 1;
+            printf("ui_edit: full=1 (dirty-rect выключен — диагноз шлейфа при драге)\n");
+        }
+    }
     g_curArrow = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
     g_curResize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
     glfwShowWindow(win);
@@ -1859,15 +2015,18 @@ int main(int argc, char **argv) {
                 pal_rect(i, &px, &py, &pw, &ph);
                 ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
             }
-            // F3: подписи дерева виджетов.
+            // F3: подписи дерева виджетов (только видимые строки).
             tree_build();
-            for (int i = 0; i < g_treeN; i++) {
-                const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
-                if (!wd) continue;
-                float tx, ty, tw, th;
-                tree_rect(i, &tx, &ty, &tw, &th);
-                ui_text_quad(text, tx + 16 + (float)(g_treeDepth[i] * 10), ty + 3, wd->name,
-                             tcol);
+            {
+                int rows = tree_rows_fit();
+                for (int i = g_treeScroll; i < g_treeN && i < g_treeScroll + rows; i++) {
+                    const UiWidget *wd = widget_cget(g_act, g_treeId[i]);
+                    if (!wd) continue;
+                    float tx, ty, tw, th;
+                    tree_rect(i - g_treeScroll, &tx, &ty, &tw, &th);
+                    ui_text_quad(text, tx + 16 + (float)(g_treeDepth[i] * 10), ty + 3,
+                                 wd->name, tcol);
+                }
             }
             // F3b: подписи инспектора (заголовок + поля).
             if (g_wtSel) {
