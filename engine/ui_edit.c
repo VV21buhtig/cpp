@@ -38,6 +38,8 @@ static int g_benchK = BENCH_K; // переопределяется UI_EDIT_BENCH
 static int g_bench = 0, g_forceFull = 0, g_benchId = 0, g_benchNoEv = 0;
 static int g_benchResize = 0;
 static int g_benchCorner = 0;
+static int g_benchEvents = 1;  // MOVE-событий за кадр (реальная мышь)
+static int g_benchNoCoal = 0;  // 1 = без коалесинга (старое поведение)
 static float g_benchX = 0, g_benchY = 0;
 static double g_benchT0 = 0;
 // Rect плейсхолдера вьюпорта (из последнего push — для подписи).
@@ -509,6 +511,29 @@ static void route_event(const UiEvent *e) {
     if (mine || r.dirty) edit_push();
 }
 
+// Коалесинг ввода (как UE/Unity): реальная мышь шлёт десятки MOVE-событий за
+// кадр, а каждый MOVE у нас = отдельная частичная заливка. Копим события и
+// применяем РАЗ ЗА КАДР; подряд идущие MOVE схлопываем в последнюю позицию.
+// Без этого лаг зависит от частоты опроса мыши (синтетика = 1 событие/кадр).
+#define UI_EVQ 1024
+static UiEvent g_evq[UI_EVQ];
+static int g_evn = 0;
+static void push_ev(const UiEvent *e) {
+    if (e->kind == UI_EV_MOVE && g_evn > 0 && g_evq[g_evn - 1].kind == UI_EV_MOVE) {
+        g_evq[g_evn - 1] = *e; // схлопнуть подряд идущие MOVE
+        return;
+    }
+    if (g_evn < UI_EVQ) {
+        g_evq[g_evn++] = *e;
+    } else if (e->kind == UI_EV_MOVE) {
+        g_evq[UI_EVQ - 1] = *e; // переполнение: последнюю позицию не теряем
+    }
+}
+static void drain_ev(void) {
+    for (int i = 0; i < g_evn; i++) route_event(&g_evq[i]);
+    g_evn = 0;
+}
+
 static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     (void)win;
     (void)mods;
@@ -520,10 +545,10 @@ static void on_mouse(GLFWwindow *win, int button, int action, int mods) {
     e.y = (float)g_my;
     if (action == GLFW_PRESS) {
         e.kind = UI_EV_DOWN;
-        route_event(&e);
+        push_ev(&e);
     } else if (action == GLFW_RELEASE) {
         e.kind = UI_EV_UP;
-        route_event(&e);
+        push_ev(&e);
     }
 }
 
@@ -544,7 +569,7 @@ static void on_move(GLFWwindow *win, double x, double y) {
     e.kind = UI_EV_MOVE;
     e.x = (float)g_mx;
     e.y = (float)g_my;
-    route_event(&e);
+    push_ev(&e);
 }
 
 static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods) {
@@ -563,7 +588,7 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
         e.kind = UI_EV_KEY;
         e.key = key;
         e.mods = mods;
-        route_event(&e);
+        push_ev(&e);
     }
 }
 
@@ -1008,6 +1033,7 @@ int main(int argc, char **argv) {
     glfwShowWindow(win);
     glfwMaximizeWindow(win);
     glfwPollEvents();
+    drain_ev();
     edit_push(); // первая заливка
     // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
     if (getenv("UI_EDIT_SEED")) {
@@ -1033,6 +1059,13 @@ int main(int argc, char **argv) {
         }
         const char *bk = getenv("UI_EDIT_BENCH_K");
         if (bk && bk[0] > '0') g_benchK = atoi(bk);
+        {
+            const char *bev = getenv("UI_EDIT_BENCH_EVENTS"); // событий/кадр (мышь)
+            if (bev && bev[0] > '0') g_benchEvents = atoi(bev);
+            if (g_benchEvents < 1) g_benchEvents = 1;
+            const char *nc = getenv("UI_EDIT_BENCH_NOCOAL");
+            if (nc && nc[0] == '1') g_benchNoCoal = 1;
+        }
         glfwSwapInterval(0);
         if (!g_wt.count) wt_spawn(UI_W_PANEL);
         for (int i = 0; i < UI_MAX_WIDGETS; i++)
@@ -1210,26 +1243,46 @@ int main(int argc, char **argv) {
                     g_benchX = bx + bww - 1;
                     g_benchY = g_benchCorner ? by + bhh - 1 : by + bhh / 2;
                 } else {
-                    g_benchX = bx + bww / 2;
-                    g_benchY = by + bhh / 2;
+                    const char *bg = getenv("UI_EDIT_BENCH_GRAB"); // bg = за фон (не за детей)
+                    if (bg && bg[0] == 'b') {
+                        g_benchX = bx + bww * 0.2f;
+                        g_benchY = by + bhh * 0.8f;
+                    } else {
+                        g_benchX = bx + bww / 2;
+                        g_benchY = by + bhh / 2;
+                    }
                 }
                 be.kind = UI_EV_DOWN;
                 be.x = g_benchX;
                 be.y = g_benchY;
                 route_event(&be);
             } else {
-                be.kind = UI_EV_MOVE;
+                // N событий за кадр (как реальная мышь: опрос 125-1000Гц).
+                // Коалесинг схлопывает подряд MOVE -> 1 заливка/кадр.
+                float bx1, by1;
                 if (g_benchResize) { // растём вправо (и вниз, если угол)
-                    be.x = g_benchX + (float)(frames - 10) * 3;
-                    be.y = g_benchCorner ? g_benchY + (float)(frames - 10) * 2 : g_benchY;
+                    bx1 = g_benchX + (float)(frames - 10) * 3;
+                    by1 = g_benchCorner ? g_benchY + (float)(frames - 10) * 2 : g_benchY;
                 } else {
                     // Быстрый свип через весь вьюпорт (стресс: большие дельты).
                     int sw = g_vpw > 120 ? g_vpw - 80 : 200;
                     int sh = g_vph > 120 ? g_vph - 80 : 150;
-                    be.x = g_benchX + (float)((frames - 10) * 11 % sw);
-                    be.y = g_benchY + (float)((frames - 10) * 5 % sh);
+                    bx1 = g_benchX + (float)((frames - 10) * 11 % sw);
+                    by1 = g_benchY + (float)((frames - 10) * 5 % sh);
                 }
-                route_event(&be);
+                for (int j = 0; j < g_benchEvents; j++) {
+                    UiEvent me;
+                    memset(&me, 0, sizeof me);
+                    me.kind = UI_EV_MOVE;
+                    // подшаги: последний совпадает с одиночным событием
+                    me.x = bx1 - (float)(g_benchEvents - 1 - j) * 0.3f;
+                    me.y = by1 - (float)(g_benchEvents - 1 - j) * 0.2f;
+                    if (g_benchNoCoal)
+                        route_event(&me); // старое поведение: заливка на КАЖДОЕ событие
+                    else
+                        push_ev(&me);
+                }
+                if (!g_benchNoCoal) drain_ev();
             }
         }
         if (g_bench && frames == 10 + g_benchK - 1) {
@@ -1259,6 +1312,7 @@ int main(int argc, char **argv) {
         comp_present_gl(prog, vao, &t, g_WW, g_WH);
         glfwSwapBuffers(win);
         glfwPollEvents();
+        drain_ev(); // применить ввод раз за кадр (коалесинг MOVE)
         frames++;
     }
     printf("ui_edit: frames=%d DONE\n", frames);
