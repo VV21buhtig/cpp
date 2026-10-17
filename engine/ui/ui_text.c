@@ -147,8 +147,27 @@ void ui_text_destroy(UiText *t) {
     free(t);
 }
 
+// §14 F5k: прямоугольники-перекрытия (панели-окна). Текст под ними не рисуем.
+static float g_occ[UI_TEXT_MAXOCC][4];
+static int g_occN = 0;
+void ui_text_occluders(const float (*rects)[4], int n) {
+    if (n < 0) n = 0;
+    if (n > UI_TEXT_MAXOCC) n = UI_TEXT_MAXOCC;
+    g_occN = n;
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < 4; k++) g_occ[i][k] = rects[i][k];
+}
+int ui_text_occluded(float x, float y) {
+    for (int i = 0; i < g_occN; i++)
+        if (x >= g_occ[i][0] && x < g_occ[i][0] + g_occ[i][2] && y >= g_occ[i][1] &&
+            y < g_occ[i][1] + g_occ[i][3])
+            return 1;
+    return 0;
+}
+
 float ui_text_quad(UiText *t, float x, float y, const char *s, const float rgba[4]) {
     if (!t || !s) return 0.0f;
+    if (g_occN > 0 && ui_text_occluded(x, y)) return 0.0f; // F5k: под окном не пишем
     float ox = x;
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
         if (t->nq >= UI_TEXT_MAXQ) break;
