@@ -28,6 +28,14 @@ static RenderCore *g_vec = 0;
 static ScWorld g_scene;
 static GLFWcursor *g_curArrow = 0, *g_curResize = 0;
 static int g_quit = 0;
+// Бенч драга (UI_EDIT_BENCH=rect|full): синтетический драг K шагов, замер FPS.
+#define BENCH_K 600
+static int g_benchK = BENCH_K; // переопределяется UI_EDIT_BENCH_K
+static int g_bench = 0, g_forceFull = 0, g_benchId = 0, g_benchNoEv = 0;
+static int g_benchResize = 0;
+static int g_benchCorner = 0;
+static float g_benchX = 0, g_benchY = 0;
+static double g_benchT0 = 0;
 // Rect плейсхолдера вьюпорта (из последнего push — для подписи).
 static int g_vpx = 0, g_vpy = 0, g_vpw = 0, g_vph = 0;
 
@@ -44,6 +52,7 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define PAL_BH 26
 #define PAL_GAP 4
 #define PAL_N 3
+#define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
 static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL};
 static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label"};
 
@@ -175,7 +184,8 @@ static void wt_draw_all(RcVecShape *sh, int *n) {
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++) {
                 if (i == 1 && j == 1) continue; // центр — не ручка
-                wt_emit(sh, n, hxs[i] - 3, hys[j] - 3, 6, 6, sel, 0);
+                wt_emit(sh, n, hxs[i] - WT_HANDLE / 2, hys[j] - WT_HANDLE / 2, WT_HANDLE,
+                        WT_HANDLE, sel, 0);
             }
     }
 }
@@ -200,8 +210,15 @@ static int g_dragId = 0;
 static int g_dragHandle = 0;
 static float g_dragMX = 0, g_dragMY = 0;             // мышь на DOWN (px окна)
 static float g_dragX = 0, g_dragY = 0, g_dragW = 0, g_dragH = 0; // rect на DOWN
+static float g_prevX = 0, g_prevY = 0, g_prevW = 0, g_prevH = 0; // прошлый шаг
+// Dirty-регионы шага драга: 1 = есть что заливать. Список до 8 rect (x,y,w,h).
+// Перемещение -> старый+новый; ресайз -> полосы дельты (что реально изменилось),
+// а не весь виджет — иначе цена растёт вместе с размером (это и был «лаг»).
+static int g_part = 0;
+static int g_dirtyR[8][4];
+static int g_dirtyN = 0;
 
-#define WT_GRAB 7.0f
+#define WT_GRAB 9.0f
 #define WT_MIN 8.0f
 
 // Хэндл ресайза под точкой (у выбранного). 0 = не хэндл (тело/мимо).
@@ -210,14 +227,17 @@ static int wt_handle_hit(float px, float py) {
     if (!s) return 0;
     float x, y, w, h;
     widget_rect_px(s, g_WW, g_WH, &x, &y, &w, &h);
-    int loX = px >= x - 2 && px <= x + w + 2;
-    int loY = py >= y - 2 && py <= y + h + 2;
-    if (!loX || !loY) return 0;
+    if (px < x - 3 || px > x + w + 3 || py < y - 3 || py > y + h + 3) return 0;
+    // Малый виджет: полоса захвата не больше трети стороны — иначе весь
+    // прямоугольник станет «ручкой» и тело не подвинуть (баг «ресайз вместо move»).
+    float gx = WT_GRAB, gy = WT_GRAB;
+    if (w < 3 * WT_GRAB) gx = w / 3;
+    if (h < 3 * WT_GRAB) gy = h / 3;
     int hb = 0;
-    if (px <= x + WT_GRAB) hb |= 1;
-    if (px >= x + w - WT_GRAB) hb |= 2;
-    if (py <= y + WT_GRAB) hb |= 4;
-    if (py >= y + h - WT_GRAB) hb |= 8;
+    if (px <= x + gx) hb |= 1;
+    if (px >= x + w - gx) hb |= 2;
+    if (py <= y + gy) hb |= 4;
+    if (py >= y + h - gy) hb |= 8;
     return hb;
 }
 
@@ -229,6 +249,11 @@ static void wt_drag_begin(int id, int handle, float mx, float my) {
     g_dragMX = mx;
     g_dragMY = my;
     widget_rect_px(w, g_WW, g_WH, &g_dragX, &g_dragY, &g_dragW, &g_dragH);
+    g_prevX = g_dragX;
+    g_prevY = g_dragY;
+    g_prevW = g_dragW;
+    g_prevH = g_dragH;
+    g_part = 0;
 }
 
 // Обратно из пикселей в якоря (инверсия widget_rect_px).
@@ -275,6 +300,70 @@ static void wt_drag_apply(float mx, float my) {
             if (g_dragHandle & 4) ny = g_dragY + g_dragH - WT_MIN;
             nh = WT_MIN;
         }
+    }
+    // Dirty-регионы: перемещение -> старый+новый; ресайз -> полосы дельты по
+    // сдвинутым краям (цена ~ скорости драга, а не размеру виджета).
+    {
+        const float M = 12.0f;
+        float oL = g_prevX, oT = g_prevY, oR = g_prevX + g_prevW, oB = g_prevY + g_prevH;
+        float nL = nx, nT = ny, nR = nx + nw, nB = ny + nh;
+        g_dirtyN = 0;
+#define WT_ADD_RECT(X, Y, W, H)                                                        \
+    do {                                                                               \
+        if (g_dirtyN < 8) {                                                            \
+            g_dirtyR[g_dirtyN][0] = (int)(X);                                          \
+            g_dirtyR[g_dirtyN][1] = (int)(Y);                                          \
+            g_dirtyR[g_dirtyN][2] = (int)(W);                                          \
+            g_dirtyR[g_dirtyN][3] = (int)(H);                                          \
+            g_dirtyN++;                                                                \
+        }                                                                              \
+    } while (0)
+        if (g_dragHandle == 0) { // перемещение: стереть старый, нарисовать новый
+            WT_ADD_RECT(oL - M, oT - M, g_prevW + 2 * M, g_prevH + 2 * M);
+            WT_ADD_RECT(nL - M, nT - M, nw + 2 * M, nh + 2 * M);
+        } else {
+            float x0 = (oL < nL ? oL : nL) - M, y0 = (oT < nT ? oT : nT) - M;
+            float x1 = (oR > nR ? oR : nR) + M, y1 = (oB > nB ? oB : nB) + M;
+            float dL = oL < nL ? nL - oL : oL - nL;
+            float dR = oR < nR ? nR - oR : oR - nR;
+            float dT = oT < nT ? nT - oT : oT - nT;
+            float dB = oB < nB ? nB - oB : oB - nB;
+            float eL = oL < nL ? oL : nL, eR = oR > nR ? oR : nR;
+            float eT = oT < nT ? oT : nT, eB = oB > nB ? oB : nB;
+            if (g_dragHandle & 1) // левый край: вертикальная полоса
+                WT_ADD_RECT(eL - M, y0, dL + 2 * M, y1 - y0);
+            if (g_dragHandle & 2) // правый край
+                WT_ADD_RECT(eR - dR - M, y0, dR + 2 * M, y1 - y0);
+            if (g_dragHandle & 4) // верх
+                WT_ADD_RECT(x0, eT - M, x1 - x0, dT + 2 * M);
+            if (g_dragHandle & 8) // низ
+                WT_ADD_RECT(x0, eB - dB - M, x1 - x0, dB + 2 * M);
+            // Срединные ручки, которые съезжают ВНУТРИ неизменной части:
+            // верх/низ при смене ширины, лево/право при смене высоты.
+            int wchg = (g_dragHandle & 3) != 0, hchg = (g_dragHandle & 12) != 0;
+            float oCx = (oL + oR) * 0.5f, nCx = (nL + nR) * 0.5f;
+            float oCy = (oT + oB) * 0.5f, nCy = (nT + nB) * 0.5f;
+            if (wchg) {
+                float cx = (oCx < nCx ? oCx : nCx) - WT_HANDLE;
+                float cw = (oCx < nCx ? nCx - oCx : oCx - nCx) + 2 * WT_HANDLE;
+                if (!(g_dragHandle & 4)) WT_ADD_RECT(cx, y0, cw, 2 * M);
+                if (!(g_dragHandle & 8)) WT_ADD_RECT(cx, y1 - 2 * M, cw, 2 * M);
+            }
+            if (hchg) {
+                float cy = (oCy < nCy ? oCy : nCy) - WT_HANDLE;
+                float ch = (oCy < nCy ? nCy - oCy : oCy - nCy) + 2 * WT_HANDLE;
+                if (!(g_dragHandle & 1)) WT_ADD_RECT(x0, cy, 2 * M, ch);
+                if (!(g_dragHandle & 2)) WT_ADD_RECT(x1 - 2 * M, cy, 2 * M, ch);
+            }
+            if (g_dirtyN == 0) // ничего не сдвинулось (клик по ручке без движения)
+                WT_ADD_RECT(nL - M, nT - M, nw + 2 * M, nh + 2 * M);
+        }
+#undef WT_ADD_RECT
+        g_part = 1;
+        g_prevX = nx;
+        g_prevY = ny;
+        g_prevW = nw;
+        g_prevH = nh;
     }
     pt_to_anchor(w, nx, ny, nw, nh, g_WW, g_WH);
 }
@@ -329,9 +418,9 @@ static int wt_event(const UiEvent *e) {
 
 // Заливка панелей в vec-ядро (полная, без гизмо/dirty-rect: стрелок нет,
 // панели дёшевы). Плейсхолдер вьюпорта — тёмной плашкой поверх пустоты.
-static void edit_push(void) {
+// Собрать кадр примитивов (панели -> плейсхолдер -> виджеты -> палитра).
+static int build_shapes(RcVecShape *shapes) {
     const UiFrame *fr = 0;
-    RcVecShape shapes[UI_MAX_PRIMS];
     int n = 0;
     int panelsDirty = ui_panels_build(g_panels, &g_scene, g_WW, g_WH, &fr);
     if (fr) {
@@ -362,15 +451,55 @@ static void edit_push(void) {
     (void)panelsDirty;
     wt_draw_all(shapes, &n);
     pal_draw(shapes, &n);
+    return n;
+}
+
+static void edit_push(void) {
+    RcVecShape shapes[UI_MAX_PRIMS];
+    int n = build_shapes(shapes);
     if (n && g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+}
+
+// Частичная перерисовка (dirty-rect, как в игровом редакторе): растр только
+// региона (x,y,w,h, y-вниз), остальное не трогаем. Это и есть лечение лага.
+static void edit_push_dirtyN(const int (*rects)[4], int cnt) {
+    if (cnt <= 0) return;
+    RcVecShape shapes[UI_MAX_PRIMS];
+    int n = build_shapes(shapes); // один сбор кадра на все регионы
+    if (!n) return;
+    if (!g_vec->upload_vector_rect) {
+        if (g_vec->upload_vector) g_vec->upload_vector(g_vec, shapes, n);
+        return;
+    }
+    for (int i = 0; i < cnt; i++) {
+        int x = rects[i][0], y = rects[i][1], w = rects[i][2], h = rects[i][3];
+        if (w <= 0 || h <= 0) continue;
+        if (x < 0) {
+            w += x;
+            x = 0;
+        }
+        if (y < 0) {
+            h += y;
+            y = 0;
+        }
+        if (x + w > g_WW) w = g_WW - x;
+        if (y + h > g_WH) h = g_WH - y;
+        if (w <= 0 || h <= 0) continue;
+        g_vec->upload_vector_rect(g_vec, shapes, n, x, y, w, h);
+    }
 }
 
 static void route_event(const UiEvent *e) {
     // Порядок §14: виджеты/палитра -> доки. DOWN/UP, съеденный холстом,
     // в доки не идёт; MOVE форвардим обоим (ховер и там, и там).
+    g_part = 0;
     int mine = wt_event(e);
     if (mine && e->kind != UI_EV_MOVE) {
         edit_push();
+        return;
+    }
+    if (g_part && !g_forceFull) { // шаг драга: только регионы (dirty-rect)
+        edit_push_dirtyN(g_dirtyR, g_dirtyN);
         return;
     }
     UiReply r = ui_panels_event(g_panels, &g_scene, e);
@@ -884,6 +1013,42 @@ int main(int argc, char **argv) {
         wt_spawn(UI_W_LABEL);
         edit_push();
     }
+    // Бенч драга: без vsync-капа, синтетика в цикле (ниже).
+    const char *bench = getenv("UI_EDIT_BENCH");
+    if (bench && bench[0]) {
+        g_bench = 1;
+        g_forceFull = !strcmp(bench, "full");
+        {
+            const char *ff = getenv("UI_EDIT_BENCH_FULL"); // форс полного пути при той же траектории
+            if (ff && ff[0] == '1') g_forceFull = 1;
+        }
+        g_benchNoEv = !strcmp(bench, "none");
+        g_benchResize = !strcmp(bench, "resize");
+        {
+            const char *bc = getenv("UI_EDIT_BENCH_CORNER"); // тянуть угол (BR), не край
+            if (bc && bc[0] == '1') g_benchCorner = 1;
+        }
+        const char *bk = getenv("UI_EDIT_BENCH_K");
+        if (bk && bk[0] > '0') g_benchK = atoi(bk);
+        glfwSwapInterval(0);
+        if (!g_wt.count) wt_spawn(UI_W_PANEL);
+        for (int i = 0; i < UI_MAX_WIDGETS; i++)
+            if (g_wt.alive[i]) {
+                g_benchId = i + 1;
+                break;
+            }
+        const char *bid = getenv("UI_EDIT_BENCH_ID"); // какую цель тащить (1..)
+        if (bid && bid[0]) {
+            int want = atoi(bid), seen = 0;
+            for (int i = 0; i < UI_MAX_WIDGETS; i++)
+                if (g_wt.alive[i] && ++seen == want) {
+                    g_benchId = i + 1;
+                    break;
+                }
+        }
+        g_wtSel = g_benchId;
+        edit_push();
+    }
     // Доказательство картинкой: UI_EDIT_SHOT=shot.ppm UI_EDIT_SHOT_AT=60.
     const char *shot = getenv("UI_EDIT_SHOT");
     int shotAt = 60;
@@ -975,6 +1140,64 @@ int main(int argc, char **argv) {
                 }
                 free(px);
             }
+        }
+        // Бенч драга: DOWN в кадре 10, далее MOVE; замер FPS, выход по концу.
+        if (g_bench && frames == 10) g_benchT0 = glfwGetTime();
+        if (g_bench && !g_benchNoEv && frames >= 10 && frames < 10 + g_benchK) {
+            UiEvent be;
+            memset(&be, 0, sizeof be);
+            if (frames == 10) {
+                const UiWidget *bw = widget_cget(&g_wt, g_benchId);
+                float bx, by, bww, bhh;
+                widget_rect_px(bw, g_WW, g_WH, &bx, &by, &bww, &bhh);
+                if (g_benchResize) { // хватаем правую ручку (или угол BR)
+                    g_benchX = bx + bww - 1;
+                    g_benchY = g_benchCorner ? by + bhh - 1 : by + bhh / 2;
+                } else {
+                    g_benchX = bx + bww / 2;
+                    g_benchY = by + bhh / 2;
+                }
+                be.kind = UI_EV_DOWN;
+                be.x = g_benchX;
+                be.y = g_benchY;
+                route_event(&be);
+            } else {
+                be.kind = UI_EV_MOVE;
+                if (g_benchResize) { // растём вправо (и вниз, если угол)
+                    be.x = g_benchX + (float)(frames - 10) * 3;
+                    be.y = g_benchCorner ? g_benchY + (float)(frames - 10) * 2 : g_benchY;
+                } else {
+                    // Быстрый свип через весь вьюпорт (стресс: большие дельты).
+                    int sw = g_vpw > 120 ? g_vpw - 80 : 200;
+                    int sh = g_vph > 120 ? g_vph - 80 : 150;
+                    be.x = g_benchX + (float)((frames - 10) * 11 % sw);
+                    be.y = g_benchY + (float)((frames - 10) * 5 % sh);
+                }
+                route_event(&be);
+            }
+        }
+        if (g_bench && frames == 10 + g_benchK - 1) {
+            double dt = glfwGetTime() - g_benchT0;
+            printf("ui_edit: bench %s steps=%d dt=%.3f fps=%.1f\n",
+                   g_forceFull     ? "full"
+                   : g_benchResize ? "resize"
+                   : g_benchNoEv   ? "none"
+                                   : "bands",
+                   g_benchK, dt, g_benchK / dt);
+            const UiWidget *bw = widget_cget(&g_wt, g_benchId);
+            if (bw) {
+                float rx, ry, rw, rh;
+                widget_rect_px(bw, g_WW, g_WH, &rx, &ry, &rw, &rh);
+                printf("ui_edit: bench geom id=%d x=%.1f y=%.1f w=%.1f h=%.1f\n",
+                       g_benchId, rx, ry, rw, rh);
+            }
+            g_quit = 1;
+        }
+        // Окно прогресса (деградация во времени): каждые 100 шагов.
+        if (g_bench && !g_benchNoEv && frames >= 10 && frames % 100 == 9 && frames > 10) {
+            double dt = glfwGetTime() - g_benchT0;
+            int done = frames - 9;
+            printf("ui_edit: bench win steps=%d fps=%.1f\n", done, done / dt);
         }
         eng_pass_end(&t);
         comp_present_gl(prog, vao, &t, g_WW, g_WH);

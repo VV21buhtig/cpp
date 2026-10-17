@@ -35,6 +35,18 @@ static void blend_px(uint8_t *fb, int w, int h, int x, int y, const float *rgba)
     p[3] = (uint8_t)((sa + da * (1.0f - sa)) * 255.0f + 0.5f);
 }
 
+// Клип региона (dirty-rect): циклы растра гоняем только по нему, не по всему
+// bbox фигуры. Иначе фоновая плашка во весь экран растеризуется целиком каждый
+// шаг драга — и dirty-rect не экономит (это и был лаг). Для полной заливки
+// клип = весь fb.
+static int g_cx0 = 0, g_cy0 = 0, g_cx1 = 0, g_cy1 = 0;
+static void clip_bounds(int *x0, int *y0, int *x1, int *y1) {
+    if (*x0 < g_cx0) *x0 = g_cx0;
+    if (*y0 < g_cy0) *y0 = g_cy0;
+    if (*x1 > g_cx1) *x1 = g_cx1;
+    if (*y1 > g_cy1) *y1 = g_cy1;
+}
+
 static void vec_rect(uint8_t *fb, int w, int h, const RcVecShape *s) {
     // Радиус в e (§12, 0 = остро). Углы режем четвертью круга как circle.
     int x0 = (int)floorf(s->a), y0 = (int)floorf(s->b);
@@ -43,6 +55,7 @@ static void vec_rect(uint8_t *fb, int w, int h, const RcVecShape *s) {
     if (y0 < 0) y0 = 0;
     if (x1 > w) x1 = w;
     if (y1 > h) y1 = h;
+    clip_bounds(&x0, &y0, &x1, &y1);
     float r = s->e;
     if (r < 0.0f) r = 0.0f;
     float maxr = (s->c < s->d ? s->c : s->d) * 0.5f;
@@ -73,6 +86,7 @@ static void vec_circle(uint8_t *fb, int w, int h, const RcVecShape *s) {
     if (y0 < 0) y0 = 0;
     if (x1 > w) x1 = w;
     if (y1 > h) y1 = h;
+    clip_bounds(&x0, &y0, &x1, &y1);
     for (int y = y0; y < y1; y++)
         for (int x = x0; x < x1; x++) {
             float dx = (x + 0.5f) - s->a, dy = (y + 0.5f) - s->b;
@@ -88,7 +102,9 @@ static void vec_line(uint8_t *fb, int w, int h, const RcVecShape *s) {
     if (n < 1) n = 1;
     for (int i = 0; i <= n; i++) {
         float t = (float)i / n;
-        blend_px(fb, w, h, (int)(x0 + dx * t), (int)(y0 + dy * t), s->rgba);
+        int px = (int)(x0 + dx * t), py = (int)(y0 + dy * t);
+        if (px < g_cx0 || px >= g_cx1 || py < g_cy0 || py >= g_cy1) continue;
+        blend_px(fb, w, h, px, py, s->rgba);
     }
 }
 
@@ -108,8 +124,11 @@ static void vec_tri(uint8_t *fb, int w, int h, float x0, float y0, float x1, flo
     if (y2 > maxy) maxy = y2;
     float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
     if (den > -1e-6f && den < 1e-6f) return;
-    for (int y = (int)floorf(miny); y <= (int)ceilf(maxy); y++)
-        for (int x = (int)floorf(minx); x <= (int)ceilf(maxx); x++) {
+    int tx0 = (int)floorf(minx), ty0 = (int)floorf(miny);
+    int tx1 = (int)ceilf(maxx) + 1, ty1 = (int)ceilf(maxy) + 1;
+    clip_bounds(&tx0, &ty0, &tx1, &ty1);
+    for (int y = ty0; y < ty1; y++)
+        for (int x = tx0; x < tx1; x++) {
             float l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den;
             float l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den;
             float l2 = 1.0f - l0 - l1;
@@ -131,6 +150,10 @@ static int vec_upload(RenderCore *rc, const RcVecShape *shapes, int n) {
     if (n > 4096) n = 4096;
     // Фон: тёмный. Порядок массива = порядок рисования.
     memset(p->fb, 0, (size_t)w * h * 4);
+    g_cx0 = 0;
+    g_cy0 = 0;
+    g_cx1 = w;
+    g_cy1 = h;
     for (int i = 0; i < n; i++) {
         if (shapes[i].kind == 0) vec_rect(p->fb, w, h, &shapes[i]);
         else if (shapes[i].kind == 1) vec_circle(p->fb, w, h, &shapes[i]);
@@ -173,6 +196,10 @@ static int vec_upload_rect(RenderCore *rc, const RcVecShape *shapes, int n, int 
     if (y + h > fh) h = fh - y;
     if (w <= 0 || h <= 0) return 0;
     if (n > 4096) n = 4096;
+    g_cx0 = x;
+    g_cy0 = y;
+    g_cx1 = x + w;
+    g_cy1 = y + h;
     // Чистим регион (прозрачный — было под стрелками стираем).
     for (int r = y; r < y + h; r++)
         memset(p->fb + ((size_t)r * fw + x) * 4, 0, (size_t)w * 4);
