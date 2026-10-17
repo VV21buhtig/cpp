@@ -87,6 +87,21 @@ static int g_edPal = 0, g_edTree = 0, g_edIns = 0; // id хром-панелей
 static int g_edMoved[UI_MAX_WIDGETS]; // 1 = юзер подвинул: дефолтом не перетираем
 static int g_editSelf = 0;            // 1 = правим хром редактора
 static UiWidgetTree *g_act = &g_wt;   // АКТИВНОЕ дерево (инспектор/драг/дерево)
+// §14 F5j: ПЛАВАЮЩИЕ ПАНЕЛИ. Панель тащат за полосу ЗАГОЛОВКА: она отрывается от
+// дока и висит ПОВЕРХ всего (как окно в оконном менеджере: и отрисовка, и клик
+// идут сверху вниз по порядку). У оторванной в заголовке кнопка «dock», а бросок
+// в СВОЁ док-место (док-зона) возвращает её назад.
+static int g_edPanels[3] = {0, 0, 0};        // id панелей: палитра/дерево/инспектор
+static int g_edOrder[3] = {0, 1, 2};         // порядок: ПОСЛЕДНИЙ = верхний
+static int g_edGrab = -1;                    // 0..2: панель тащат за заголовок
+static float g_edGrabDX = 0, g_edGrabDY = 0; // где взяли внутри панели
+// Панель оторвана от дока (двинул юзер — sync её больше не возвращает): по этому
+// признаку рисуем рамку и кнопку «dock».
+static int ed_panel_float(int i) {
+    int id = (i >= 0 && i < 3) ? g_edPanels[i] : 0;
+    return id > 0 && id <= UI_MAX_WIDGETS && g_edMoved[id - 1];
+}
+static void ed_float_chip(int i, float *cx, float *cy, float *cw, float *ch); // ниже
 
 // Пиксельный rect хром-панели (то же правило якорей, что у виджетов документа).
 static void ed_rect(int id, float *x, float *y, float *w, float *h) {
@@ -120,6 +135,11 @@ static void ed_chrome_init(void) {
     g_edPal = widget_add(&g_edWt, UI_W_PANEL, "EdPalette", 0, &r, &s);
     g_edTree = widget_add(&g_edWt, UI_W_PANEL, "EdHierarchy", 0, &r, &s2);
     g_edIns = widget_add(&g_edWt, UI_W_PANEL, "EdInspector", 0, &r, &s2);
+    g_edPanels[0] = g_edPal; // F5j: панели как окна — порядок/таск за заголовок
+    g_edPanels[1] = g_edTree;
+    g_edPanels[2] = g_edIns;
+    for (int i = 0; i < 3; i++) g_edOrder[i] = i;
+    g_edGrab = -1;
 }
 
 static void pal_rect(int i, float *x, float *y, float *w, float *h) {
@@ -283,16 +303,28 @@ static void chrome_draw(RcVecShape *sh, int *n) {
 // §14 F5c: полоса ЗАГОЛОВКА панели (как в Unity/Figma). Без неё заголовок
 // «висит» на фоне панели и кажется съехавшим (жалоба тестера). Рисуем после
 // фона панели, но ДО рядов и до текста (текст — отдельный проход).
+// §14 F5j: порядок = g_edOrder (верхняя панель — последняя), у ОТОРВАННОЙ панели
+// дополнительно рамка «я поверх всего» и кнопка «dock» в правом конце заголовка.
 static void chrome_heads_draw(RcVecShape *sh, int *n) {
     float head[4] = {0.19f, 0.21f, 0.27f, 1.0f};
     float line[4] = {0.30f, 0.33f, 0.41f, 1.0f};
-    int ids[3] = {g_edPal, g_edTree, g_edIns};
-    for (int i = 0; i < 3; i++) {
+    float edge[4] = {0.38f, 0.44f, 0.58f, 1.0f}; // оторвана: рамка окна
+    float chip[4] = {0.26f, 0.31f, 0.42f, 1.0f}; // кнопка «dock»
+    for (int k = 0; k < 3; k++) {
+        int i = g_edOrder[k];
         float px, py, pw, ph;
-        ed_rect(ids[i], &px, &py, &pw, &ph);
+        ed_rect(g_edPanels[i], &px, &py, &pw, &ph);
         if (pw <= 2 || ph <= (float)PAL_TITLE) continue;
         wt_emit(sh, n, px + 1, py + 1, pw - 2, (float)PAL_TITLE - 1, head, 5.0f);
         wt_emit(sh, n, px + 1, py + (float)PAL_TITLE - 1, pw - 2, 1.0f, line, 0.0f);
+        if (ed_panel_float(i)) { // панель оторвана от дока — она «окно»
+            wt_emit(sh, n, px, py, 2.0f, ph, edge, 0.0f);
+            wt_emit(sh, n, px + pw - 2, py, 2.0f, ph, edge, 0.0f);
+            wt_emit(sh, n, px, py + ph - 2, pw, 2.0f, edge, 0.0f);
+            float cx, cy, cw, ch;
+            ed_float_chip(i, &cx, &cy, &cw, &ch);
+            wt_emit(sh, n, cx, cy, cw, ch, chip, 3.0f);
+        }
     }
 }
 
@@ -568,44 +600,51 @@ static void ins_rect(int i, float *x, float *y, float *w, float *h) {
 
 // Раскладка хрома по умолчанию: панели привязаны к вьюпорту (L|T-якоря и оффсеты
 // окна) — двинулся док, двинулся хром. Правку юзера (g_edMoved) не перетираем.
-static void ed_chrome_sync(void) {
+// §14 F5j: «домашнее» место панели в доке (панели соседствуют, не пересекаются).
+static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
     float palW = (float)((TREE_W > PAL_BW ? TREE_W : PAL_BW) + 2 * PAL_PAD);
     float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
     float x0 = (float)(g_vpx + PAL_PAD), y0 = (float)(g_vpy + PAL_PAD);
     if (y0 < (float)ED_TOP_CHROME) y0 = (float)ED_TOP_CHROME; // ниже легаси-строки
-    struct {
-        int id;
-        float x, y, w, h;
-    } d[3];
-    d[0].id = g_edPal;
-    d[0].x = x0;
-    d[0].y = y0;
-    d[0].w = palW;
-    d[0].h = palH;
-    d[1].id = g_edTree;
-    d[1].x = x0;
-    d[1].y = y0 + palH + 10;
-    d[1].w = palW;
-    d[1].h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10); // ~10 строк
-    { // не вылезаем за низ окна
-        float avail = (float)(g_vpy + g_vph) - (y0 + palH + 10) - PAL_PAD;
-        float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH);
-        if (d[1].h > avail) d[1].h = avail;
-        if (d[1].h < one) d[1].h = one;
+    if (i == 0) { // палитра: верхний левый угол вьюпорта
+        *ox = x0;
+        *oy = y0;
+        *ow = palW;
+        *oh = palH;
+        return;
     }
-    d[2].id = g_edIns;
-    d[2].w = (float)(INS_W + 2 * PAL_PAD);
-    d[2].x = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
-    d[2].y = y0;
-    d[2].h = (float)(PAL_PAD * 2 + PAL_TITLE + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+    if (i == 1) { // дерево: под палитрой, высота — сколько влезает до низа окна
+        *ox = x0;
+        *oy = y0 + palH + 10;
+        *ow = palW;
+        {
+            float h = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10);
+            float avail = (float)(g_vpy + g_vph) - (y0 + palH + 10) - PAL_PAD;
+            float one = (float)(PAL_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH);
+            if (h > avail) h = avail;
+            if (h < one) h = one;
+            *oh = h;
+        }
+        return;
+    }
+    *ow = (float)(INS_W + 2 * PAL_PAD); // инспектор: справа во вьюпорте
+    *ox = (float)(g_vpx + g_vpw - INS_W - 2 * PAL_PAD);
+    *oy = y0;
+    *oh = (float)(PAL_PAD * 2 + PAL_TITLE + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+}
+// Раскладка хрома: панели, которых юзер НЕ двигал, ставим на их док-места.
+// Оторванную (g_edMoved) не трогаем — она живёт там, куда её положил юзер.
+static void ed_chrome_sync(void) {
     for (int i = 0; i < 3; i++) {
-        UiWidget *w = widget_get(&g_edWt, d[i].id);
-        if (!w || g_edMoved[d[i].id - 1]) continue;
-        w->rect.anchors = UI_A_LEFT | UI_A_TOP;
-        w->rect.x = d[i].x;
-        w->rect.y = d[i].y;
-        w->rect.w = d[i].w;
-        w->rect.h = d[i].h;
+        float x, y, w, h;
+        ed_panel_home(i, &x, &y, &w, &h);
+        UiWidget *p = widget_get(&g_edWt, g_edPanels[i]);
+        if (!p || g_edMoved[g_edPanels[i] - 1]) continue;
+        p->rect.anchors = UI_A_LEFT | UI_A_TOP;
+        p->rect.x = x;
+        p->rect.y = y;
+        p->rect.w = w;
+        p->rect.h = h;
     }
 }
 static float *ins_slot(UiWidget *w, int f) {
@@ -1226,6 +1265,63 @@ static int wt_delete_sel(void) {
 }
 
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
+// §14 F5j: панели — как окна. Верхняя панель в точке (порядок g_edOrder, верхняя
+// проверяется первой): она забирает клик и рисуется последней.
+static int ed_panel_top(float px, float py) {
+    for (int k = 2; k >= 0; k--) {
+        int i = g_edOrder[k];
+        float x, y, w, h;
+        ed_rect(g_edPanels[i], &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) return i;
+    }
+    return -1;
+}
+// §14 F5j: текст — отдельный проход ПОВЕРХ всех фигур. Без этой проверки подпись,
+// накрытая панелью, ПРОСТУПАЕТ сквозь неё (панель = окно). own: 0/1/2 — своя
+// панель (её текст виден, если она верхняя), -1 — документ/призрак.
+static int ed_text_vis(int own, float x, float y) {
+    int t = ed_panel_top(x, y);
+    return t < 0 || t == own;
+}
+// Полоса ЗАГОЛОВКА верхней панели: за неё панель тащат/отрывают (как за таб окна).
+static int ed_panel_head_at(float px, float py, int *which) {
+    int i = ed_panel_top(px, py);
+    if (i < 0) return 0;
+    float x, y, w, h;
+    ed_rect(g_edPanels[i], &x, &y, &w, &h);
+    if (py > y + (float)PAL_TITLE) return 0;
+    if (which) *which = i;
+    return 1;
+}
+// Кнопка «в док» у ОТОРВАННОЙ панели — в правом конце её заголовка.
+static void ed_float_chip(int i, float *cx, float *cy, float *cw, float *ch) {
+    float x, y, w, h;
+    ed_rect(g_edPanels[i], &x, &y, &w, &h);
+    (void)h;
+    *cw = 34.0f;
+    *ch = 15.0f;
+    *cx = x + w - PAL_PAD - *cw;
+    *cy = y + 4.0f;
+}
+// Поднять панель наверх: и в порядке хита/отрисовки, и в z дерева хрома (его
+// рисует общий рантайм — значит порядок корней = порядок картинки).
+static void ed_panel_raise(int i) {
+    int k = 0;
+    while (k < 3 && g_edOrder[k] != i) k++;
+    if (k >= 2) return; // уже верхняя
+    for (; k < 2; k++) g_edOrder[k] = g_edOrder[k + 1];
+    g_edOrder[2] = i;
+    widget_move_before(&g_edWt, g_edPanels[i], 0, 0); // в конец корней = верх
+}
+// Вернуть панель в свой док (снять «двинул юзер»).
+static void ed_panel_dock(int i) {
+    int id = g_edPanels[i];
+    if (id > 0 && id <= UI_MAX_WIDGETS) g_edMoved[id - 1] = 0;
+    g_edGrab = -1;
+    ed_chrome_sync();
+    edit_push();
+}
+
 // §14 F5h2: панели хрома (палитра/дерево/инспектор) лежат ПОВЕРХ холста, значит
 // клик по САМОЙ панели (полоса заголовка, пустое место под строками) не должен ни
 // выбирать виджет под ней, ни ронять выбор. Тестер: клик по полосе «INSPECTOR»
@@ -1255,6 +1351,24 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind == UI_EV_MOVE) {
+        if (g_edGrab >= 0 && g_mouseDown) { // F5j: тащим ПАНЕЛЬ за заголовок
+            UiWidget *p = widget_get(&g_edWt, g_edPanels[g_edGrab]);
+            if (p) {
+                float nx = e->x - g_edGrabDX, ny = e->y - g_edGrabDY;
+                if (nx > (float)g_WW - 60.0f) nx = (float)g_WW - 60.0f;
+                if (nx < 60.0f - p->rect.w) nx = 60.0f - p->rect.w;
+                if (ny < (float)ED_TOP_CHROME) ny = (float)ED_TOP_CHROME;
+                if (ny > (float)g_WH - 30.0f) ny = (float)g_WH - 30.0f;
+                if (nx != p->rect.x || ny != p->rect.y) {
+                    p->rect.anchors = UI_A_LEFT | UI_A_TOP;
+                    p->rect.x = nx;
+                    p->rect.y = ny;
+                    g_edMoved[g_edPanels[g_edGrab] - 1] = 1; // оторвана от дока
+                    edit_push(); // панель тащат редко: полный кадр честнее полос
+                }
+            }
+            return 1;
+        }
         if (g_treeDrag) { // F5h: тянем строку — цель/индикатор броска под курсором
             g_treeDragX = e->x;
             g_treeDragY = e->y;
@@ -1308,6 +1422,23 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     if (e->kind == UI_EV_UP) {
+        if (g_edGrab >= 0) { // F5j: бросили панель — близко к дому = назад в док
+            int i = g_edGrab;
+            g_edGrab = -1;
+            {
+                float hx, hy, hw, hh, x, y, w, h;
+                ed_panel_home(i, &hx, &hy, &hw, &hh);
+                ed_rect(g_edPanels[i], &x, &y, &w, &h);
+                float mx = x + w * 0.5f, my = y + (float)PAL_TITLE * 0.5f;
+                if (mx > hx - 40.0f && mx < hx + hw + 40.0f && my > hy - 40.0f &&
+                    my < hy + hh + 40.0f) {
+                    ed_panel_dock(i); // бросили на своё док-место
+                    return 1;
+                }
+            }
+            edit_push();
+            return 1;
+        }
         if (g_treeDrag) { // F5h: БРОСОК ветки — reparent/порядок одним действием
             int drag = g_treeDrag, tgt = g_treeDropId, mode = g_treeDropMode;
             g_treeDrag = 0;
@@ -1368,8 +1499,30 @@ static int wt_event(const UiEvent *e) {
         }
         return 0;
     }
+    { // F5j: заголовок панели = таск/отрыв; у оторванной — кнопка «в док»
+        int pw = -1;
+        if (ed_panel_head_at(e->x, e->y, &pw)) {
+            ed_panel_raise(pw); // взялся за неё — она наверх (как окно в WM)
+            if (ed_panel_float(pw)) {
+                float cx, cy, cw, ch;
+                ed_float_chip(pw, &cx, &cy, &cw, &ch);
+                if (e->x >= cx && e->x < cx + cw && e->y >= cy && e->y < cy + ch) {
+                    ed_panel_dock(pw); // «dock»: назад в док
+                    return 1;
+                }
+            }
+            float px, py, pwd, phd;
+            ed_rect(g_edPanels[pw], &px, &py, &pwd, &phd);
+            g_edGrab = pw;
+            g_edGrabDX = e->x - px;
+            g_edGrabDY = e->y - py;
+            edit_push(); // панель поднялась
+            return 1;
+        }
+    }
+    int topP = ed_panel_top(e->x, e->y); // F5j: клик берёт ВЕРХНЯЯ панель
     int pi = pal_hit(e->x, e->y);
-    if (pi >= 0) { // палитра поверх всего
+    if (pi >= 0 && topP == 0) { // палитра
         if (PAL_TYPE[pi] >= 0) { // тип: Panel=0 тоже валиден!
             wt_spawn(PAL_TYPE[pi]);
             wt_persist(); // коммит: новый виджет
@@ -1380,23 +1533,23 @@ static int wt_event(const UiEvent *e) {
         return 1;
     }
     tree_build();
-    int pth = tree_path_hit_at(e->x, e->y);
+    int pth = topP == 1 ? tree_path_hit_at(e->x, e->y) : -1;
     if (pth >= 0) { // F5d: клик по крошке = выбрать ПРЕДКА (Scene = снять выбор)
         g_wtSel = pth;
         return 1;
     }
-    int ti = tree_hit(e->x, e->y);
+    int ti = topP == 1 ? tree_hit(e->x, e->y) : 0;
     if (ti) { // F3: выбор виджета из дерева
         g_wtSel = ti;
         g_treePress = ti; // F5h: если мышь поедет — начнётся драг ветки
         g_treePressY = e->y;
         return 1;
     }
-    if (ins_head_hit(e->x, e->y)) { // F5a: имя выбранного = поле правки текста
+    if (topP == 2 && ins_head_hit(e->x, e->y)) { // F5a: имя выбранного = поле текста
         name_edit_begin();
         return 1;
     }
-    int ii = ins_hit(e->x, e->y);
+    int ii = topP == 2 ? ins_hit(e->x, e->y) : -1;
     if (ii >= 0) { // F3b: инспектор
         if (ii == IF_UP || ii == IF_DOWN) {
             if (widget_layer(g_act, g_wtSel, ii == IF_UP ? 1 : -1)) {
@@ -1417,12 +1570,12 @@ static int wt_event(const UiEvent *e) {
         }
         return 1;
     }
+    if (ed_chrome_covers(e->x, e->y)) return 1; // панель РИСУЕТСЯ выше всего: клик её
     int hb = wt_handle_hit(e->x, e->y);
     if (hb > 0 && g_wtSel) { // ручки выбранного — ресайз
         wt_drag_begin(g_wtSel, hb, e->x, e->y);
         return 1;
     }
-    if (ed_chrome_covers(e->x, e->y)) return 1; // панель поверх холста: клик её
     // F5d: Ctrl+клик — выбрать СЛЕДУЮЩЕГО НИЖЕ в стопке (Figma deep select):
     // иначе верхний виджет «загораживает» нижнего и его не достать мышью.
     int deep = (e->mods & GLFW_MOD_CONTROL) != 0;
@@ -1476,12 +1629,16 @@ static int build_shapes(RcVecShape *shapes) {
     (void)panelsDirty;
     ed_chrome_sync(); // §14 F3c: раскладка панелей хрома (док мог поменяться)
     wt_draw_all(shapes, &n); // документ — тем же рантаймом, что и игра
-    chrome_draw(shapes, &n); // хром редактора — это тоже виджеты
-    chrome_heads_draw(shapes, &n); // F5c: полосы заголовков панелей
-    tree_draw(shapes, &n);   // F3: дерево (под палитрой)
+    // F5j: рамка/ручки активного — над документом, но ПОД панелями: панель это
+    // окно, она перекрывает и холст, и рамку (что видно, то и кликается).
+    wt_draw_sel(shapes, &n);
+    // F5j: ПАНЕЛИ — окна поверх всего. Порядок внутри: фон панели -> полосы
+    // заголовков (и рамка/кнопка оторванной) -> содержимое панели (ряды).
+    chrome_draw(shapes, &n);
+    chrome_heads_draw(shapes, &n);
+    tree_draw(shapes, &n);   // F3: дерево
     ins_draw(shapes, &n);    // F3b: инспектор (справа)
     pal_draw(shapes, &n);
-    wt_draw_sel(shapes, &n); // рамка/ручки активного — поверх всего
     return n;
 }
 
@@ -1638,6 +1795,11 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     // Esc выходил из программы и т.п.). Поле забирает клавишу целиком.
     if (g_nameEdit && name_edit_key(key, mods)) return;
     if (key == GLFW_KEY_ESCAPE) {
+        if (g_edGrab >= 0) { // F5j: Esc = бросить панель там, где она есть
+            g_edGrab = -1;
+            edit_push();
+            return;
+        }
         if (g_treeDrag || g_treePress) { // F5h: Esc = отмена броска ветки
             g_treeDrag = 0;
             g_treePress = 0;
@@ -3035,6 +3197,168 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // §14 F5j: ПЛАВАЮЩИЕ ПАНЕЛИ. Тестер: «хочу выдвинуть панель поверх всего».
+        // Панель тащат за полосу ЗАГОЛОВКА — она отрывается от дока, уходит наверх
+        // и живёт, где её положили; «dock» в её заголовке возвращает назад.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            for (int i = 0; i < 3; i++) g_edOrder[i] = i;
+            memset(g_edMoved, 0, sizeof g_edMoved);
+            ed_chrome_init(); // вернуть хром на док-места после прошлых проб
+            ed_chrome_sync();
+            int ca = wt_spawn(UI_W_PANEL);
+            g_wtSel = ca;
+            float hx, hy, hw, hh;
+            ed_panel_home(0, &hx, &hy, &hw, &hh);
+            UiEvent fe;
+            // (1) заголовок палитры = таск панели; панель уходит наверх
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_DOWN;
+            fe.x = hx + 40;
+            fe.y = hy + 4;
+            if (!wt_event(&fe) || g_edGrab != 0 || g_wtSel != ca) {
+                printf("SELF FAIL: float-grab grab=%d sel=%d\n", g_edGrab, g_wtSel);
+                bad = 1;
+            }
+            if (g_edOrder[2] != 0 || ed_panel_top(hx + 40, hy + 4) != 0) {
+                printf("SELF FAIL: float-raise order=%d top=%d\n", g_edOrder[2],
+                       ed_panel_top(hx + 40, hy + 4));
+                bad = 1;
+            }
+            {
+                const UiWidget *wp = widget_cget(&g_edWt, g_edPal);
+                const UiWidget *wt2 = widget_cget(&g_edWt, g_edTree);
+                const UiWidget *wi = widget_cget(&g_edWt, g_edIns);
+                if (!wp || !wt2 || !wi || !(wp->z > wt2->z && wp->z > wi->z)) {
+                    printf("SELF FAIL: float-z pal=%d tree=%d ins=%d\n", wp ? wp->z : -1,
+                           wt2 ? wt2->z : -1, wi ? wi->z : -1);
+                    bad = 1;
+                }
+            }
+            // (2) тащим вниз-вправо: панель поехала и стала «оторванной»
+            g_mouseDown = 1;
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_MOVE;
+            fe.x = hx + 140;
+            fe.y = hy + 200;
+            wt_event(&fe);
+            g_mouseDown = 0;
+            float fx, fy, fw, fh;
+            ed_rect(g_edPal, &fx, &fy, &fw, &fh);
+            if (!ed_panel_float(0) || fx != hx + 100 || fy != hy + 196) {
+                printf("SELF FAIL: float-move x=%.0f y=%.0f float=%d\n", (double)fx,
+                       (double)fy, ed_panel_float(0));
+                bad = 1;
+            }
+            // (3) раскладка доков её больше НЕ возвращает
+            ed_chrome_sync();
+            ed_rect(g_edPal, &fx, &fy, &fw, &fh);
+            if (fx != hx + 100 || fy != hy + 196) {
+                printf("SELF FAIL: float-sync x=%.0f y=%.0f\n", (double)fx, (double)fy);
+                bad = 1;
+            }
+            // (4) клик по телу плавающей панели не снимает выбор
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_DOWN;
+            fe.x = fx + fw - 4;
+            fe.y = fy + fh - 4;
+            if (!wt_event(&fe) || g_wtSel != ca) {
+                printf("SELF FAIL: float-consume sel=%d\n", g_wtSel);
+                bad = 1;
+            }
+            // (5) кнопка «dock» возвращает панель в док
+            float cx, cy, cw, ch;
+            ed_float_chip(0, &cx, &cy, &cw, &ch);
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_DOWN;
+            fe.x = cx + cw / 2;
+            fe.y = cy + ch / 2;
+            if (!wt_event(&fe) || ed_panel_float(0)) {
+                printf("SELF FAIL: float-chip float=%d\n", ed_panel_float(0));
+                bad = 1;
+            }
+            ed_rect(g_edPal, &fx, &fy, &fw, &fh);
+            if (fx != hx || fy != hy) {
+                printf("SELF FAIL: float-chip-home x=%.0f y=%.0f\n", (double)fx,
+                       (double)fy);
+                bad = 1;
+            }
+            // (6) бросок в СВОЁ док-место (док-зона) тоже возвращает панель
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_DOWN;
+            fe.x = hx + 40;
+            fe.y = hy + 4;
+            wt_event(&fe);
+            g_mouseDown = 1;
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_MOVE;
+            fe.x = hx + 300;
+            fe.y = hy + 240;
+            wt_event(&fe); // утащили далеко -> оторвана
+            if (!ed_panel_float(0)) {
+                printf("SELF FAIL: float-away float=%d\n", ed_panel_float(0));
+                bad = 1;
+            }
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_MOVE;
+            fe.x = hx + 40;
+            fe.y = hy + 4;
+            wt_event(&fe); // притащили домой
+            g_mouseDown = 0;
+            memset(&fe, 0, sizeof fe);
+            fe.kind = UI_EV_UP;
+            fe.x = hx + 40;
+            fe.y = hy + 4;
+            wt_event(&fe);
+            if (ed_panel_float(0)) {
+                printf("SELF FAIL: float-dock-zone float=%d\n", ed_panel_float(0));
+                bad = 1;
+            }
+            ed_rect(g_edPal, &fx, &fy, &fw, &fh);
+            if (fx != hx || fy != hy) {
+                printf("SELF FAIL: float-dock-home x=%.0f y=%.0f\n", (double)fx,
+                       (double)fy);
+                bad = 1;
+            }
+            // (7) панель поверх ДРУГОЙ панели: клик забирает верхняя (палитра над
+            // деревом: жмём по ряду палитры там, где под ним строка дерева).
+            float trx, try_, trw, trh;
+            tree_build();
+            tree_rect(0, &trx, &try_, &trw, &trh);
+            UiWidget *pp = widget_get(&g_edWt, g_edPal);
+            if (pp) {
+                pp->rect.anchors = UI_A_LEFT | UI_A_TOP;
+                pp->rect.x = trx - PAL_PAD;
+                pp->rect.y = try_ - (float)(PAL_PAD + PAL_TITLE);
+                g_edMoved[g_edPal - 1] = 1; // оторвана: док не вернёт
+            }
+            ed_panel_raise(0); // и она верхняя
+            float qx = trx + 20, qy = try_ + 6;
+            if (ed_panel_top(qx, qy) != 0) {
+                printf("SELF FAIL: float-top top=%d want 0\n", ed_panel_top(qx, qy));
+                bad = 1;
+            }
+            {
+                int before = g_wt.count;
+                memset(&fe, 0, sizeof fe);
+                fe.kind = UI_EV_DOWN;
+                fe.x = qx;
+                fe.y = qy;
+                wt_event(&fe);
+                if (g_wt.count != before + 1) { // спавн из палитры, а не выбор дерева
+                    printf("SELF FAIL: float-top-hit cnt=%d want %d sel=%d\n", g_wt.count,
+                           before + 1, g_wtSel);
+                    bad = 1;
+                }
+            }
+            ed_chrome_init();
+            ed_chrome_sync();
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -3267,6 +3591,9 @@ int main(int argc, char **argv) {
     //   UI_EDIT_TDROP=<s>:<t>:<m>  — применить бросок (строки дерева, m 0/1/2).
     // Выполняем на 3-м кадре (УЖЕ после ресайза окна — координаты настоящие).
     const char *clEnv = getenv("UI_EDIT_CLICK"); // x:y — клик по коду события
+    const char *drEnv = getenv("UI_EDIT_DRAG"); // x1:y1:x2:y2 — синтетический драг
+    const char *rcEnv = getenv("UI_EDIT_RECTS"); // 1 = напечатать геометрию панелей
+    const char *cl2Env = getenv("UI_EDIT_CLICK2"); // x:y — второй шаг (кадр 4)
     const char *tdEnv = getenv("UI_EDIT_TDRAG");
     const char *tdpEnv = getenv("UI_EDIT_TDROP");
     int tdcnt = 0;
@@ -3318,6 +3645,19 @@ int main(int argc, char **argv) {
             }
         }
         tdcnt++; // кадр: синтетика F5h ждёт ресайза окна (координаты настоящие)
+        if (rcEnv && rcEnv[0] == '1' && tdcnt == 3) { // F5j: где стоят панели
+            for (int i = 0; i < 3; i++) {
+                float x, y, w, h, ix, iy, iw, ih;
+                ed_panel_home(i, &x, &y, &w, &h);
+                ed_rect(g_edPanels[i], &ix, &iy, &iw, &ih);
+                printf("ui_edit: panel %d id=%d home=%.0f,%.0f %.0fx%.0f now=%.0f,%.0f "
+                       "%.0fx%.0f float=%d\n",
+                       i, g_edPanels[i], (double)x, (double)y, (double)w, (double)h,
+                       (double)ix, (double)iy, (double)iw, (double)ih, ed_panel_float(i));
+            }
+            printf("ui_edit: vp=%d,%d %dx%d win=%dx%d\n", g_vpx, g_vpy, g_vpw, g_vph, g_WW,
+                   g_WH);
+        }
         if (clEnv && clEnv[0] >= '0' && tdcnt == 3) { // F5h2: клик по коду события
             int cx = -1, cy = -1;
             if (sscanf(clEnv, "%d:%d", &cx, &cy) == 2) {
@@ -3333,6 +3673,51 @@ int main(int argc, char **argv) {
                 ce.y = (float)cy;
                 route_event(&ce);
                 printf("ui_edit: click %d,%d -> sel=%d\n", cx, cy, g_wtSel);
+            }
+        }
+        if (drEnv && drEnv[0] >= '0' && tdcnt == 3) { // F5j: драг (панель/виджет)
+            int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+            if (sscanf(drEnv, "%d:%d:%d:%d", &x1, &y1, &x2, &y2) == 4) {
+                UiEvent de;
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_DOWN;
+                de.x = (float)x1;
+                de.y = (float)y1;
+                g_mouseDown = 1;
+                route_event(&de);
+                for (int s = 1; s <= 8; s++) { // движения долями — как живая мышь
+                    memset(&de, 0, sizeof de);
+                    de.kind = UI_EV_MOVE;
+                    de.x = (float)(x1 + (x2 - x1) * s / 8);
+                    de.y = (float)(y1 + (y2 - y1) * s / 8);
+                    route_event(&de);
+                }
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_UP;
+                de.x = (float)x2;
+                de.y = (float)y2;
+                g_mouseDown = 0;
+                route_event(&de);
+                printf("ui_edit: drag %d,%d -> %d,%d grab=%d float=%d\n", x1, y1, x2, y2,
+                       g_edGrab, ed_panel_float(0) || ed_panel_float(1) || ed_panel_float(2));
+            }
+        }
+        if (cl2Env && cl2Env[0] >= '0' && tdcnt == 4) { // F5j: второй шаг сценария
+            int cx = -1, cy = -1;
+            if (sscanf(cl2Env, "%d:%d", &cx, &cy) == 2) {
+                UiEvent ce;
+                memset(&ce, 0, sizeof ce);
+                ce.kind = UI_EV_DOWN;
+                ce.x = (float)cx;
+                ce.y = (float)cy;
+                route_event(&ce);
+                memset(&ce, 0, sizeof ce);
+                ce.kind = UI_EV_UP;
+                ce.x = (float)cx;
+                ce.y = (float)cy;
+                route_event(&ce);
+                printf("ui_edit: click2 %d,%d -> sel=%d float=%d\n", cx, cy, g_wtSel,
+                       ed_panel_float(0) || ed_panel_float(1) || ed_panel_float(2));
             }
         }
         if ((tdEnv || tdpEnv) && tdcnt >= 3) {
@@ -3397,15 +3782,28 @@ int main(int argc, char **argv) {
                 // §14 F3c: хром редактора = виджеты: заголовки — их имена/роль.
                 float px, py, pw, ph;
                 ed_rect(g_edPal, &px, &py, &pw, &ph);
-                ui_text_quad(text, px + PAL_PAD, py + 4, "PALETTE", hcol);
+                if (ed_text_vis(0, px + PAL_PAD, py + 4))
+                    ui_text_quad(text, px + PAL_PAD, py + 4, "PALETTE", hcol);
                 ed_rect(g_edTree, &px, &py, &pw, &ph);
-                ui_text_quad(text, px + PAL_PAD, py + 4,
-                             g_editSelf ? "EDITOR UI (F7)" : "WIDGETS", hcol);
+                if (ed_text_vis(1, px + PAL_PAD, py + 4))
+                    ui_text_quad(text, px + PAL_PAD, py + 4,
+                                 g_editSelf ? "EDITOR UI (F7)" : "WIDGETS", hcol);
                 ed_rect(g_edIns, &px, &py, &pw, &ph);
-                ui_text_quad(text, px + PAL_PAD, py + 4, "INSPECTOR", hcol);
+                if (ed_text_vis(2, px + PAL_PAD, py + 4))
+                    ui_text_quad(text, px + PAL_PAD, py + 4, "INSPECTOR", hcol);
+                for (int k = 0; k < 3; k++) { // F5j: у оторванной панели кнопка «dock»
+                    int i = g_edOrder[k];
+                    if (!ed_panel_float(i)) continue;
+                    float cx, cy, cw, ch;
+                    ed_float_chip(i, &cx, &cy, &cw, &ch);
+                    (void)ch;
+                    if (ed_text_vis(i, cx + 5, cy))
+                        ui_text_quad(text, cx + 5, cy, "dock", hcol);
+                }
                 // Пустое поле = НЕ «сломалось»: пишем, что делать (тестер:
                 // «поля схлопнулись и не возвращаются» — на деле выбор снят).
-                if (!g_wtSel) {
+                if (!g_wtSel &&
+                    ed_text_vis(2, px + PAL_PAD, py + PAL_PAD + PAL_TITLE + 2)) {
                     static const float dcol[4] = {0.45f, 0.47f, 0.53f, 1.0f};
                     ui_text_quad(text, px + PAL_PAD, py + PAL_PAD + PAL_TITLE + 2,
                                  "no selection", dcol);
@@ -3418,18 +3816,21 @@ int main(int argc, char **argv) {
                 if (!w || w->type == UI_W_PANEL) continue;
                 float wx, wy, ww, hh;
                 widget_rect_px(w, g_WW, g_WH, &wx, &wy, &ww, &hh);
-                ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
+                if (ed_text_vis(-1, wx + 6, wy + (hh - 16) / 2))
+                    ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
             }
             for (int i = 0; i < PAL_N; i++) {
                 float px, py, pw, ph;
                 pal_rect(i, &px, &py, &pw, &ph);
-                ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
+                if (ed_text_vis(0, px + 6, py + 5))
+                    ui_text_quad(text, px + 6, py + 5, PAL_LABEL[i], tcol);
             }
             // F3: подписи дерева виджетов (только видимые строки).
             tree_build();
             if (g_treeDrag) { // F5h: подпись призрака (что тащим)
                 const UiWidget *dw = widget_cget(g_act, g_treeDrag);
-                if (dw) ui_text_quad(text, g_treeDragX + 16, g_treeDragY + 4, dw->name, tcol);
+                if (dw && ed_text_vis(-1, g_treeDragX + 16, g_treeDragY + 4))
+                    ui_text_quad(text, g_treeDragX + 16, g_treeDragY + 4, dw->name, tcol);
             }
             { // F5d: крошки предков (клик по сегменту = выбрать предка)
                 tree_path_layout();
@@ -3437,15 +3838,18 @@ int main(int argc, char **argv) {
                 tree_path_rect(&px, &py, &pw, &ph);
                 (void)pw;
                 (void)ph;
-                if (g_pathFrom >= 2) ui_text_quad(text, px, py + 1, "...", hcol);
-                for (int i = g_pathFrom; i < g_pathN; i++) {
-                    char b[UI_WIDGET_NAME];
-                    const char *s = tree_path_label(i, b);
-                    if (i > g_pathFrom)
-                        ui_text_quad(text, g_pathX[i] - ui_text_width(text, "/"), py + 1,
-                                     "/", hcol);
-                    ui_text_quad(text, g_pathX[i], py + 1, s,
-                                 i == g_pathN - 1 ? tcol : hcol);
+                int cv = ed_text_vis(1, px, py + 1); // F5j: крошки под панелью = невидимы
+                if (cv) {
+                    if (g_pathFrom >= 2) ui_text_quad(text, px, py + 1, "...", hcol);
+                    for (int i = g_pathFrom; i < g_pathN; i++) {
+                        char b[UI_WIDGET_NAME];
+                        const char *s = tree_path_label(i, b);
+                        if (i > g_pathFrom)
+                            ui_text_quad(text, g_pathX[i] - ui_text_width(text, "/"), py + 1,
+                                         "/", hcol);
+                        ui_text_quad(text, g_pathX[i], py + 1, s,
+                                     i == g_pathN - 1 ? tcol : hcol);
+                    }
                 }
             }
             {
@@ -3458,6 +3862,7 @@ int main(int argc, char **argv) {
                     (void)tw;
                     (void)th;
                     float nx = tx + 16 + (float)(g_treeDepth[i] * 10);
+                    if (!ed_text_vis(1, nx, ty + 3)) continue; // F5j: под панелью
                     ui_text_quad(text, nx, ty + 3, wd->name, tcol);
                     // F5d: ТИП рядом с именем (как Unity UI Builder: видно, что за
                     // элемент, не открывая инспектор). Серым — имя остаётся главным.
@@ -3474,9 +3879,11 @@ int main(int argc, char **argv) {
                     ins_rect(-1, &hx, &hy, &hw, &hh);
                     (void)hh;
                     // F5a: правим текст — рисуем БУФЕР (а не имя модели).
-                    ui_text_quad(text, hx + 6, hy + 2,
-                                 g_nameEdit ? g_nameBuf : sw->name, tcol);
-                    if (!g_nameEdit) { // F5d: ТИП справа — видно, что за элемент
+                    int iv = ed_text_vis(2, hx + 6, hy + 2); // F5j: под панелью невидимо
+                    if (iv)
+                        ui_text_quad(text, hx + 6, hy + 2,
+                                     g_nameEdit ? g_nameBuf : sw->name, tcol);
+                    if (!g_nameEdit && iv) { // F5d: ТИП справа — видно, что за элемент
                         const char *tn =
                             (sw->type >= 0 && sw->type < 3) ? PAL_LABEL[sw->type] : "?";
                         ui_text_quad(text, hx + hw - 6 - ui_text_width(text, tn), hy + 2, tn,
@@ -3485,6 +3892,7 @@ int main(int argc, char **argv) {
                     for (int i = 0; i < IF_N; i++) {
                         float x, y, ww, hh2;
                         ins_rect(i, &x, &y, &ww, &hh2);
+                        if (!ed_text_vis(2, x + 6, y + 3)) continue; // F5j: под панелью
                         ui_text_quad(text, x + 6, y + 3, INS_LABEL[i], tcol);
                         char vb[32];
                         vb[0] = 0;
@@ -3510,8 +3918,9 @@ int main(int argc, char **argv) {
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
                          "frontedit: click=select | Ctrl+click=under | drag=move |"
-                         " edges=resize | tree-row drag=reparent/order | F2=rename |"
-                         " Del | Ctrl+Z/Y undo | F7 self | Esc",
+                         " edges=resize | tree-row drag=reparent/order | panel head"
+                         " drag=float | dock chip=back | F2=rename | Del | Ctrl+Z/Y undo"
+                         " | F7 self | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
                 char hud[64];
