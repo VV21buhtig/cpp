@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> // strcasecmp (ручки теста: имя ленты)
 #include <math.h>
 #include <unistd.h> // F5h: access() — герметичность selftest (бэкап раскладки)
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
@@ -126,7 +127,20 @@ static int doc_live(void);
 static void doc_px(const UiWidget *w, float *x, float *y, float *ww, float *hh);
 static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, float h,
                          const float rgba[4], float round);
-static const char *g_edTabName[3] = {"PALETTE", "WIDGETS", "INSPECTOR"};
+// §14 F5l(2): ЛЕНТА. Полоса сверху несёт ЗАГОЛОВКИ лент (как Home/Model/UI/
+// Script/View в Roblox Studio и Word), а под ними — ГРУППА КНОПОК активной
+// ленты. Кнопки строятся из РЕЕСТРА ДЕЙСТВИЙ (одна таблица = лента + шпаргалка
+// клавиш + тултипы + горячие клавиши). В UE 4.22 это TCommands/FUICommandInfo:
+// объявил действие один раз — получил команду, клавишу и подсказку.
+#define ED_TABS_N 5
+#define ED_RIBBON_H 40      // высота полосы кнопок активной ленты
+#define ED_RIBBON_ITEM_H 20 // высота кнопки ленты
+#define ED_RIBBON_GAP 4
+#define ED_RIBBON_SEP 8 // зазор между группами
+static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "MODEL", "UI", "SCRIPT", "VIEW"};
+static int g_edTab = 0;      // активная лента (0..ED_TABS_N-1)
+static int g_edShowKeys = 0; // F5l(2): шпаргалка клавиш (F1) поверх всего
+static int g_rbHot = -1;     // id действия под курсором (тултип), -1 = нет
 static int ed_panel_open(int i) { return i >= 0 && i < 3 && g_edOpen[i]; }
 // §14 F5l(5): ЖИВАЯ панель = открыта вкладкой И не вырождена. Закрытая получает
 // rect 0x0, и её содержимое ОБЯЗАНО молчать: ряды считают координаты от панели,
@@ -147,10 +161,13 @@ static int ed_live(int i) {
 // исключение: она окно и плавает поверх всего, пока её не вернут в док.
 #define ED_DOCK_W (TREE_W + 2 * PAL_PAD) // ширина полосы дока (панель + отступы)
 static int g_dockL = 0, g_dockR = 0;     // занятые полосы доков в этом кадре
+// §14 F5l(2): верх инструментов = хром + полоса заголовков лент + полоса кнопок
+// активной ленты. Доки и вьюпорт начинаются ПОД ней (одна точка правды).
+static int ed_top(void) { return ED_TOP_CHROME + ED_TABS_H + ED_RIBBON_H + PAL_PAD; }
 static void ed_viewport_compute(void) {
     g_dockL = (g_edOpen[0] || g_edOpen[1]) ? ED_DOCK_W + PAL_PAD : 0;
     g_dockR = g_edOpen[2] ? ED_DOCK_W + PAL_PAD : 0;
-    int top = ED_TOP_CHROME + ED_TABS_H + PAL_PAD; // под полосой вкладок
+    int top = ed_top(); // под полосой лент
     g_vpx = g_dockL;
     g_vpy = top;
     g_vpw = g_WW - g_dockL - g_dockR;
@@ -180,7 +197,7 @@ static void tab_rect(int i, float *x, float *y, float *w, float *h) {
     *h = (float)(ED_TABS_H - 6);
 }
 static int tabs_hit(float px, float py, int *which) { // вкладка под курсором
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < ED_TABS_N; i++) {
         float x, y, w, h;
         tab_rect(i, &x, &y, &w, &h);
         if (px >= x && px < x + w && py >= y && py < y + h) {
@@ -791,7 +808,7 @@ static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
     float palW = (float)ED_DOCK_W;
     float palH = (float)(PAL_PAD * 2 + PAL_TITLE + PAL_N * (PAL_BH + PAL_GAP) - PAL_GAP);
     float x0 = (float)PAL_PAD;
-    float y0 = (float)(ED_TOP_CHROME + ED_TABS_H + PAL_PAD); // под полосой вкладок
+    float y0 = (float)ed_top(); // под полосой лент (F5l(2): одна точка правды)
     if (i == 0) { // палитра: верх левого дока
         *ox = x0;
         *oy = y0;
@@ -874,9 +891,10 @@ static void ed_panels_save(void) {
     FILE *f = fopen(path, "wb");
     if (!f) return;
     fprintf(f,
-            "{\n  \"_note\": \"ui_edit tools (#14 F5k): 1 = panel open. Editor "
-            "state, not a document.\",\n  \"edOpen\": [%d, %d, %d]\n}\n",
-            g_edOpen[0], g_edOpen[1], g_edOpen[2]);
+            "{\n  \"_note\": \"ui_edit tools (#14 F5k): 1 = panel open, "
+            "edTab = active ribbon. Editor state, not a document.\",\n  \"edOpen\": "
+            "[%d, %d, %d],\n  \"edTab\": %d\n}\n",
+            g_edOpen[0], g_edOpen[1], g_edOpen[2], g_edTab);
     fclose(f);
 }
 static void ed_panels_load(void) {
@@ -897,6 +915,14 @@ static void ed_panels_load(void) {
         g_edOpen[1] = b ? 1 : 0;
         g_edOpen[2] = c ? 1 : 0;
     }
+    { // F5l(2): активная лента — тоже состояние инструмента (переживает запуск)
+        const char *t = strstr(s, "\"edTab\"");
+        if (t) {
+            int tv = -1;
+            t = strchr(t, ':');
+            if (t && sscanf(t + 1, "%d", &tv) == 1 && tv >= 0 && tv < ED_TABS_N) g_edTab = tv;
+        }
+    }
 }
 // §14 F5k: вкладка = тумблер инструмента. Открываем В ДОК (как Word/Roblox:
 // панель возвращается на своё место), закрываем — место перетекает соседям.
@@ -912,6 +938,406 @@ static void tabs_toggle(int i) {
     ed_chrome_sync();
     ed_panels_save();
     edit_push();
+}
+// ============================================================================
+// §14 F5l(2): РЕЕСТР ДЕЙСТВИЙ + ЛЕНТА + ШПАРГАЛКА.
+// ОДНА таблица на все виды одного действия: кнопка ленты, клавиша, тултип,
+// строка шпаргалки. Как TCommands/FUICommandInfo во UE 4.22 (объявил действие
+// один раз — оно само попадает в меню/тулбар и в список горячих клавиш) и
+// FInputBindingManager. Гейт when = canExecute: выключенное действие рисуется
+// приглушённо и НЕ срабатывает — так честно помечено то, что ещё НЕ сделано
+// (никаких «работающих» кнопок-пустышек). key2 — второй аккорд той же команды
+// (Ctrl+Shift+Z для Redo), поэтому клавиша и команда не разъезжаются.
+// ============================================================================
+enum {
+    ED_WHEN_ALWAYS = 0,
+    ED_WHEN_SEL = 1,
+    ED_WHEN_UNDO = 2,
+    ED_WHEN_REDO = 3,
+    ED_WHEN_NEVER = 4
+};
+enum { ED_K_CMD = 0, ED_K_SPAWN = 1, ED_K_TOGGLE = 2 };
+enum {
+    ED_CMD_NONE = 0,
+    ED_CMD_RENAME = 1,
+    ED_CMD_DELETE = 2,
+    ED_CMD_UNDO = 3,
+    ED_CMD_REDO = 4,
+    ED_CMD_SELF = 5,
+    ED_CMD_KEYS = 6,
+    ED_CMD_SAVE = 7
+};
+typedef struct {
+    const char *id;    // машинный id (тесты/персист), уникален
+    const char *label; // человеческая метка (лента/шпаргалка/тултип)
+    const char *group; // группа на ленте (подложка + подпись)
+    unsigned char tab; // 0..ED_TABS_N-1
+    unsigned char when;
+    unsigned char kind;
+    short arg; // spawn-тип / индекс панели / ED_CMD_*
+    int key, mods, key2, mods2;
+} EdAction;
+#define ED_MOD_CTRL GLFW_MOD_CONTROL
+#define ED_MOD_CTRLSHIFT (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
+#define ED_MOD_MASK (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
+// Порядок строк = порядок кнопок на ленте (смена группы = новая подложка).
+static const EdAction ED_ACT[] = {
+    // HOME: правка выделения + история + файл
+    {"edit.rename", "Rename", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_CMD_RENAME,
+     GLFW_KEY_F2, 0, 0, 0},
+    {"edit.delete", "Delete", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_CMD_DELETE,
+     GLFW_KEY_DELETE, 0, 0, 0},
+    {"hist.undo", "Undo", "History", 0, ED_WHEN_UNDO, ED_K_CMD, ED_CMD_UNDO,
+     GLFW_KEY_Z, ED_MOD_CTRL, 0, 0},
+    {"hist.redo", "Redo", "History", 0, ED_WHEN_REDO, ED_K_CMD, ED_CMD_REDO,
+     GLFW_KEY_Y, ED_MOD_CTRL, GLFW_KEY_Z, ED_MOD_CTRLSHIFT},
+    {"file.save", "Save layout", "File", 0, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_SAVE, 0, 0, 0, 0},
+    // MODEL: инструменты сцены (ещё не сделаны — честно выключены)
+    {"model.move", "Move", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"model.rotate", "Rotate", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"model.scale", "Scale", "Transform", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"model.snap", "Snap", "Snap", 1, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    // UI: то, чем правим сам интерфейс (наша главная лента)
+    {"ui.spawn.panel", "Panel", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_PANEL, 0, 0, 0, 0},
+    {"ui.spawn.button", "Button", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_BUTTON, 0, 0, 0,
+     0},
+    {"ui.spawn.label", "Label", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, UI_W_LABEL, 0, 0, 0, 0},
+    {"ui.arrange.dup", "Duplicate", "Arrange", 2, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0,
+     0},
+    {"ui.arrange.wrap", "Wrap", "Arrange", 2, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    // SCRIPT: запуск/самоправка инструмента
+    {"script.run", "Run", "Script", 3, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"script.reload", "Reload", "Script", 3, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"tools.self", "Editor UI", "Tools", 3, ED_WHEN_ALWAYS, ED_K_CMD, ED_CMD_SELF, GLFW_KEY_F7,
+     0, 0, 0},
+    {"tools.keys", "Cheatsheet", "Tools", 3, ED_WHEN_ALWAYS, ED_K_CMD, ED_CMD_KEYS, GLFW_KEY_F1,
+     0, 0, 0},
+    // VIEW: галочки инструментов (View в Word / панели в Roblox Studio)
+    {"view.panel.palette", "Palette", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, GLFW_KEY_1,
+     ED_MOD_CTRL, 0, 0},
+    {"view.panel.tree", "Tree", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 1, GLFW_KEY_2,
+     ED_MOD_CTRL, 0, 0},
+    {"view.panel.inspector", "Inspector", "Panels", 4, ED_WHEN_ALWAYS, ED_K_TOGGLE, 2, GLFW_KEY_3,
+     ED_MOD_CTRL, 0, 0},
+    {"view.grid", "Grid", "Overlays", 4, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+    {"view.rulers", "Rulers", "Overlays", 4, ED_WHEN_NEVER, ED_K_CMD, ED_CMD_NONE, 0, 0, 0, 0},
+};
+#define ED_ACT_N ((int)(sizeof ED_ACT / sizeof ED_ACT[0]))
+
+static void wt_persist(void); // определены НИЖЕ по файлу
+static void undo_commit(const char *what);
+static int wt_undo_apply(int redo);
+static void name_edit_begin(void);
+static int wt_delete_sel(void);
+static void ed_self_toggle(int on);
+static void edit_push(void);
+// История документа: нужна гейту canExecute (есть ли что откатывать).
+static UiWidgetUndo g_undo;
+
+// Ширина строки — тот же advance, что у текста (иначе подпись и кнопка разъедутся).
+static float ed_txt_w(const char *s) {
+    return g_text ? ui_text_width(g_text, s) : (float)(8 * (int)strlen(s));
+}
+static int ed_act_find(const char *id) {
+    for (int i = 0; i < ED_ACT_N; i++)
+        if (strcmp(ED_ACT[i].id, id) == 0) return i;
+    return -1;
+}
+// canExecute: ОДНА точка правды «действие сейчас доступно».
+static int ed_act_enabled(int i) {
+    if (i < 0 || i >= ED_ACT_N) return 0;
+    switch (ED_ACT[i].when) {
+    case ED_WHEN_ALWAYS: return 1;
+    case ED_WHEN_SEL: return g_wtSel > 0 && widget_cget(g_act, g_wtSel) != 0;
+    case ED_WHEN_UNDO: return ui_wundo_depth(&g_undo) > 0;
+    case ED_WHEN_REDO: return ui_wundo_redo_depth(&g_undo) > 0;
+    default: return 0; // ED_WHEN_NEVER: ещё не реализовано
+    }
+}
+// Имя клавиши с модификатором: "Ctrl+Z", "Del", "F2".
+static const char *ed_key_name(int key, int mods, char *buf, int cap) {
+    char k[16];
+    if (key == 0) k[0] = 0;
+    else if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
+        k[0] = (char)('A' + (key - GLFW_KEY_A));
+        k[1] = 0;
+    } else if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9) {
+        k[0] = (char)('0' + (key - GLFW_KEY_0));
+        k[1] = 0;
+    } else if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F12)
+        snprintf(k, sizeof k, "F%d", key - GLFW_KEY_F1 + 1);
+    else if (key == GLFW_KEY_DELETE) snprintf(k, sizeof k, "Del");
+    else if (key == GLFW_KEY_BACKSPACE) snprintf(k, sizeof k, "Backspace");
+    else snprintf(k, sizeof k, "?");
+    int c = mods & GLFW_MOD_CONTROL, s = mods & GLFW_MOD_SHIFT;
+    if (c && s) snprintf(buf, cap, "Ctrl+Shift+%s", k);
+    else if (c) snprintf(buf, cap, "Ctrl+%s", k);
+    else if (s) snprintf(buf, cap, "Shift+%s", k);
+    else snprintf(buf, cap, "%s", k);
+    return buf;
+}
+// Все аккорды действия через " / " (пусто, если клавиш нет).
+static void ed_act_keys(int i, char *buf, int cap) {
+    const EdAction *a = &ED_ACT[i];
+    char b1[40], b2[40];
+    buf[0] = 0;
+    if (a->key) {
+        ed_key_name(a->key, a->mods, b1, sizeof b1);
+        snprintf(buf, cap, "%s", b1);
+    }
+    if (a->key2) {
+        ed_key_name(a->key2, a->mods2, b2, sizeof b2);
+        int used = (int)strlen(buf);
+        snprintf(buf + used, (size_t)(cap - used), "%s%s", a->key ? " / " : "", b2);
+    }
+}
+// Клавиша -> действие. Ctrl/Shift значимы: Ctrl+Z != Ctrl+Shift+Z.
+static int ed_act_by_key(int mods, int key) {
+    int m = mods & ED_MOD_MASK;
+    for (int i = 0; i < ED_ACT_N; i++) {
+        const EdAction *a = &ED_ACT[i];
+        if (a->key && a->key == key && (a->mods & ED_MOD_MASK) == m) return i;
+        if (a->key2 && a->key2 == key && (a->mods2 & ED_MOD_MASK) == m) return i;
+    }
+    return -1;
+}
+static int ed_cmd_run(int cmd) {
+    switch (cmd) {
+    case ED_CMD_RENAME: name_edit_begin(); return 1;
+    case ED_CMD_DELETE: return wt_delete_sel();
+    case ED_CMD_UNDO: return wt_undo_apply(0);
+    case ED_CMD_REDO: return wt_undo_apply(1);
+    case ED_CMD_SELF: ed_self_toggle(!g_editSelf); return 1;
+    case ED_CMD_KEYS:
+        g_edShowKeys = !g_edShowKeys;
+        edit_push();
+        return 1;
+    default: return 0; // не реализовано (гейт NEVER до нас не дойдёт)
+    }
+}
+// Выполнить действие. 0 = не сработало (выключено/отказалось) — вызывающий сам
+// решает, съесть клавишу или отдать дальше (undo/redo делят историю с доками).
+static int ed_act_run(int i) {
+    if (!ed_act_enabled(i)) return 0;
+    const EdAction *a = &ED_ACT[i];
+    if (a->kind == ED_K_SPAWN) {
+        int id = wt_spawn(a->arg);
+        if (!id) return 0;
+        wt_persist();
+        undo_commit("add");
+        edit_push();
+        return 1;
+    }
+    if (a->kind == ED_K_TOGGLE) {
+        tabs_toggle(a->arg);
+        return 1;
+    }
+    return ed_cmd_run(a->arg);
+}
+// --- геометрия ленты -------------------------------------------------------
+static void ed_ribbon_band(float *x, float *y, float *w, float *h) {
+    *x = 0.0f;
+    *y = (float)(ED_TOP_CHROME + ED_TABS_H);
+    *w = (float)g_WW;
+    *h = (float)ED_RIBBON_H;
+}
+static float ed_ribbon_item_w(const EdAction *a) {
+    float tw = ed_txt_w(a->label);
+    if (a->kind == ED_K_TOGGLE) return tw + 34.0f; // квадрат-галочка + поля
+    return tw + 22.0f;
+}
+#define ED_RB_MAX 64
+static int g_rbAct[ED_RB_MAX]; // слот -> индекс действия
+static int g_rbGrpSlot[ED_RB_MAX];
+static const char *g_rbGrp[ED_RB_MAX];
+static float g_rbX[ED_RB_MAX], g_rbW[ED_RB_MAX];
+static int g_rbN = 0, g_rbGroupN = 0;
+// Кнопки активной ленты. ОДНА функция на рисование/хит/текст/тултип — иначе
+// подпись и клик разъезжаются (как с крошками дерева).
+static void ed_ribbon_layout(void) {
+    g_rbN = 0;
+    g_rbGroupN = 0;
+    const char *grp = 0;
+    float x = (float)PAL_PAD;
+    for (int i = 0; i < ED_ACT_N && g_rbN < ED_RB_MAX; i++) {
+        if ((int)ED_ACT[i].tab != g_edTab) continue;
+        if (!grp || strcmp(grp, ED_ACT[i].group) != 0) {
+            if (grp) x += (float)ED_RIBBON_SEP; // зазор между группами
+            grp = ED_ACT[i].group;
+            g_rbGroupN++;
+        }
+        g_rbAct[g_rbN] = i;
+        g_rbGrpSlot[g_rbN] = g_rbGroupN - 1;
+        g_rbGrp[g_rbN] = ED_ACT[i].group;
+        g_rbX[g_rbN] = x;
+        g_rbW[g_rbN] = ed_ribbon_item_w(&ED_ACT[i]);
+        x += g_rbW[g_rbN] + (float)ED_RIBBON_GAP;
+        g_rbN++;
+    }
+}
+static void ed_ribbon_item_rect(int act, float *x, float *y, float *w, float *h) {
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    (void)bx;
+    (void)bw;
+    ed_ribbon_layout();
+    for (int s = 0; s < g_rbN; s++) {
+        if (g_rbAct[s] != act) continue;
+        *x = g_rbX[s];
+        *y = by + 4.0f;
+        *w = g_rbW[s];
+        *h = (float)ED_RIBBON_ITEM_H;
+        return;
+    }
+    *x = *y = *w = *h = 0;
+}
+// Подложка группы g — по границам её кнопок.
+static void ed_ribbon_group_rect(int g, float *x, float *y, float *w, float *h) {
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    (void)bx;
+    (void)bw;
+    ed_ribbon_layout();
+    float x0 = 0, x1 = 0;
+    int got = 0;
+    for (int s = 0; s < g_rbN; s++) {
+        if (g_rbGrpSlot[s] != g) continue;
+        if (!got) {
+            x0 = g_rbX[s] - 3.0f;
+            got = 1;
+        }
+        x1 = g_rbX[s] + g_rbW[s] + 3.0f;
+    }
+    *x = x0;
+    *y = by + 1.0f;
+    *w = x1 - x0;
+    *h = bh - 3.0f;
+}
+static int ed_ribbon_hit(float px, float py, int *slot) {
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    (void)bx;
+    (void)bw;
+    (void)bh;
+    ed_ribbon_layout();
+    for (int s = 0; s < g_rbN; s++) {
+        float x = g_rbX[s], y = by + 4.0f, w = g_rbW[s];
+        if (px >= x && px < x + w && py >= y && py < y + (float)ED_RIBBON_ITEM_H) {
+            if (slot) *slot = s;
+            return 1;
+        }
+    }
+    return 0;
+}
+// Текст тултипа: "Delete  (Del)" / "... [off]" у нереализованного.
+static void ed_ribbon_tip_text(int act, char *buf, int cap) {
+    char kb[48];
+    ed_act_keys(act, kb, sizeof kb);
+    const EdAction *a = &ED_ACT[act];
+    if (!ed_act_enabled(act)) snprintf(buf, cap, "%s [off]", a->label);
+    else if (kb[0]) snprintf(buf, cap, "%s  (%s)", a->label, kb);
+    else snprintf(buf, cap, "%s", a->label);
+}
+static void ed_ribbon_tip_rect(float *x, float *y, float *w, float *h) {
+    *x = *y = *w = *h = 0;
+    if (g_rbHot < 0) return;
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    (void)bx;
+    (void)bw;
+    ed_ribbon_layout();
+    int s = -1;
+    for (int k = 0; k < g_rbN; k++)
+        if (g_rbAct[k] == g_rbHot) s = k;
+    if (s < 0) return;
+    char tip[160];
+    ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
+    float tw = ed_txt_w(tip) + 14.0f;
+    *w = tw;
+    *h = 20.0f;
+    *x = g_rbX[s];
+    if (*x + tw > (float)g_WW) *x = (float)g_WW - tw;
+    if (*x < 0) *x = 0;
+    *y = by + bh + 2.0f;
+}
+// --- шпаргалка клавиш (как Keybind-оверлей: одна таблица — один список) -----
+#define ED_KEYS_W 380
+#define ED_KEYS_RH 14
+static void ed_keys_rect(float *x, float *y, float *w, float *h) {
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    (void)bx;
+    (void)bw;
+    *w = (float)ED_KEYS_W;
+    *h = 26.0f + (float)ED_ACT_N * (float)ED_KEYS_RH + 8.0f;
+    *x = (float)(g_vpx > 0 ? g_vpx : ED_DOCK_W + PAL_PAD) + 8.0f;
+    *y = by + bh + 6.0f;
+    if (*x + *w > (float)g_WW) *x = (float)g_WW - *w;
+    if (*x < 0) *x = 0;
+    if (*y + *h > (float)g_WH) *y = (float)g_WH - *h;
+    if (*y < 0) *y = 0;
+}
+static int ed_keys_hit(float px, float py) {
+    float x, y, w, h;
+    ed_keys_rect(&x, &y, &w, &h);
+    return px >= x && px < x + w && py >= y && py < y + h;
+}
+// §14 F5l(2): полоса кнопок АКТИВНОЙ ленты — группы на подложках с подписью.
+// Выключенное действие (гейт canExecute) приглушено, тумблер панели — с галочкой.
+static void ed_ribbon_draw(RcVecShape *sh, int *n) {
+    float bx, by, bw, bh;
+    ed_ribbon_band(&bx, &by, &bw, &bh);
+    static const float band[4] = {0.08f, 0.09f, 0.12f, 1.0f};
+    static const float grp[4] = {0.125f, 0.14f, 0.18f, 1.0f};
+    static const float btn[4] = {0.19f, 0.215f, 0.27f, 1.0f};
+    static const float hot[4] = {0.27f, 0.32f, 0.43f, 1.0f};
+    static const float dim[4] = {0.125f, 0.13f, 0.155f, 1.0f};
+    static const float ton[4] = {0.22f, 0.38f, 0.62f, 1.0f};
+    static const float mark[4] = {0.35f, 0.62f, 0.95f, 1.0f};
+    static const float edge[4] = {0.26f, 0.29f, 0.36f, 1.0f};
+    wt_emit(sh, n, bx, by, bw, bh, band, 0.0f);
+    wt_emit(sh, n, bx, by + bh - 1.0f, bw, 1.0f, edge, 0.0f);
+    ed_ribbon_layout();
+    for (int g = 0; g < g_rbGroupN; g++) {
+        float x, y, w, h;
+        ed_ribbon_group_rect(g, &x, &y, &w, &h);
+        if (w > 0) wt_emit(sh, n, x, y, w, h, grp, 4.0f);
+    }
+    for (int s = 0; s < g_rbN; s++) {
+        const EdAction *a = &ED_ACT[g_rbAct[s]];
+        float x = g_rbX[s], w = g_rbW[s], y = by + 4.0f, h = (float)ED_RIBBON_ITEM_H;
+        int en = ed_act_enabled(g_rbAct[s]);
+        int on = (a->kind == ED_K_TOGGLE && a->arg >= 0 && a->arg < 3) ? g_edOpen[a->arg] : 0;
+        const float *col = !en ? dim : (on ? ton : (g_rbHot == g_rbAct[s] ? hot : btn));
+        wt_emit(sh, n, x, y, w, h, col, 3.0f);
+        if (a->kind == ED_K_TOGGLE) { // квадрат-галочка инструмента
+            float cx = x + 7.0f, cy = y + (h - 9.0f) * 0.5f;
+            wt_emit(sh, n, cx, cy, 9.0f, 9.0f, btn, 1.0f);
+            if (on) wt_emit(sh, n, cx + 2.0f, cy + 2.0f, 5.0f, 5.0f, mark, 1.0f);
+        }
+    }
+}
+// Тултип и шпаргалка — ПОВЕРХ всего: окна панелей их не кроют (иначе подсказка
+// пропадала бы под доком, как текст под панелью в F5l(5)).
+static void ed_ribbon_top_draw(RcVecShape *sh, int *n) {
+    static const float tipbg[4] = {0.05f, 0.06f, 0.09f, 0.96f};
+    static const float tiped[4] = {0.35f, 0.5f, 0.75f, 1.0f};
+    static const float kbg[4] = {0.07f, 0.08f, 0.11f, 0.97f};
+    static const float ked[4] = {0.35f, 0.5f, 0.75f, 1.0f};
+    if (g_rbHot >= 0) {
+        float x, y, w, h;
+        ed_ribbon_tip_rect(&x, &y, &w, &h);
+        if (w > 0) {
+            wt_emit(sh, n, x, y, w, h, tipbg, 3.0f);
+            wt_emit(sh, n, x, y, w, 1.0f, tiped, 0.0f);
+        }
+    }
+    if (g_edShowKeys) {
+        float x, y, w, h;
+        ed_keys_rect(&x, &y, &w, &h);
+        wt_emit(sh, n, x, y, w, h, kbg, 5.0f);
+        wt_emit(sh, n, x, y, w, 1.0f, ked, 0.0f);
+    }
 }
 static float *ins_slot(UiWidget *w, int f) {
     switch (f) {
@@ -1307,7 +1733,6 @@ static void wt_persist(void) {
 // --- §14 F4: история документа (undo/redo) ---
 // Пишем ТОЛЬКО документ: хром редактора — вид инструмента (как и в layout.json),
 // его правка в историю документа не попадает. Коммит — на КОНЕЦ операции.
-static UiWidgetUndo g_undo;
 static void undo_commit(const char *what) {
     if (g_editSelf) return;
     ui_wundo_commit(&g_undo, &g_wt, what);
@@ -1705,11 +2130,11 @@ static void tabs_draw(RcVecShape *sh, int *n) {
     static const float mark[4] = {0.35f, 0.62f, 0.95f, 1.0f};
     wt_emit(sh, n, bx, by, bw, bh, bar, 0.0f);
     wt_emit(sh, n, bx, by + bh - 1.0f, bw, 1.0f, edge, 0.0f);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < ED_TABS_N; i++) {
         float x, y, w, h;
         tab_rect(i, &x, &y, &w, &h);
-        wt_emit(sh, n, x, y, w, h, g_edOpen[i] ? on : off, 4.0f);
-        if (g_edOpen[i]) wt_emit(sh, n, x + 2, y + h - 3, w - 4, 2.0f, mark, 1.0f);
+        wt_emit(sh, n, x, y, w, h, i == g_edTab ? on : off, 4.0f);
+        if (i == g_edTab) wt_emit(sh, n, x + 2, y + h - 3, w - 4, 2.0f, mark, 1.0f);
     }
 }
 
@@ -1724,6 +2149,12 @@ static int ed_chrome_covers(float px, float py) {
         tabs_rect(&bx, &by, &bw, &bh);
         if (px >= bx && px < bx + bw && py >= by && py < by + bh) return 1;
     }
+    { // F5l(2): полоса кнопок ленты — тоже хром
+        float bx, by, bw, bh;
+        ed_ribbon_band(&bx, &by, &bw, &bh);
+        if (px >= bx && px < bx + bw && py >= by && py < by + bh) return 1;
+    }
+    if (g_edShowKeys && ed_keys_hit(px, py)) return 1; // F5l(2): шпаргалка = хром
     int ids[3] = {g_edPal, g_edTree, g_edIns};
     for (int i = 0; i < 3; i++) {
         float x, y, w, h;
@@ -1843,6 +2274,15 @@ static int wt_event(const UiEvent *e) {
             g_palHot = h;
             return 1;
         }
+        { // F5l(2): кнопка ленты под курсором -> тултип (метка + клавиша)
+            int rs = -1;
+            int hot = ed_ribbon_hit(e->x, e->y, &rs) ? g_rbAct[rs] : -1;
+            if (hot != g_rbHot) {
+                g_rbHot = hot;
+                edit_push();
+                return 1;
+            }
+        }
         return 0;
     }
     if (e->kind == UI_EV_UP) {
@@ -1924,11 +2364,27 @@ static int wt_event(const UiEvent *e) {
         return 0;
     }
     int topP = ed_panel_top(e->x, e->y); // F5j: клик берёт ВЕРХНЯЯ панель
-    { // F5k: вкладки-инструменты (открыть/закрыть панель); верхняя панель их кроет
+    if (g_edShowKeys && ed_keys_hit(e->x, e->y)) { // F5l(2): шпаргалка поверх всего
+        g_edShowKeys = 0;
+        edit_push();
+        return 1;
+    }
+    { // F5l(2): ЗАГОЛОВКИ ЛЕНТ — переключение активной ленты (не тумблер панели)
         int tw = -1;
         if (topP < 0 && tabs_hit(e->x, e->y, &tw)) {
-            tabs_toggle(tw);
+            if (g_edTab != tw) {
+                g_edTab = tw;
+                ed_panels_save();
+                edit_push();
+            }
             return 1;
+        }
+    }
+    { // F5l(2): КНОПКА ЛЕНТЫ = действие из реестра (spawn/тумблер/команда)
+        int rs = -1;
+        if (topP < 0 && ed_ribbon_hit(e->x, e->y, &rs)) {
+            ed_act_run(g_rbAct[rs]);
+            return 1; // клик по ленте холст не трогает (как у панелей)
         }
     }
     { // F5j: заголовок панели = таск/отрыв; у оторванной — кнопка «в док»
@@ -2074,12 +2530,16 @@ static int build_shapes(RcVecShape *shapes) {
     // F5j: ПАНЕЛИ — окна поверх всего. Порядок внутри: полоса вкладок (она под
     // панелью, если панель на неё затащили) -> фон панели -> полосы заголовков
     // (и рамка/кнопка оторванной) -> содержимое панели (ряды).
-    tabs_draw(shapes, &n); // F5k: инструменты-вкладки
+    tabs_draw(shapes, &n); // F5k: заголовки лент (F5l(2))
+    ed_ribbon_draw(shapes, &n); // F5l(2): кнопки активной ленты (реестр действий)
     chrome_draw(shapes, &n);
     chrome_heads_draw(shapes, &n);
     tree_draw(shapes, &n);   // F3: дерево
     ins_draw(shapes, &n);    // F3b: инспектор (справа)
     pal_draw(shapes, &n);
+    // F5l(2): тултип и шпаргалка — ПОВЕРХ окон панелей (иначе подсказка тонула бы
+    // под доком, как текст под панелью в F5l(5)).
+    ed_ribbon_top_draw(shapes, &n);
     return n;
 }
 
@@ -2267,32 +2727,33 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
             edit_push();
             return;
         }
+        if (g_edShowKeys) { // F5l(2): Esc закрывает шпаргалку (как модальное окно)
+            g_edShowKeys = 0;
+            edit_push();
+            return;
+        }
         g_quit = 1;
         return;
     }
-    if (key == GLFW_KEY_F7) { // self-host: правим собственный UI редактора
-        ed_self_toggle(!g_editSelf);
-        return;
+    // §14 F5l(2): КЛАВИШИ — ИЗ РЕЕСТРА ДЕЙСТВИЙ. Одна таблица на ленту, шпаргалку
+    // и горячие клавиши (как FInputBindingManager во UE): второго списка, который
+    // мог разойтись с лентой, больше нет.
+    if (key == GLFW_KEY_BACKSPACE) { // алиас Del
+        int ai = ed_act_find("edit.delete");
+        if (ai >= 0) {
+            ed_act_run(ai);
+            return;
+        }
     }
-    // §14 F5k: Ctrl+1/2/3 — вкладки-инструменты (открыть/закрыть панель). Как
-    // полоса вкладок: инструмент есть — видно, нет — места не занимает.
-    if ((mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_1 && key <= GLFW_KEY_3) {
-        tabs_toggle(key - GLFW_KEY_1);
-        return;
-    }
-    if (key == GLFW_KEY_DELETE || key == GLFW_KEY_BACKSPACE) { // удалить выбранное
-        wt_delete_sel();
-        return;
-    }
-    if (key == GLFW_KEY_F2) { // переименовать выбранное (как UE/Unity)
-        name_edit_begin();
-        return;
-    }
-    // Ctrl+Z — откат, Ctrl+Y / Ctrl+Shift+Z — повтор. Если у виджетов истории нет,
-    // не «съедаем» клавишу: она уходит в доки (там своя история).
-    if ((mods & GLFW_MOD_CONTROL) && (key == GLFW_KEY_Z || key == GLFW_KEY_Y)) {
-        int redo = key == GLFW_KEY_Y || (mods & GLFW_MOD_SHIFT);
-        if (wt_undo_apply(redo)) return;
+    {
+        int ai = ed_act_by_key(mods, key);
+        if (ai >= 0) {
+            // undo/redo делят историю с доками: не взялось — клавиша идёт дальше.
+            int passthru = ED_ACT[ai].kind == ED_K_CMD &&
+                           (ED_ACT[ai].arg == ED_CMD_UNDO || ED_ACT[ai].arg == ED_CMD_REDO);
+            if (ed_act_run(ai)) return;
+            if (!passthru) return; // выключено, но клавиша принадлежит редактору
+        }
     }
     // Инструменту нужны: Tab (коллапс), Z/Y (undo), L (уже в EDIT — no-op).
     // QWER без гизмо бессмысленны — не форвардим.
@@ -2325,6 +2786,24 @@ static int panel_content_inside(const RcVecShape *s, int n, int panelId) {
             s[i].b + s[i].d > by + bh + 2.0f)
             return 0;
     return 1;
+}
+
+// §14 F5l(2): selftest — клик по кнопке ленты по её id. Кнопки живут на АКТИВНОЙ
+// ленте, поэтому сначала переключаем ленту (как юзер заголовком), потом кликаем
+// в центр её прямоугольника (ту же геометрию, что рисует и хит-тест).
+static int sel_clip_click(const char *id) {
+    int ai = ed_act_find(id);
+    if (ai < 0) return 0;
+    g_edTab = ED_ACT[ai].tab;
+    float x, y, w, h;
+    ed_ribbon_item_rect(ai, &x, &y, &w, &h);
+    if (w <= 0) return 0;
+    UiEvent e;
+    memset(&e, 0, sizeof e);
+    e.kind = UI_EV_DOWN;
+    e.x = x + w * 0.5f;
+    e.y = y + h * 0.5f;
+    return wt_event(&e);
 }
 
 int main(int argc, char **argv) {
@@ -4043,7 +4522,7 @@ int main(int argc, char **argv) {
             // (1) вьюпорт = окно МИНУС полосы доков; экран игры в середине
             if (g_vpx != ED_DOCK_W + PAL_PAD ||
                 g_vpx + g_vpw != g_WW - (ED_DOCK_W + PAL_PAD) ||
-                g_vpy != ED_TOP_CHROME + ED_TABS_H + PAL_PAD || g_vpw <= 0 || g_vph <= 0) {
+                g_vpy != ed_top() || g_vpw <= 0 || g_vph <= 0) {
                 printf("SELF FAIL: dock-vp vp=%d,%d %dx%d\n", g_vpx, g_vpy, g_vpw, g_vph);
                 bad = 1;
             }
@@ -4158,14 +4637,11 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             UiEvent te;
-            float tx, ty, tw, th;
-            // (1) вкладка PALETTE -> инструмент закрыт, виджета нет
-            tab_rect(0, &tx, &ty, &tw, &th);
-            memset(&te, 0, sizeof te);
-            te.kind = UI_EV_DOWN;
-            te.x = tx + 20;
-            te.y = ty + 5;
-            if (!wt_event(&te) || g_edOpen[0]) {
+            // (1) галочка ленты VIEW «Palette» -> инструмент закрыт, виджета нет.
+            // F5l(2): открытие/закрытие инструмента переехало из ЗАГОЛОВКА в
+            // галочки ленты (View в Word / панели в Roblox Studio), а заголовок
+            // теперь переключает САМУ ленту.
+            if (!sel_clip_click("view.panel.palette") || g_edOpen[0]) {
                 printf("SELF FAIL: tabs-close open=%d\n", g_edOpen[0]);
                 bad = 1;
             }
@@ -4186,13 +4662,8 @@ int main(int argc, char **argv) {
                        (double)phy);
                 bad = 1;
             }
-            // (3) вкладка ещё раз -> открылась и ВЕРНУЛАСЬ В ДОК
-            tab_rect(0, &tx, &ty, &tw, &th);
-            memset(&te, 0, sizeof te);
-            te.kind = UI_EV_DOWN;
-            te.x = tx + 20;
-            te.y = ty + 5;
-            wt_event(&te);
+            // (3) галочка ещё раз -> открылась и ВЕРНУЛАСЬ В ДОК
+            sel_clip_click("view.panel.palette");
             ed_rect(g_edPal, &zx, &zy, &zw, &zh);
             if (!g_edOpen[0] || zx != phx || zy != phy) {
                 printf("SELF FAIL: tabs-open open=%d at=%.0f,%.0f want=%.0f,%.0f\n",
@@ -4291,6 +4762,255 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // ====================================================================
+        // §14 F5l(2): ЛЕНТА = РЕЕСТР ДЕЙСТВИЙ. Тестер: «таб-полоса должна быть
+        // лентой с группой кнопок на табе + галочки Вид». Проверяем ЧИСЛАМИ:
+        // реестр (id уникальны, метки непусты, каждая лента непуста), гейт
+        // canExecute (выключенное не срабатывает), галочку View (закрыл — места
+        // нет, вьюпорт шире), спавн кнопкой ленты, отсутствие двойных клавиш,
+        // шпаргалку (строк = действиям, F1/Esc), тултип и персист активной ленты.
+        // ====================================================================
+        {
+            g_WW = 1280;
+            g_WH = 720;
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            g_edTab = 0;
+            g_edShowKeys = 0;
+            g_rbHot = -1;
+            for (int i = 0; i < 3; i++) g_edOrder[i] = i;
+            memset(g_edMoved, 0, sizeof g_edMoved);
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1;
+            ed_chrome_init();
+            ed_chrome_sync();
+            ui_wundo_init(&g_undo);
+            // (1) реестр корректен: id уникальны, метки непусты, все 5 лент непусты
+            {
+                int dup = 0, empty = 0, perTab[ED_TABS_N];
+                for (int t = 0; t < ED_TABS_N; t++) perTab[t] = 0;
+                for (int i = 0; i < ED_ACT_N; i++) {
+                    const EdAction *a = &ED_ACT[i];
+                    if (!a->id[0] || !a->label[0] || !a->group[0]) empty++;
+                    if ((int)a->tab >= ED_TABS_N) empty++;
+                    else perTab[a->tab]++;
+                    for (int j = i + 1; j < ED_ACT_N; j++)
+                        if (strcmp(ED_ACT[i].id, ED_ACT[j].id) == 0) dup++;
+                }
+                for (int t = 0; t < ED_TABS_N; t++)
+                    if (perTab[t] == 0) empty++;
+                if (ED_ACT_N < 20 || dup || empty) {
+                    printf("SELF FAIL: ribbon-registry n=%d dup=%d empty=%d\n", ED_ACT_N, dup,
+                           empty);
+                    bad = 1;
+                }
+            }
+            // (2) canExecute: без выбора Rename/Delete выключены, тумблеры — нет,
+            // нереализованное (NEVER) — выключено (никаких кнопок-пустышек)
+            {
+                int sel0 = ed_act_enabled(ed_act_find("edit.rename"));
+                int del0 = ed_act_enabled(ed_act_find("edit.delete"));
+                int undo0 = ed_act_enabled(ed_act_find("hist.undo"));
+                int pal0 = ed_act_enabled(ed_act_find("view.panel.palette"));
+                int grid0 = ed_act_enabled(ed_act_find("view.grid"));
+                if (sel0 || del0 || undo0 || grid0 || !pal0) {
+                    printf("SELF FAIL: ribbon-gate sel=%d del=%d undo=%d grid=%d pal=%d\n", sel0,
+                           del0, undo0, grid0, pal0);
+                    bad = 1;
+                }
+            }
+            // (3) заголовок ленты ПЕРЕКЛЮЧАЕТ ленту (а не панель), кнопки — ниже
+            // полосы заголовков (в свою полосу)
+            {
+                float tx, ty, tw, th;
+                tab_rect(2, &tx, &ty, &tw, &th);
+                UiEvent te;
+                memset(&te, 0, sizeof te);
+                te.kind = UI_EV_DOWN;
+                te.x = tx + 20;
+                te.y = ty + 5;
+                if (!wt_event(&te) || g_edTab != 2) {
+                    printf("SELF FAIL: ribbon-tab tab=%d\n", g_edTab);
+                    bad = 1;
+                }
+                ed_ribbon_layout();
+                int uin = g_rbN;
+                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
+                if (uin < 3 || tw <= 0 || ty < (float)(ED_TOP_CHROME + ED_TABS_H) ||
+                    ty + th > (float)ed_top()) {
+                    printf("SELF FAIL: ribbon-tab-items n=%d rect=%.0f,%.0f %.0fx%.0f\n", uin,
+                           (double)tx, (double)ty, (double)tw, (double)th);
+                    bad = 1;
+                }
+            }
+            // (4) кнопка ленты UI «Button» = спавн виджета (и выбор ложится на него)
+            {
+                int c0 = g_wt.count;
+                if (!sel_clip_click("ui.spawn.button") || g_wt.count != c0 + 1 ||
+                    !widget_cget(g_act, g_wtSel)) {
+                    printf("SELF FAIL: ribbon-spawn %d->%d sel=%d\n", c0, g_wt.count, g_wtSel);
+                    bad = 1;
+                }
+            }
+            // (5) выключенное действие НЕ срабатывает: без выбора Delete ничего не
+            // делает — кнопка-пустышка врала бы юзеру
+            {
+                g_wtSel = 0;
+                int c0 = g_wt.count;
+                int r = ed_act_run(ed_act_find("edit.delete"));
+                sel_clip_click("edit.delete"); // клик по кнопке ленты HOME
+                if (r || g_wt.count != c0) {
+                    printf("SELF FAIL: ribbon-disabled r=%d %d->%d\n", r, c0, g_wt.count);
+                    bad = 1;
+                }
+            }
+            // (6) галочка View «Inspector»: закрыта — размера нет, полоса дока
+            // освободилась (вьюпорт шире); ещё раз — назад в док
+            {
+                int w0 = g_vpw + g_dockR;
+                if (!sel_clip_click("view.panel.inspector") || g_edOpen[2]) {
+                    printf("SELF FAIL: ribbon-view open=%d\n", g_edOpen[2]);
+                    bad = 1;
+                }
+                float x, y, w, h;
+                ed_rect(g_edIns, &x, &y, &w, &h);
+                if (w != 0 || h != 0 || g_dockR != 0 || g_vpw + g_dockR != w0) {
+                    printf("SELF FAIL: ribbon-view-rect %.0fx%.0f dockR=%d vp=%d\n", (double)w,
+                           (double)h, g_dockR, g_vpw);
+                    bad = 1;
+                }
+                sel_clip_click("view.panel.inspector");
+                if (!g_edOpen[2] || g_dockR == 0) {
+                    printf("SELF FAIL: ribbon-view-back open=%d dockR=%d\n", g_edOpen[2],
+                           g_dockR);
+                    bad = 1;
+                }
+            }
+            // (7) клавиши: НЕТ двух действий на один аккорд (иначе клавиша врёт) и
+            // имена клавиш читаемы (тултип/шпаргалка)
+            {
+                int dup = 0, keys = 0, km[64], kk[64], kn = 0;
+                for (int i = 0; i < ED_ACT_N; i++)
+                    for (int s = 0; s < 2; s++) {
+                        int key = s == 0 ? ED_ACT[i].key : ED_ACT[i].key2;
+                        int mods = s == 0 ? ED_ACT[i].mods : ED_ACT[i].mods2;
+                        if (!key) continue;
+                        keys++;
+                        if (kn < 64) {
+                            km[kn] = mods & ED_MOD_MASK;
+                            kk[kn] = key;
+                            kn++;
+                        }
+                    }
+                for (int i = 0; i < kn; i++)
+                    for (int j = i + 1; j < kn; j++)
+                        if (km[i] == km[j] && kk[i] == kk[j]) dup++;
+                char b[40];
+                int okn = strcmp(ed_key_name(GLFW_KEY_F2, 0, b, sizeof b), "F2") == 0 &&
+                          strcmp(ed_key_name(GLFW_KEY_DELETE, 0, b, sizeof b), "Del") == 0 &&
+                          strcmp(ed_key_name(GLFW_KEY_Z, GLFW_MOD_CONTROL, b, sizeof b),
+                                 "Ctrl+Z") == 0 &&
+                          strcmp(ed_key_name(GLFW_KEY_1, GLFW_MOD_CONTROL, b, sizeof b),
+                                 "Ctrl+1") == 0;
+                if (keys < 8 || dup || !okn) {
+                    printf("SELF FAIL: ribbon-keys keys=%d dup=%d names=%d\n", keys, dup, okn);
+                    bad = 1;
+                }
+                // клавиша в реестре действительно находит действие (Ctrl+3 -> Inspector)
+                int ai = ed_act_by_key(GLFW_MOD_CONTROL, GLFW_KEY_3);
+                if (ai < 0 || strcmp(ED_ACT[ai].id, "view.panel.inspector") != 0) {
+                    printf("SELF FAIL: ribbon-keyroute ai=%d\n", ai);
+                    bad = 1;
+                }
+            }
+            // (8) шпаргалка: F1 открывает, строк ровно по действиям, Esc и клик
+            // закрывают (клик по ней холст не трогает)
+            {
+                on_key(0, GLFW_KEY_F1, 0, GLFW_PRESS, 0);
+                float kx, ky, kw, kh;
+                ed_keys_rect(&kx, &ky, &kw, &kh);
+                int rows = (int)((kh - 26.0f - 8.0f) / (float)ED_KEYS_RH);
+                if (!g_edShowKeys || rows != ED_ACT_N || !ed_keys_hit(kx + 10, ky + 10) ||
+                    ed_keys_hit(kx - 20, ky - 20)) {
+                    printf("SELF FAIL: ribbon-keysheet on=%d rows=%d\n", g_edShowKeys, rows);
+                    bad = 1;
+                }
+                on_key(0, GLFW_KEY_ESCAPE, 0, GLFW_PRESS, 0);
+                if (g_edShowKeys || g_quit) {
+                    printf("SELF FAIL: ribbon-keysheet-esc on=%d quit=%d\n", g_edShowKeys,
+                           g_quit);
+                    bad = 1;
+                }
+                on_key(0, GLFW_KEY_F1, 0, GLFW_PRESS, 0);
+                UiEvent ke;
+                memset(&ke, 0, sizeof ke);
+                ke.kind = UI_EV_DOWN;
+                ke.x = kx + 10;
+                ke.y = ky + 10;
+                if (!wt_event(&ke) || g_edShowKeys) {
+                    printf("SELF FAIL: ribbon-keysheet-click on=%d\n", g_edShowKeys);
+                    bad = 1;
+                }
+            }
+            // (9) тултип: у включённой кнопки — метка и клавиша, у выключенной —
+            // честная пометка [off]; плашка не вылезает за окно
+            {
+                g_edTab = 4; // VIEW
+                g_rbHot = ed_act_find("view.panel.tree");
+                char tip[160];
+                ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
+                float tx, ty, tw, th;
+                ed_ribbon_tip_rect(&tx, &ty, &tw, &th);
+                int ok1 = strstr(tip, "Tree") && strstr(tip, "Ctrl+2") && !strstr(tip, "off");
+                int in1 = tw > 0 && tx >= 0 && ty >= 0 && tx + tw <= (float)g_WW &&
+                          ty + th <= (float)g_WH;
+                g_edTab = 0; // HOME
+                g_rbHot = ed_act_find("edit.delete");
+                ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
+                int ok2 = strstr(tip, "off") != 0;
+                if (!ok1 || !in1 || !ok2) {
+                    printf("SELF FAIL: ribbon-tip ok1=%d in=%d off=%d\n", ok1, in1, ok2);
+                    bad = 1;
+                }
+                g_rbHot = -1;
+            }
+            // (10) активная лента переживает запуск (своё хранилище инструмента)
+            {
+                setenv("UI_EDIT_BENCH", "1", 1);
+                int keepTab = g_edTab;
+                int keepOpen[3] = {g_edOpen[0], g_edOpen[1], g_edOpen[2]};
+                g_edTab = 3;
+                ed_panels_save();
+                g_edTab = 0;
+                ed_panels_load();
+                if (g_edTab != 3) {
+                    printf("SELF FAIL: ribbon-persist tab=%d\n", g_edTab);
+                    bad = 1;
+                }
+                remove(ED_PANELS_BENCH);
+                unsetenv("UI_EDIT_BENCH");
+                g_edTab = keepTab;
+                g_edOpen[0] = keepOpen[0];
+                g_edOpen[1] = keepOpen[1];
+                g_edOpen[2] = keepOpen[2];
+            }
+            // (11) лента не залезает на вьюпорт (свой слой окна, не оверлей экрана)
+            {
+                if (g_vpy != ed_top() || ed_top() < ED_TOP_CHROME + ED_TABS_H + ED_RIBBON_H) {
+                    printf("SELF FAIL: ribbon-space vpTop=%d top=%d\n", g_vpy, ed_top());
+                    bad = 1;
+                }
+            }
+            g_edTab = 0;
+            g_edShowKeys = 0;
+            g_rbHot = -1;
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1;
+            ed_chrome_init();
+            ed_chrome_sync();
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -4362,6 +5082,26 @@ int main(int argc, char **argv) {
     }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
     g_text = text; // F5a: атлас нужен хит-тесту/каретке поля имени
+    { // §14 F5l(2): тест-ручки ленты — активная лента и открытая шпаргалка.
+        // Только ЧТЕНИЕ состояния: файлы юзера эти ручки не пишут.
+        const char *tb = getenv("UI_EDIT_TAB");
+        if (tb && tb[0]) {
+            int t = -1;
+            if (tb[0] >= '0' && tb[0] <= '9') t = atoi(tb);
+            else
+                for (int i = 0; i < ED_TABS_N; i++)
+                    if (strcasecmp(tb, g_edRibbonTab[i]) == 0) t = i;
+            if (t >= 0 && t < ED_TABS_N) {
+                g_edTab = t;
+                printf("ui_edit: tab=%s (%d)\n", g_edRibbonTab[t], t);
+            }
+        }
+        const char *kb = getenv("UI_EDIT_KEYS");
+        if (kb && kb[0] == '1') {
+            g_edShowKeys = 1;
+            printf("ui_edit: keys overlay ON rows=%d\n", ED_ACT_N);
+        }
+    }
     if (!text) printf("ui_edit: text OFF (rects only)\n");
     // Всегда EDIT (L скриптом — как дефолтный select в ui_test).
     {
@@ -4625,6 +5365,15 @@ int main(int argc, char **argv) {
             }
             printf("ui_edit: vp=%d,%d %dx%d win=%dx%d\n", g_vpx, g_vpy, g_vpw, g_vph, g_WW,
                    g_WH);
+            printf("ui_edit: ribbon tab=%s n=%d groups=%d actions=%d\n",
+                   g_edRibbonTab[g_edTab], g_rbN, g_rbGroupN, ED_ACT_N);
+            for (int s2 = 0; s2 < g_rbN; s2++) { // кнопки активной ленты
+                const EdAction *a = &ED_ACT[g_rbAct[s2]];
+                float x, y, w, h;
+                ed_ribbon_item_rect(g_rbAct[s2], &x, &y, &w, &h);
+                printf("ui_edit: rb %s x=%.0f y=%.0f %.0fx%.0f en=%d\n", a->id, (double)x,
+                       (double)y, (double)w, (double)h, ed_act_enabled(g_rbAct[s2]));
+            }
         }
         if (clEnv && clEnv[0] >= '0' && tdcnt == 3) { // F5h2: клик по коду события
             int cx = -1, cy = -1;
@@ -4755,6 +5504,21 @@ int main(int argc, char **argv) {
                     e2.y = d2;
                     g_mouseDown = 0;
                     route_event(&e2);
+                } else if (sscanf(act, "m:%f:%f", &a, &b) == 2) {
+                    // F5l(2): ЧИСТЫЙ ХОД мыши — проверка ховера (тултип кнопки
+                    // ленты), не трогая ни выбора, ни панелей. Ставим и ЖИВОЙ
+                    // курсор окна: иначе настоящая мышь следующим событием
+                    // сбрасывает ховер (синтетика обязана быть как рука).
+                    UiEvent e2;
+                    memset(&e2, 0, sizeof e2);
+                    e2.kind = UI_EV_MOVE;
+                    e2.x = a;
+                    e2.y = b;
+                    g_mx = a;
+                    g_my = b;
+                    route_event(&e2);
+                    glfwSetCursorPos(win, (double)(a / (g_mouseKx > 0 ? g_mouseKx : 1.0f)),
+                                     (double)(b / (g_mouseKy > 0 ? g_mouseKy : 1.0f)));
                 }
                 printf("ui_edit: script %s -> sel=%d open=%d%d%d float=%d%d%d", act, g_wtSel,
                        g_edOpen[0], g_edOpen[1], g_edOpen[2], ed_panel_float(0),
@@ -4858,18 +5622,58 @@ int main(int argc, char **argv) {
             }
             ui_panels_text(g_panels, &g_scene, text, g_WW, g_WH);
             ui_text_occluders(0, 0);
+            { // §14 F5l(2): тултип и шпаргалка — тоже ПОВЕРХНОСТЬ: текст под ними не
+                // пишем, иначе подписи панелей просвечивают сквозь плашку (тот же
+                // класс бага, что F5l(5) «текст под закрытой панелью»). Свой текст
+                // этих плашек рисуется ПОСЛЕ снятия перекрытий.
+                float occ2[2][4];
+                int no2 = 0;
+                if (g_rbHot >= 0) {
+                    ed_ribbon_tip_rect(&occ2[no2][0], &occ2[no2][1], &occ2[no2][2],
+                                       &occ2[no2][3]);
+                    if (occ2[no2][2] > 0) no2++;
+                }
+                if (g_edShowKeys) {
+                    ed_keys_rect(&occ2[no2][0], &occ2[no2][1], &occ2[no2][2], &occ2[no2][3]);
+                    no2++;
+                }
+                ui_text_occluders(occ2, no2);
+            }
             // Подписи виджетов (button/label) + заголовки панелей хрома.
             static const float tcol[4] = {0.85f, 0.87f, 0.92f, 1.0f};
             static const float hcol[4] = {0.60f, 0.65f, 0.74f, 1.0f};
-            { // §14 F5k: подписи вкладок-инструментов (открыт = яркая)
-                for (int i = 0; i < 3; i++) {
+            { // §14 F5l(2): заголовки лент (активная = яркая) + метки кнопок ленты
+                for (int i = 0; i < ED_TABS_N; i++) {
                     float x, y, w, h;
                     tab_rect(i, &x, &y, &w, &h);
                     (void)w;
                     (void)h;
                     if (!ed_text_vis(-1, x + 8, y + 2)) continue;
-                    const char *nm = (i == 1 && g_editSelf) ? "EDITOR UI" : g_edTabName[i];
-                    ui_text_quad(text, x + 8, y + 2, nm, g_edOpen[i] ? tcol : hcol);
+                    ui_text_quad(text, x + 8, y + 2, g_edRibbonTab[i],
+                                 i == g_edTab ? tcol : hcol);
+                }
+                static const float gcol[4] = {0.44f, 0.48f, 0.57f, 1.0f};
+                static const float ocol[4] = {0.36f, 0.38f, 0.44f, 1.0f};
+                for (int g = 0; g < g_rbGroupN; g++) { // подписи групп
+                    float gx, gy, gw, gh;
+                    ed_ribbon_group_rect(g, &gx, &gy, &gw, &gh);
+                    const char *gn = 0;
+                    for (int s = 0; s < g_rbN; s++)
+                        if (g_rbGrpSlot[s] == g) {
+                            gn = g_rbGrp[s];
+                            break;
+                        }
+                    if (gn && gw > 0) ui_text_quad(text, gx + 6, gy + gh - 12, gn, gcol);
+                }
+                for (int s = 0; s < g_rbN; s++) { // метки кнопок активной ленты
+                    const EdAction *a = &ED_ACT[g_rbAct[s]];
+                    float x, y, w, h;
+                    ed_ribbon_item_rect(g_rbAct[s], &x, &y, &w, &h);
+                    if (w <= 0) continue;
+                    float tw = ed_txt_w(a->label);
+                    float tx = a->kind == ED_K_TOGGLE ? x + 20.0f : x + (w - tw) * 0.5f;
+                    ui_text_quad(text, tx, y + 2.0f, a->label,
+                                 ed_act_enabled(g_rbAct[s]) ? tcol : ocol);
                 }
             }
             {
@@ -5006,7 +5810,8 @@ int main(int argc, char **argv) {
                          "frontedit: click=select | Ctrl+click=under | drag=move |"
                          " edges=resize | tree-row drag=reparent/order | panel head"
                          " drag=float | dock chip=back | F2=rename | Del | Ctrl+Z/Y undo"
-                         " | F7 self | Ctrl+1/2/3 tabs | Esc",
+                         " | ribbon: tabs+buttons (VIEW=panel checkboxes) | F1 keys |"
+                         " F7 self | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
                 char hud[64];
@@ -5030,6 +5835,38 @@ int main(int argc, char **argv) {
                     continue; // за вьюпортом подписи нет (документ туда обрезан)
                 if (ed_text_vis(-1, wx + 6, wy + (hh - 16) / 2))
                     ui_text_quad(text, wx + 6, wy + (hh - 16) / 2, w->name, tcol);
+            }
+            // §14 F5l(2): ТУЛТИП и ШПАРГАЛКА — последним проходом текста (текст
+            // рисуется в порядке вызовов: кто позже, тот поверх). Так подсказка и
+            // список клавиш видны над окнами панелей и над подписями документа.
+            // Снимаем перекрытия: свой текст плашек писать МОЖНО.
+            ui_text_occluders(0, 0);
+            if (g_rbHot >= 0) {
+                float x, y, w, h;
+                ed_ribbon_tip_rect(&x, &y, &w, &h);
+                if (w > 0) {
+                    char tip[160];
+                    ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
+                    ui_text_quad(text, x + 7, y + 2, tip, tcol);
+                }
+            }
+            if (g_edShowKeys) {
+                float x, y, w, h;
+                ed_keys_rect(&x, &y, &w, &h);
+                char hd[64];
+                snprintf(hd, sizeof hd, "KEYS: %d actions (F1/Esc close)", ED_ACT_N);
+                ui_text_quad(text, x + 8, y + 4, hd, tcol);
+                for (int i = 0; i < ED_ACT_N; i++) {
+                    float ry = y + 26.0f + (float)i * (float)ED_KEYS_RH;
+                    char kb[48];
+                    ed_act_keys(i, kb, sizeof kb);
+                    int en = ed_act_enabled(i);
+                    ui_text_quad(text, x + 8, ry, g_edRibbonTab[ED_ACT[i].tab], hcol);
+                    ui_text_quad(text, x + 62, ry, ED_ACT[i].label, en ? tcol : hcol);
+                    if (kb[0])
+                        ui_text_quad(text, x + w - 10.0f - ui_text_width(text, kb), ry, kb,
+                                     en ? tcol : hcol);
+                }
             }
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
