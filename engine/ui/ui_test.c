@@ -13,6 +13,7 @@
 #include "ui/ui_panels.h" // Фаза 3: меню/тулбар/иерархия/статус
 #include "ui/ui_gizmo.h" // Гизмо: стрелки RGB=XYZ поверх вьюпорта
 #include "ui/ui_undo.h" // Фаза 5: стек команд (selftest гизмо-коммита)
+#include "ui/ui_widget_undo.h" // §14 F4: кольцо истории документа виджетов
 #include "ui/ui_undo.h" // Фаза 5: стек команд
 #include "ui/ui_theme.h" // Фаза 5: одна тема + hot-reload
 #include "rtarget.h"
@@ -1048,6 +1049,99 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
             }
+        }
+        // §14 F4: кольцо истории ДОКУМЕНТА виджетов (снапшоты). Проверяем: пустая
+        // история, dedupe (то же состояние — не шаг), откат/повтор возвращают
+        // МОДЕЛЬ целиком, новая ветка режет redo, кольцо конечно (старейшее
+        // вываливается сдвигом), метки шагов читаются.
+        {
+            static UiWidgetUndo u; // снапшоты крупные: в статике, не на стеке
+            static UiWidgetTree t;
+            ui_wundo_init(&u);
+            widget_tree_init(&t);
+            UiWidgetRect rr;
+            UiWidgetStyle ss;
+            memset(&rr, 0, sizeof rr);
+            memset(&ss, 0, sizeof ss);
+            rr.anchors = UI_A_LEFT | UI_A_TOP;
+            rr.w = 100;
+            rr.h = 30;
+            ss.bg[3] = 1.0f;
+            ss.alpha = 1.0f;
+            if (ui_wundo_depth(&u) || ui_wundo_redo_depth(&u) || ui_wundo_undo(&u, &t) ||
+                ui_wundo_redo(&u, &t) || ui_wundo_label(&u, -1)[0]) {
+                printf("SELF FAIL: wundo-empty\n");
+                bad = 1;
+            }
+            if (!ui_wundo_commit(&u, &t, "load")) {
+                printf("SELF FAIL: wundo-load\n");
+                bad = 1;
+            }
+            int ids[3] = {0, 0, 0};
+            for (int i = 0; i < 3; i++) {
+                ids[i] = widget_add(&t, UI_W_BUTTON, "B", 0, &rr, &ss);
+                if (!(ids[i] && ui_wundo_commit(&u, &t, "add"))) {
+                    printf("SELF FAIL: wundo-add %d\n", i);
+                    bad = 1;
+                }
+            }
+            if (ui_wundo_depth(&u) != 3 || ui_wundo_redo_depth(&u) != 0 ||
+                strcmp(ui_wundo_label(&u, -1), "add") != 0) {
+                printf("SELF FAIL: wundo-depth %d\n", ui_wundo_depth(&u));
+                bad = 1;
+            }
+            if (ui_wundo_commit(&u, &t, "add")) { // то же состояние — не шаг
+                printf("SELF FAIL: wundo-dedupe\n");
+                bad = 1;
+            }
+            if (!ui_wundo_undo(&u, &t) || t.count != 2 || widget_cget(&t, ids[2])) {
+                printf("SELF FAIL: wundo-undo %d\n", t.count);
+                bad = 1;
+            }
+            if (!ui_wundo_undo(&u, &t) || t.count != 1 || !widget_cget(&t, ids[0])) {
+                printf("SELF FAIL: wundo-undo2 %d\n", t.count);
+                bad = 1;
+            }
+            if (strcmp(ui_wundo_label(&u, 1), "add") != 0) { // что вернём повтором
+                printf("SELF FAIL: wundo-relabel\n");
+                bad = 1;
+            }
+            if (!ui_wundo_redo(&u, &t) || t.count != 2 || !widget_cget(&t, ids[1])) {
+                printf("SELF FAIL: wundo-redo %d\n", t.count);
+                bad = 1;
+            }
+            // Новая ветка: правка после отката — redo-хвост режется.
+            if (!widget_add(&t, UI_W_LABEL, "L", 0, &rr, &ss) ||
+                !ui_wundo_commit(&u, &t, "add") || ui_wundo_redo_depth(&u) != 0) {
+                printf("SELF FAIL: wundo-branch %d\n", ui_wundo_redo_depth(&u));
+                bad = 1;
+            }
+            // Конечность: 20 шагов подряд -> в кольце 16 состояний = 15 шагов назад.
+            for (int i = 0; i < 20; i++) {
+                if (!widget_add(&t, UI_W_LABEL, "L", 0, &rr, &ss) ||
+                    !ui_wundo_commit(&u, &t, "add")) {
+                    printf("SELF FAIL: wundo-fill %d\n", i);
+                    bad = 1;
+                    break;
+                }
+            }
+            if (ui_wundo_depth(&u) != UI_WUNDO_RING - 1) {
+                printf("SELF FAIL: wundo-cap %d\n", ui_wundo_depth(&u));
+                bad = 1;
+            }
+            int steps = 0;
+            while (ui_wundo_undo(&u, &t)) steps++;
+            if (steps != UI_WUNDO_RING - 1 || ui_wundo_depth(&u) != 0) {
+                printf("SELF FAIL: wundo-floor %d\n", steps);
+                bad = 1;
+            }
+            while (ui_wundo_redo(&u, &t))
+                steps--; // ровно столько же вперёд
+            if (steps != 0 || ui_wundo_redo_depth(&u) != 0) {
+                printf("SELF FAIL: wundo-ceil %d\n", steps);
+                bad = 1;
+            }
+            widget_tree_init(&t);
         }
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");

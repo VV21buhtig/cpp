@@ -12,6 +12,7 @@
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
 #include "ui/ui_widget.h" // дерево виджетов конструктора (§14)
+#include "ui/ui_widget_undo.h" // §14 F4: кольцо истории документа
 #include "ui/ui_widget_runtime.h" // §14 F3c: общий порядок/рендер/хит (игре и редактору)
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "rtarget.h"
@@ -718,6 +719,30 @@ static void wt_persist(void) {
     if (wt_persist_ok()) widget_json_save(&g_wt, wt_path());
 }
 
+// --- §14 F4: история документа (undo/redo) ---
+// Пишем ТОЛЬКО документ: хром редактора — вид инструмента (как и в layout.json),
+// его правка в историю документа не попадает. Коммит — на КОНЕЦ операции.
+static UiWidgetUndo g_undo;
+static void undo_commit(const char *what) {
+    if (g_editSelf) return;
+    ui_wundo_commit(&g_undo, &g_wt, what);
+}
+// Ctrl+Z / Ctrl+Y (redo = +Shift). Возврат 0 = у виджетов откатывать нечего
+// (тогда Z/Y уходят докам: у них своя история — клавиши не «съедаем»).
+static int wt_undo_apply(int redo) {
+    if (g_editSelf) return 0;
+    int ok = redo ? ui_wundo_redo(&g_undo, &g_wt) : ui_wundo_undo(&g_undo, &g_wt);
+    if (!ok) return 0;
+    if (g_wtSel && !widget_cget(&g_wt, g_wtSel)) g_wtSel = 0; // выбранного могло не стать
+    g_dragId = 0;
+    g_dragHandle = 0;
+    g_insField = -1;
+    g_palHot = -1;
+    edit_push();
+    wt_persist();
+    return 1;
+}
+
 // Удаление выбранного (вместе с поддеревом). Выбор уходит на родителя — как в
 // UE/Unity: после удаления «активен» контейнер, а не пустота. Хром редактора не
 // удаляем: панели EdPalette/EdHierarchy/EdInspector — сам инструмент, не документ.
@@ -733,6 +758,7 @@ static int wt_delete_sel(void) {
     g_palHot = -1;
     edit_push();
     wt_persist(); // коммит: удаление
+    undo_commit("delete");
     return 1;
 }
 
@@ -791,13 +817,16 @@ static int wt_event(const UiEvent *e) {
         if (g_insField >= 0) { // F3b: конец scrub
             g_insField = -1;
             wt_persist();
+            undo_commit("field");
             edit_push(); // снять подсветку ряда
             return 1;
         }
         if (g_dragId) {
+            int wasResize = g_dragHandle > 0;
             g_dragId = 0;
             g_dragHandle = 0;
             wt_persist(); // коммит: конец перемещения/ресайза
+            undo_commit(wasResize ? "resize" : "move");
             return 1;
         }
         return 0;
@@ -829,6 +858,7 @@ static int wt_event(const UiEvent *e) {
         if (PAL_TYPE[pi] >= 0) { // тип: Panel=0 тоже валиден!
             wt_spawn(PAL_TYPE[pi]);
             wt_persist(); // коммит: новый виджет
+            undo_commit("add");
         } else {
             wt_delete_sel(); // строка-действие: удалить выбранное (поддерево)
         }
@@ -845,6 +875,7 @@ static int wt_event(const UiEvent *e) {
         if (ii == IF_UP || ii == IF_DOWN) {
             if (widget_layer(g_act, g_wtSel, ii == IF_UP ? 1 : -1)) {
                 wt_persist();
+                undo_commit("layer");
                 edit_push(); // порядок слоёв изменился — полный кадр
             }
         } else {
@@ -1080,6 +1111,12 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     if (key == GLFW_KEY_DELETE || key == GLFW_KEY_BACKSPACE) { // удалить выбранное
         wt_delete_sel();
         return;
+    }
+    // Ctrl+Z — откат, Ctrl+Y / Ctrl+Shift+Z — повтор. Если у виджетов истории нет,
+    // не «съедаем» клавишу: она уходит в доки (там своя история).
+    if ((mods & GLFW_MOD_CONTROL) && (key == GLFW_KEY_Z || key == GLFW_KEY_Y)) {
+        int redo = key == GLFW_KEY_Y || (mods & GLFW_MOD_SHIFT);
+        if (wt_undo_apply(redo)) return;
     }
     // Инструменту нужны: Tab (коллапс), Z/Y (undo), L (уже в EDIT — no-op).
     // QWER без гизмо бессмысленны — не форвардим.
@@ -1869,6 +1906,69 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // §14 F4: история документа — тот же путь, что у клавиш (wt_undo_apply):
+        // откат/повтор возвращают МОДЕЛЬ (id и дерево), правка → откат, удаление
+        // → откат возвращает поддерево, выбор на исчезнувшем виджете сбрасывается.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            ui_wundo_init(&g_undo);
+            undo_commit("load");
+            int id1 = wt_spawn(UI_W_PANEL);
+            undo_commit("add");
+            int id2 = wt_spawn(UI_W_BUTTON);
+            undo_commit("add");
+            if (!wt_undo_apply(0) || g_wt.count != 1 || widget_cget(&g_wt, id2)) {
+                printf("SELF FAIL: undo-add %d\n", g_wt.count);
+                bad = 1;
+            }
+            if (!wt_undo_apply(1) || g_wt.count != 2 || !widget_cget(&g_wt, id2)) {
+                printf("SELF FAIL: redo-add %d\n", g_wt.count);
+                bad = 1;
+            }
+            float bx0 = widget_cget(&g_wt, id1)->rect.x; // правка «как драг»
+            widget_get(&g_wt, id1)->rect.x += 33.0f;
+            undo_commit("move");
+            if (!wt_undo_apply(0) || widget_cget(&g_wt, id1)->rect.x != bx0) {
+                printf("SELF FAIL: undo-move\n");
+                bad = 1;
+            }
+            g_wtSel = id1;
+            widget_reparent(&g_wt, id2, id1); // поддерево: кнопка внутри панели
+            undo_commit("reparent");
+            int cnt = g_wt.count;
+            if (!wt_delete_sel() || g_wt.count != 0) {
+                printf("SELF FAIL: undo-del %d\n", g_wt.count);
+                bad = 1;
+            }
+            if (!wt_undo_apply(0) || g_wt.count != cnt || !widget_cget(&g_wt, id2)) {
+                printf("SELF FAIL: undo-del-back %d\n", g_wt.count);
+                bad = 1;
+            }
+            // повтор удаления: выбранного виджета больше нет — выбор снимается
+            g_wtSel = id2;
+            if (!wt_undo_apply(1) || g_wt.count != 0 || g_wtSel) {
+                printf("SELF FAIL: redo-del %d sel %d\n", g_wt.count, g_wtSel);
+                bad = 1;
+            }
+            // Хром редактора в историю документа не пишется (вид инструмента).
+            ui_wundo_init(&g_undo);
+            undo_commit("load");
+            g_editSelf = 1;
+            g_act = &g_edWt;
+            widget_get(&g_edWt, g_edPal)->rect.x += 5.0f;
+            undo_commit("self");
+            if (ui_wundo_depth(&g_undo) != 0) {
+                printf("SELF FAIL: undo-self %d\n", ui_wundo_depth(&g_undo));
+                bad = 1;
+            }
+            g_editSelf = 0;
+            g_act = &g_wt;
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -1970,6 +2070,8 @@ int main(int argc, char **argv) {
     glfwPollEvents();
     drain_ev();
     if (wt_persist_ok()) widget_json_load(&g_wt, wt_path()); // персист §14
+    ui_wundo_init(&g_undo);
+    undo_commit("load"); // нулевое состояние истории = загруженный документ
     edit_push(); // первая заливка
     // Демо-виджеты для скриншота палитры/холста (UI_EDIT_SEED=1).
     if (getenv("UI_EDIT_SEED")) {
@@ -2207,13 +2309,15 @@ int main(int argc, char **argv) {
                 }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: palette=add | click=select | blue edges resize | Del"
-                         " remove | wheel over list=scroll | F7 editor UI | Tab collapse | Esc",
+                         "frontedit: palette=add | click=select | blue resize | Del remove"
+                         " | Ctrl+Z/Y undo/redo | wheel list=scroll | F7 self | Tab | Esc",
                          hintCol);
-            { // HUD: FPS + счётчик полных перерисовок (диагноз «съеденного fps»)
-                char hud[48];
-                snprintf(hud, sizeof hud, "FPS %.0f  full %d", (double)g_fpsEma, g_fullN);
-                ui_text_quad(text, (float)(g_WW - 150), 6.0f, hud, hintCol);
+            { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
+                char hud[64];
+                snprintf(hud, sizeof hud, "FPS %.0f  full %d  undo %d/%d",
+                         (double)g_fpsEma, g_fullN, ui_wundo_depth(&g_undo),
+                         ui_wundo_redo_depth(&g_undo));
+                ui_text_quad(text, (float)(g_WW - 250), 6.0f, hud, hintCol);
             }
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
