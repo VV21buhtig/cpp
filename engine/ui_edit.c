@@ -942,6 +942,66 @@ static void pt_to_anchor(UiWidget *w, float px, float py, float pw, float ph, in
     else w->rect.y = py - ((float)Hpx - ph) * 0.5f;
 }
 
+// --- §14 F5l: ГРУППА ЕДЕТ ЗА РОДИТЕЛЕМ ---
+// Модель координат АБСОЛЮТНАЯ (якоря к окну), поэтому при драге родителя дети
+// сами не ехали — и «виджет разваливался пополам» (тестер: сдвинул панель, а
+// подписи остались на месте). Figma/UMG/WPF тянут ПОДДЕРЕВО за родителем; здесь
+// то же, но без смены модели: каждого потомка сдвигаем на ту же дельту в
+// ПИКСЕЛЯХ (у якоря R/B знак оффсета обратный — иначе ребёнок уедет не туда).
+static void wt_shift_px(UiWidget *w, float sdx, float sdy) {
+    if (!w) return;
+    if (w->rect.anchors & UI_A_RIGHT) w->rect.x -= sdx;
+    else w->rect.x += sdx; // LEFT и центр двигаются тем же знаком
+    if (w->rect.anchors & UI_A_BOTTOM) w->rect.y -= sdy;
+    else w->rect.y += sdy;
+}
+static void wt_subtree_walk(int id, float sdx, float sdy) {
+    UiWidget *w = widget_get(g_act, id);
+    if (!w) return;
+    wt_shift_px(w, sdx, sdy);
+    for (int i = 0; i < w->nchildren; i++) wt_subtree_walk(w->children[i], sdx, sdy);
+}
+// Сдвиг ПОДДЕРЕВА (родитель + потомки). Дети ходят за родителем.
+static void wt_subtree_shift(int id, float sdx, float sdy) {
+    if (sdx == 0.0f && sdy == 0.0f) return;
+    wt_subtree_walk(id, sdx, sdy);
+}
+// Сдвиг только ПОТОМКОВ (родителя правит вызывающий — поле инспектора).
+static void wt_subtree_shift_kids(int id, float sdx, float sdy) {
+    const UiWidget *w = widget_cget(g_act, id);
+    if (!w || (sdx == 0.0f && sdy == 0.0f)) return;
+    for (int i = 0; i < w->nchildren; i++) wt_subtree_walk(w->children[i], sdx, sdy);
+}
+static void wt_bounds_walk(int id, float *x0, float *y0, float *x1, float *y1, int *n) {
+    const UiWidget *w = widget_cget(g_act, id);
+    if (!w) return;
+    float x, y, ww, hh;
+    widget_rect_px(w, g_WW, g_WH, &x, &y, &ww, &hh);
+    if (x < *x0) *x0 = x;
+    if (y < *y0) *y0 = y;
+    if (x + ww > *x1) *x1 = x + ww;
+    if (y + hh > *y1) *y1 = y + hh;
+    (*n)++;
+    for (int i = 0; i < w->nchildren; i++)
+        wt_bounds_walk(w->children[i], x0, y0, x1, y1, n);
+}
+// Границы ПОДДЕРЕВА в пикселях. Возвращает число виджетов (0 = нет; 1 = детей нет).
+static int wt_subtree_bounds(int id, float *ox, float *oy, float *ow, float *oh) {
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    int n = 0;
+    wt_bounds_walk(id, &x0, &y0, &x1, &y1, &n);
+    if (n <= 0) return 0;
+    *ox = x0;
+    *oy = y0;
+    *ow = x1 - x0;
+    *oh = y1 - y0;
+    return n;
+}
+static int wt_has_kids(int id) {
+    float a, b, c, d;
+    return wt_subtree_bounds(id, &a, &b, &c, &d) > 1;
+}
+
 static void wt_drag_apply(float mx, float my) {
     UiWidget *w = widget_get(g_act, g_dragId);
     if (!w) {
@@ -950,6 +1010,8 @@ static void wt_drag_apply(float mx, float my) {
     }
     float dx = mx - g_dragMX, dy = my - g_dragMY;
     float nx = g_dragX, ny = g_dragY, nw = g_dragW, nh = g_dragH;
+    float obx = 0, oby = 0, obw = 0, obh = 0;
+    int okids = wt_subtree_bounds(g_dragId, &obx, &oby, &obw, &obh) > 1; // F5l
     if (g_dragHandle == 0) {
         nx += dx;
         ny += dy;
@@ -978,6 +1040,10 @@ static void wt_drag_apply(float mx, float my) {
     // Цена ~ ДЕЛЬТЕ драга, не размеру виджета. Единый путь для move и resize:
     // move = поехали все 4 края, resize = один-два. Если дельта огромная (флин),
     // полосы дороже — откат на объединение/два rect'а (честный выбор по площади).
+    // F5l: у ГРУППЫ (есть потомки) середина НЕ неизменна — дети едут вместе с
+    // родителем, поэтому полосы не годятся: регион = объединение СТАРЫХ и НОВЫХ
+    // границ всего поддерева (иначе на экране остаются следы уехавших детей).
+    if (g_dragHandle == 0 && okids) wt_subtree_shift(g_dragId, nx - g_prevX, ny - g_prevY);
     {
         const float M = 12.0f;
         float oL = g_prevX, oT = g_prevY, oR = g_prevX + g_prevW, oB = g_prevY + g_prevH;
@@ -1003,7 +1069,14 @@ static void wt_drag_apply(float mx, float my) {
             g_dirtyN++;                                                                \
         }                                                                              \
     } while (0)
-        if (stripA <= twoA && stripA <= uniA) { // основной путь: полосы дельты
+        if (okids) { // F5l: группа — объединение старых и новых границ поддерева
+            float nbx = 0, nby = 0, nbw = 0, nbh = 0;
+            wt_subtree_bounds(g_dragId, &nbx, &nby, &nbw, &nbh);
+            float gL = obx < nbx ? obx : nbx, gT = oby < nby ? oby : nby;
+            float gR = obx + obw > nbx + nbw ? obx + obw : nbx + nbw;
+            float gB = oby + obh > nby + nbh ? oby + obh : nby + nbh;
+            WT_ADD_RECT(gL - M, gT - M, gR - gL + 2 * M, gB - gT + 2 * M);
+        } else if (stripA <= twoA && stripA <= uniA) { // основной путь: полосы дельты
             if (dL > 0.5f) WT_ADD_RECT(uL - M, uT - M, dL + 2 * M, uh + 2 * M);
             if (dR > 0.5f) WT_ADD_RECT(uR - dR - M, uT - M, dR + 2 * M, uh + 2 * M);
             if (dT > 0.5f) WT_ADD_RECT(uL - M, uT - M, uw + 2 * M, dT + 2 * M);
@@ -1537,7 +1610,27 @@ static int wt_event(const UiEvent *e) {
             if (slot) {
                 float v = g_insDownVal + (e->x - g_insDownX) * ins_step(g_insField);
                 ins_clamp(g_insField, &v);
+                // §14 F5l: x/y выбранного родителя тянет ПОДДЕРЕВО (та же грабля,
+                // что в драге: иначе «виджет разваливается»). Считаем до правки.
+                int fx = g_insField == IF_X, fy = g_insField == IF_Y;
+                float obx = 0, oby = 0, obw = 0, obh = 0;
+                int wk = 0;
+                if ((fx || fy) && w) {
+                    float b0, b1, b2, b3;
+                    wk = wt_subtree_bounds(g_wtSel, &b0, &b1, &b2, &b3) > 1;
+                    obx = b0;
+                    oby = b1;
+                    obw = b2;
+                    obh = b3;
+                }
+                float oldv = *slot;
                 *slot = v;
+                if (wk) {
+                    float d = v - oldv;
+                    float dpx = fx ? ((w->rect.anchors & UI_A_RIGHT) ? -d : d) : 0.0f;
+                    float dpy = fy ? ((w->rect.anchors & UI_A_BOTTOM) ? -d : d) : 0.0f;
+                    wt_subtree_shift_kids(g_wtSel, dpx, dpy);
+                }
                 int now[4], u[4];
                 ins_px(now);
                 u[0] = g_insPrevPx[0] < now[0] ? g_insPrevPx[0] : now[0];
@@ -1550,6 +1643,20 @@ static int wt_event(const UiEvent *e) {
                              : now[1] + now[3];
                 u[2] = rx - u[0];
                 u[3] = ry - u[1];
+                if (wk) { // группа: старые+новые границы поддерева тоже регион
+                    float n0 = 0, n1 = 0, n2 = 0, n3 = 0;
+                    wt_subtree_bounds(g_wtSel, &n0, &n1, &n2, &n3);
+                    int ax = (int)((obx < n0 ? obx : n0) - 2.0f);
+                    int ay = (int)((oby < n1 ? oby : n1) - 2.0f);
+                    int ar = (int)((obx + obw > n0 + n2 ? obx + obw : n0 + n2) + 2.0f);
+                    int ab = (int)((oby + obh > n1 + n3 ? oby + obh : n1 + n3) + 2.0f);
+                    int ur = u[0] + u[2] > ar ? u[0] + u[2] : ar;
+                    int ub = u[1] + u[3] > ab ? u[1] + u[3] : ab;
+                    if (ax < u[0]) u[0] = ax;
+                    if (ay < u[1]) u[1] = ay;
+                    u[2] = ur - u[0];
+                    u[3] = ub - u[1];
+                }
                 int one[1][4] = {{u[0], u[1], u[2], u[3]}};
                 edit_push_dirtyN(one, 1); // растр только региона
                 for (int k = 0; k < 4; k++) g_insPrevPx[k] = now[k];
@@ -3521,6 +3628,122 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
+        // §14 F5l: ГРУППА ЕДЕТ ЗА РОДИТЕЛЕМ. Тестер: «нажал убрать/поставить,
+        // сдвинул — и у меня отвалился пополам виджет»: координаты абсолютные,
+        // поэтому дети оставались на месте и панель «разваливалась».
+        // Figma/UMG/WPF тянут поддерево за родителем — теперь и у нас.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1;
+            ed_chrome_init();
+            ed_chrome_sync();
+            int p1 = wt_spawn(UI_W_PANEL);
+            int b1 = wt_spawn(UI_W_BUTTON);
+            if (!p1 || !b1 || !widget_reparent(&g_wt, b1, p1)) {
+                printf("SELF FAIL: group-setup\n");
+                bad = 1;
+            }
+            UiWidget *pw = widget_get(&g_wt, p1);
+            UiWidget *bw = widget_get(&g_wt, b1);
+            if (!wt_has_kids(p1) || wt_has_kids(b1)) {
+                printf("SELF FAIL: group-has-kids\n");
+                bad = 1;
+            }
+            float px0, py0, pw0, ph0, bx0, by0, bw0, bh0;
+            widget_rect_px(pw, g_WW, g_WH, &px0, &py0, &pw0, &ph0);
+            widget_rect_px(bw, g_WW, g_WH, &bx0, &by0, &bw0, &bh0);
+            float rel0 = (bx0 - px0) * 1000.0f + (by0 - py0);
+            // (1) тащим РОДИТЕЛЯ за тело: дитя обязано ехать с ним
+            UiEvent de;
+            memset(&de, 0, sizeof de);
+            de.kind = UI_EV_DOWN;
+            de.x = px0 + 12;
+            de.y = py0 + 12;
+            g_mouseDown = 1;
+            if (!wt_event(&de)) {
+                printf("SELF FAIL: group-grab\n");
+                bad = 1;
+            }
+            memset(&de, 0, sizeof de);
+            de.kind = UI_EV_MOVE;
+            de.x = px0 + 52;
+            de.y = py0 + 36;
+            wt_event(&de);
+            float px1, py1, pw1, ph1, bx1, by1, bw1, bh1;
+            widget_rect_px(pw, g_WW, g_WH, &px1, &py1, &pw1, &ph1);
+            widget_rect_px(bw, g_WW, g_WH, &bx1, &by1, &bw1, &bh1);
+            if (fabsf((px1 - px0) - 40.0f) > 0.5f || fabsf((py1 - py0) - 24.0f) > 0.5f ||
+                fabsf((bx1 - bx0) - 40.0f) > 0.5f || fabsf((by1 - by0) - 24.0f) > 0.5f) {
+                printf("SELF FAIL: group-move pal=%.0f,%.0f kid=%.0f,%.0f want +40,+24\n",
+                       (double)(px1 - px0), (double)(py1 - py0), (double)(bx1 - bx0),
+                       (double)(by1 - by0));
+                bad = 1;
+            }
+            if (fabsf(((bx1 - px1) * 1000.0f + (by1 - py1)) - rel0) > 1.0f) {
+                printf("SELF FAIL: group-rel moved\n"); // относительное не сохранилось
+                bad = 1;
+            }
+            // (2) dirty-регион покрывает СТАРЫЕ и НОВЫЕ границы поддерева
+            {
+                int covL = 0, covR = 0;
+                for (int i = 0; i < g_dirtyN; i++) {
+                    int x0 = g_dirtyR[i][0], y0 = g_dirtyR[i][1];
+                    int x1 = x0 + g_dirtyR[i][2], y1 = y0 + g_dirtyR[i][3];
+                    if (x0 <= (int)bx0 && y0 <= (int)by0 && x1 >= (int)(bx0 + bw0) &&
+                        y1 >= (int)(by0 + bh0))
+                        covL = 1;
+                    if (x0 <= (int)bx1 && y0 <= (int)by1 && x1 >= (int)(bx1 + bw1) &&
+                        y1 >= (int)(by1 + bh1))
+                        covR = 1;
+                }
+                if (!g_dirtyN || !covL || !covR) {
+                    printf("SELF FAIL: group-dirty n=%d old=%d new=%d\n", g_dirtyN, covL, covR);
+                    bad = 1;
+                }
+            }
+            memset(&de, 0, sizeof de);
+            de.kind = UI_EV_UP;
+            de.x = px0 + 52;
+            de.y = py0 + 36;
+            g_mouseDown = 0;
+            wt_event(&de);
+            // (3) поле x инспектора тянет то же поддерево
+            {
+                g_wtSel = p1;
+                g_insField = IF_X;
+                g_insDownVal = pw->rect.x;
+                g_insDownX = 200.0f;
+                g_insPrevPx[0] = 0;
+                g_insPrevPx[1] = 0;
+                g_insPrevPx[2] = 0;
+                g_insPrevPx[3] = 0;
+                float cb0 = 0, cb1 = 0, cb2 = 0, cb3 = 0;
+                widget_rect_px(bw, g_WW, g_WH, &cb0, &cb1, &cb2, &cb3);
+                float oldx = pw->rect.x;
+                UiEvent ie;
+                memset(&ie, 0, sizeof ie);
+                ie.kind = UI_EV_MOVE;
+                ie.x = 212.0f; // +12 px = +12 по x
+                ie.y = 10.0f;
+                wt_event(&ie);
+                float cb4 = 0, cb5 = 0, cb6 = 0, cb7 = 0;
+                widget_rect_px(bw, g_WW, g_WH, &cb4, &cb5, &cb6, &cb7);
+                float want = pw->rect.x - oldx;
+                if (fabsf((cb4 - cb0) - want) > 0.5f) {
+                    printf("SELF FAIL: group-ins kid=%.0f want=%.0f\n", (double)(cb4 - cb0),
+                           (double)want);
+                    bad = 1;
+                }
+                g_insField = -1;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+            ed_chrome_init();
+            ed_chrome_sync();
+        }
         // §14 F5k: ИНСТРУМЕНТЫ-ВКЛАДКИ. Тестер: «хотел, чтобы панели были
         // ИНСТРУМЕНТАМИ: открыл сам — вот они, закрыл — места не занимают»
         // (View в Word / панели в Roblox Studio). И панель не должна уползать за
@@ -3917,6 +4140,7 @@ int main(int argc, char **argv) {
     const char *cl2Env = getenv("UI_EDIT_CLICK2"); // x:y — второй шаг (кадр 4)
     const char *tdEnv = getenv("UI_EDIT_TDRAG");
     const char *tdpEnv = getenv("UI_EDIT_TDROP");
+    const char *scP = getenv("UI_EDIT_SCRIPT"); // §14 F5k2: скрипт действий (шаг/кадр)
     int tdcnt = 0;
     static const float hintCol[4] = {0.55f, 0.55f, 0.58f, 1.0f};
     while (!glfwWindowShouldClose(win) && !g_quit) {
@@ -4023,6 +4247,67 @@ int main(int argc, char **argv) {
                 route_event(&de);
                 printf("ui_edit: drag %d,%d -> %d,%d grab=%d float=%d\n", x1, y1, x2, y2,
                        g_edGrab, ed_panel_float(0) || ed_panel_float(1) || ed_panel_float(2));
+            }
+        }
+        if (scP && tdcnt >= 3) { // §14 F5k2: СКРИПТ действий — воспроизведение
+            // жалоб тестера (клик/драг по шагам, ОДИН шаг на кадр). Формат:
+            //   UI_EDIT_SCRIPT="c:x:y;d:x1:y1:x2:y2;c:x:y"
+            // После шага печатается состояние (sel/open/float/панели). Точка
+            // замены: запись живого ввода + реплэй (пока — ручной скрипт).
+            while (*scP == ';') scP++;
+            if (*scP) {
+                const char *se = strchr(scP, ';');
+                char act[96];
+                size_t an = se ? (size_t)(se - scP) : strlen(scP);
+                if (an > sizeof act - 1) an = sizeof act - 1;
+                memcpy(act, scP, an);
+                act[an] = 0;
+                scP = se ? se + 1 : scP + an;
+                float a = 0, b = 0, c2 = 0, d2 = 0;
+                if (sscanf(act, "c:%f:%f", &a, &b) == 2) {
+                    UiEvent e2;
+                    memset(&e2, 0, sizeof e2);
+                    e2.kind = UI_EV_DOWN;
+                    e2.x = a;
+                    e2.y = b;
+                    route_event(&e2);
+                    memset(&e2, 0, sizeof e2);
+                    e2.kind = UI_EV_UP;
+                    e2.x = a;
+                    e2.y = b;
+                    route_event(&e2);
+                } else if (sscanf(act, "d:%f:%f:%f:%f", &a, &b, &c2, &d2) == 4) {
+                    UiEvent e2;
+                    memset(&e2, 0, sizeof e2);
+                    e2.kind = UI_EV_DOWN;
+                    e2.x = a;
+                    e2.y = b;
+                    g_mouseDown = 1;
+                    route_event(&e2);
+                    for (int s = 1; s <= 8; s++) { // долями — как живая мышь
+                        memset(&e2, 0, sizeof e2);
+                        e2.kind = UI_EV_MOVE;
+                        e2.x = a + (c2 - a) * (float)s / 8.0f;
+                        e2.y = b + (d2 - b) * (float)s / 8.0f;
+                        route_event(&e2);
+                    }
+                    memset(&e2, 0, sizeof e2);
+                    e2.kind = UI_EV_UP;
+                    e2.x = c2;
+                    e2.y = d2;
+                    g_mouseDown = 0;
+                    route_event(&e2);
+                }
+                printf("ui_edit: script %s -> sel=%d open=%d%d%d float=%d%d%d", act, g_wtSel,
+                       g_edOpen[0], g_edOpen[1], g_edOpen[2], ed_panel_float(0),
+                       ed_panel_float(1), ed_panel_float(2));
+                for (int i = 0; i < 3; i++) {
+                    float x, y, w, h;
+                    ed_rect(g_edPanels[i], &x, &y, &w, &h);
+                    printf(" p%d=%.0f,%.0f %.0fx%.0f", i, (double)x, (double)y, (double)w,
+                           (double)h);
+                }
+                printf("\n");
             }
         }
         if (cl2Env && cl2Env[0] >= '0' && tdcnt == 4) { // F5j: второй шаг сценария
