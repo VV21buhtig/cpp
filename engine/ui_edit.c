@@ -1226,6 +1226,21 @@ static int wt_delete_sel(void) {
 }
 
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
+// §14 F5h2: панели хрома (палитра/дерево/инспектор) лежат ПОВЕРХ холста, значит
+// клик по САМОЙ панели (полоса заголовка, пустое место под строками) не должен ни
+// выбирать виджет под ней, ни ронять выбор. Тестер: клик по полосе «INSPECTOR»
+// схлопывал все поля (выбор сбрасывался как на пустом холсте) и они «не
+// возвращались», пока не выберешь виджет заново в дереве.
+static int ed_chrome_covers(float px, float py) {
+    int ids[3] = {g_edPal, g_edTree, g_edIns};
+    for (int i = 0; i < 3; i++) {
+        float x, y, w, h;
+        ed_rect(ids[i], &x, &y, &w, &h);
+        if (px >= x && px < x + w && py >= y && py < y + h) return 1;
+    }
+    return 0;
+}
+
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_WHEEL) { // скролл списка над панелью дерева
         float px, py, pw, ph;
@@ -1407,6 +1422,7 @@ static int wt_event(const UiEvent *e) {
         wt_drag_begin(g_wtSel, hb, e->x, e->y);
         return 1;
     }
+    if (ed_chrome_covers(e->x, e->y)) return 1; // панель поверх холста: клик её
     // F5d: Ctrl+клик — выбрать СЛЕДУЮЩЕГО НИЖЕ в стопке (Figma deep select):
     // иначе верхний виджет «загораживает» нижнего и его не достать мышью.
     int deep = (e->mods & GLFW_MOD_CONTROL) != 0;
@@ -2954,6 +2970,71 @@ int main(int argc, char **argv) {
             g_wtSel = 0;
             g_treeScroll = 0;
         }
+        // §14 F5h2: панели хрома лежат ПОВЕРХ холста. Тестер: клик по полосе
+        // заголовка инспектора («возле названия») СХЛОПЫВАЛ все поля — выбор
+        // сбрасывался, будто кликнули по пустому холсту; и «не возвращался»,
+        // пока не выберешь виджет заново в дереве. Панель должна СЪЕДАТЬ клик.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            ed_chrome_sync();
+            int ca = wt_spawn(UI_W_PANEL);
+            g_wtSel = ca; // выбран: поля инспектора есть
+            UiEvent ce;
+            float px, py, pw, ph;
+            // (1) полоса заголовка панели инспектора (над строкой имени)
+            ed_rect(g_edIns, &px, &py, &pw, &ph);
+            memset(&ce, 0, sizeof ce);
+            ce.kind = UI_EV_DOWN;
+            ce.x = px + 30;
+            ce.y = py + 4;
+            if (!wt_event(&ce) || g_wtSel != ca) {
+                printf("SELF FAIL: chrome-click-head sel=%d want %d\n", g_wtSel, ca);
+                bad = 1;
+            }
+            // (2) пустое место панели ниже полей
+            memset(&ce, 0, sizeof ce);
+            ce.kind = UI_EV_DOWN;
+            ce.x = px + 20;
+            ce.y = py + ph - 8;
+            if (!wt_event(&ce) || g_wtSel != ca) {
+                printf("SELF FAIL: chrome-click-ins-body sel=%d\n", g_wtSel);
+                bad = 1;
+            }
+            // (3) пустое место списка дерева (ниже строк)
+            ed_rect(g_edTree, &px, &py, &pw, &ph);
+            memset(&ce, 0, sizeof ce);
+            ce.kind = UI_EV_DOWN;
+            ce.x = px + 20;
+            ce.y = py + ph - 8;
+            if (!wt_event(&ce) || g_wtSel != ca) {
+                printf("SELF FAIL: chrome-click-tree-body sel=%d\n", g_wtSel);
+                bad = 1;
+            }
+            // (4) поле палитры ПРАВЕЕ кнопок (пустая полоса панели)
+            ed_rect(g_edPal, &px, &py, &pw, &ph);
+            memset(&ce, 0, sizeof ce);
+            ce.kind = UI_EV_DOWN;
+            ce.x = px + pw - 3;
+            ce.y = py + 60;
+            if (!wt_event(&ce) || g_wtSel != ca) {
+                printf("SELF FAIL: chrome-click-pal-body sel=%d\n", g_wtSel);
+                bad = 1;
+            }
+            // (5) ХОЛСТ (плашка вьюпорта) — наоборот, снимает выбор (как было)
+            memset(&ce, 0, sizeof ce);
+            ce.kind = UI_EV_DOWN;
+            ce.x = (float)(g_vpx + g_vpw / 2);
+            ce.y = (float)(g_vpy + g_vph - 20);
+            if (!wt_event(&ce) || g_wtSel != 0) {
+                printf("SELF FAIL: chrome-click-canvas sel=%d\n", g_wtSel);
+                bad = 1;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -3185,6 +3266,7 @@ int main(int argc, char **argv) {
     //   UI_EDIT_TDRAG=<строка>     — начать драг строки дерева (призрак+индикатор);
     //   UI_EDIT_TDROP=<s>:<t>:<m>  — применить бросок (строки дерева, m 0/1/2).
     // Выполняем на 3-м кадре (УЖЕ после ресайза окна — координаты настоящие).
+    const char *clEnv = getenv("UI_EDIT_CLICK"); // x:y — клик по коду события
     const char *tdEnv = getenv("UI_EDIT_TDRAG");
     const char *tdpEnv = getenv("UI_EDIT_TDROP");
     int tdcnt = 0;
@@ -3236,6 +3318,23 @@ int main(int argc, char **argv) {
             }
         }
         tdcnt++; // кадр: синтетика F5h ждёт ресайза окна (координаты настоящие)
+        if (clEnv && clEnv[0] >= '0' && tdcnt == 3) { // F5h2: клик по коду события
+            int cx = -1, cy = -1;
+            if (sscanf(clEnv, "%d:%d", &cx, &cy) == 2) {
+                UiEvent ce;
+                memset(&ce, 0, sizeof ce);
+                ce.kind = UI_EV_DOWN;
+                ce.x = (float)cx;
+                ce.y = (float)cy;
+                route_event(&ce);
+                memset(&ce, 0, sizeof ce);
+                ce.kind = UI_EV_UP;
+                ce.x = (float)cx;
+                ce.y = (float)cy;
+                route_event(&ce);
+                printf("ui_edit: click %d,%d -> sel=%d\n", cx, cy, g_wtSel);
+            }
+        }
         if ((tdEnv || tdpEnv) && tdcnt >= 3) {
             ed_chrome_sync();
             tree_build();
@@ -3304,6 +3403,15 @@ int main(int argc, char **argv) {
                              g_editSelf ? "EDITOR UI (F7)" : "WIDGETS", hcol);
                 ed_rect(g_edIns, &px, &py, &pw, &ph);
                 ui_text_quad(text, px + PAL_PAD, py + 4, "INSPECTOR", hcol);
+                // Пустое поле = НЕ «сломалось»: пишем, что делать (тестер:
+                // «поля схлопнулись и не возвращаются» — на деле выбор снят).
+                if (!g_wtSel) {
+                    static const float dcol[4] = {0.45f, 0.47f, 0.53f, 1.0f};
+                    ui_text_quad(text, px + PAL_PAD, py + PAL_PAD + PAL_TITLE + 2,
+                                 "no selection", dcol);
+                    ui_text_quad(text, px + PAL_PAD, py + PAL_PAD + PAL_TITLE + 20,
+                                 "pick in WIDGETS", dcol);
+                }
             }
             for (int i = 0; i < UI_MAX_WIDGETS; i++) {
                 const UiWidget *w = widget_cget(&g_wt, i + 1);
