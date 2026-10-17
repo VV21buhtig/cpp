@@ -61,12 +61,13 @@ static int g_wtN[3] = {0, 0, 0}; // счётчики имён по типу
 #define PAL_BW 104
 #define PAL_BH 26
 #define PAL_GAP 4
-#define PAL_N 3
+#define PAL_N 4
 #define PAL_PAD 8    // внутренние поля хром-панели
 #define PAL_TITLE 22 // строка заголовка панели
 #define WT_HANDLE 8.0f // сторона нарисованного квадрата ручки ресайза
-static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL};
-static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label"};
+// PAL_TYPE > 0 — тип для спавна; < 0 — ДЕЙСТВИЕ над выбранным (сейчас: удалить).
+static const int PAL_TYPE[PAL_N] = {UI_W_PANEL, UI_W_BUTTON, UI_W_LABEL, -1};
+static const char *PAL_LABEL[PAL_N] = {"Panel", "Button", "Label", "Delete"};
 
 // --- §14 F3c(1b): ХРОМ РЕДАКТОРА = ВИДЖЕТЫ (self-host) ---
 // Свой UI правщика живёт ВТОРЫМ деревом (g_edWt): палитра/дерево/инспектор — это
@@ -259,6 +260,11 @@ static void pal_draw(RcVecShape *sh, int *n) {
         float x, y, w, h;
         pal_rect(i, &x, &y, &w, &h);
         float c[4] = {0.20f, 0.22f, 0.27f, 1.0f};
+        if (PAL_TYPE[i] < 0) { // строка-действие (удаление) — краснее
+            c[0] = 0.34f;
+            c[1] = 0.16f;
+            c[2] = 0.19f;
+        }
         if (i == g_palHot) {
             c[0] = 0.30f;
             c[1] = 0.45f;
@@ -712,6 +718,24 @@ static void wt_persist(void) {
     if (wt_persist_ok()) widget_json_save(&g_wt, wt_path());
 }
 
+// Удаление выбранного (вместе с поддеревом). Выбор уходит на родителя — как в
+// UE/Unity: после удаления «активен» контейнер, а не пустота. Хром редактора не
+// удаляем: панели EdPalette/EdHierarchy/EdInspector — сам инструмент, не документ.
+static int wt_delete_sel(void) {
+    if (g_editSelf || !g_wtSel) return 0;
+    const UiWidget *w = widget_cget(g_act, g_wtSel);
+    int par = w ? w->parent : 0;
+    if (!widget_remove(g_act, g_wtSel)) return 0;
+    g_wtSel = widget_cget(g_act, par) ? par : 0;
+    g_dragId = 0;    // удалили под курсором — драг снимаем
+    g_dragHandle = 0;
+    g_insField = -1; // и правку поля инспектора
+    g_palHot = -1;
+    edit_push();
+    wt_persist(); // коммит: удаление
+    return 1;
+}
+
 // Событие в холст/палитру. 1 = наше (доки не трогаем). Спавн/выбор/драг — тут.
 static int wt_event(const UiEvent *e) {
     if (e->kind == UI_EV_WHEEL) { // скролл списка над панелью дерева
@@ -802,8 +826,12 @@ static int wt_event(const UiEvent *e) {
     }
     int pi = pal_hit(e->x, e->y);
     if (pi >= 0) { // палитра поверх всего
-        wt_spawn(PAL_TYPE[pi]);
-        wt_persist(); // коммит: новый виджет
+        if (PAL_TYPE[pi] >= 0) { // тип: Panel=0 тоже валиден!
+            wt_spawn(PAL_TYPE[pi]);
+            wt_persist(); // коммит: новый виджет
+        } else {
+            wt_delete_sel(); // строка-действие: удалить выбранное (поддерево)
+        }
         return 1;
     }
     tree_build();
@@ -1047,6 +1075,10 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     }
     if (key == GLFW_KEY_F7) { // self-host: правим собственный UI редактора
         ed_self_toggle(!g_editSelf);
+        return;
+    }
+    if (key == GLFW_KEY_DELETE || key == GLFW_KEY_BACKSPACE) { // удалить выбранное
+        wt_delete_sel();
         return;
     }
     // Инструменту нужны: Tab (коллапс), Z/Y (undo), L (уже в EDIT — no-op).
@@ -1771,6 +1803,72 @@ int main(int argc, char **argv) {
             g_wtSel = 0;
             g_treeScroll = 0;
         }
+        // Удаление виджета: поддерево целиком, выбор уходит на родителя, пустая
+        // сцена — отказ. Строка палитры Delete — ДЕЙСТВИЕ (PAL_TYPE < 0), а хром
+        // редактора (своё дерево) удалить нельзя.
+        {
+            widget_tree_init(&g_wt);
+            g_editSelf = 0;
+            g_act = &g_wt;
+            g_wtSel = 0;
+            g_palHot = -1;
+            int root = wt_spawn(UI_W_PANEL);
+            int k1 = wt_spawn(UI_W_BUTTON);
+            int k2 = wt_spawn(UI_W_LABEL);
+            widget_reparent(&g_wt, k1, root);
+            widget_reparent(&g_wt, k2, root);
+            if (g_wt.count != 3) {
+                printf("SELF FAIL: del-setup %d\n", g_wt.count);
+                bad = 1;
+            }
+            g_wtSel = root; // родитель: уходит всё поддерево
+            if (!wt_delete_sel() || g_wt.count != 0 || widget_cget(&g_wt, k1) ||
+                widget_cget(&g_wt, k2)) {
+                printf("SELF FAIL: del-sub %d\n", g_wt.count);
+                bad = 1;
+            }
+            if (wt_delete_sel() || g_wtSel) { // удалять нечего
+                printf("SELF FAIL: del-empty\n");
+                bad = 1;
+            }
+            int a = wt_spawn(UI_W_PANEL);
+            int b = wt_spawn(UI_W_BUTTON);
+            widget_reparent(&g_wt, b, a);
+            g_wtSel = b; // ребёнок: остаётся родитель и становится выбранным
+            if (!wt_delete_sel() || g_wt.count != 1 || g_wtSel != a) {
+                printf("SELF FAIL: del-child %d sel %d\n", g_wt.count, g_wtSel);
+                bad = 1;
+            }
+            { // клик по строке палитры Delete = то же (проверяет и PAL_TYPE < 0)
+                float x, y, w, h;
+                pal_rect(PAL_N - 1, &x, &y, &w, &h);
+                UiEvent de;
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_DOWN;
+                de.x = x + 4;
+                de.y = y + 4;
+                route_event(&de);
+                if (g_wt.count != 0 || g_wtSel) {
+                    printf("SELF FAIL: del-pal %d\n", g_wt.count);
+                    bad = 1;
+                }
+            }
+            { // хром редактора — не документ: не удаляется
+                int keep = g_edWt.count;
+                g_editSelf = 1;
+                g_act = &g_edWt;
+                g_wtSel = g_edPal;
+                if (wt_delete_sel() || g_edWt.count != keep) {
+                    printf("SELF FAIL: del-self %d\n", g_edWt.count);
+                    bad = 1;
+                }
+                g_editSelf = 0;
+                g_act = &g_wt;
+                g_wtSel = 0;
+            }
+            widget_tree_init(&g_wt);
+            g_wtSel = 0;
+        }
         ui_panels_destroy(pn);
         // Тест мог писать свою раскладку: своё убираем, чужое возвращаем.
         remove("engine/assets/layout.json");
@@ -2109,8 +2207,8 @@ int main(int argc, char **argv) {
                 }
             }
             ui_text_quad(text, 10.0f, (float)(g_WH - 48),
-                         "frontedit: click palette=add | click widget=select | blue edges"
-                         " resize | wheel over list=scroll | F7 editor UI | Tab collapse | Esc",
+                         "frontedit: palette=add | click=select | blue edges resize | Del"
+                         " remove | wheel over list=scroll | F7 editor UI | Tab collapse | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок (диагноз «съеденного fps»)
                 char hud[48];
