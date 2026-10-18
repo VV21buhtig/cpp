@@ -81,6 +81,11 @@ const char *ed_ws_caption(int i) {
     return (p && p->caption) ? p->caption : "";
 }
 
+const char *ed_ws_tag(int i) {
+    const EdPanelDesc *p = ed_ws_panel(i);
+    return (p && p->tag) ? p->tag : "";
+}
+
 int ed_ws_dock(int i) {
     const EdPanelDesc *p = ed_ws_panel(i);
     return p ? (int)p->dock : ED_DK_LEFT;
@@ -89,4 +94,9 @@ int ed_ws_dock(int i) {
 int ed_ws_open_default(int i) {
     const EdPanelDesc *p = ed_ws_panel(i);
     return p ? (p->open != 0) : 0;
+}
+
+int ed_ws_look(int i) {
+    const EdPanelDesc *p = ed_ws_panel(i);
+    return p ? (int)p->look : 1;
 }

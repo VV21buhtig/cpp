@@ -13,6 +13,8 @@
 // кадровый буфер. Истина о раскладке и панелях — в функциях ниже.
 #pragma once
 
+#include <stdio.h> // FILE: свои поля режима пишутся в тот же файл состояния
+
 #include "ui/ui_widget.h"        // UiWidgetTree: панель = виджет (self-host)
 #include "editor/ed_workspace.h" // ED_PANEL_MAX (сколько панелей у режима)
 
@@ -24,12 +26,27 @@
 #define ED_DOCKH_MIN 60   // то же для НИЖНЕГО дока: меньше — не видно ни строки
 #define ED_SPLIT_HIT 7    // зона захвата сплиттера у края дока (px)
 #define ED_TITLE_H 22     // полоса ЗАГОЛОВКА панели (за неё панель тащат)
+#define ED_PANEL_GAP 10   // зазор между панелями одного дока (стопка)
+#define ED_SHELL_PATH "engine/assets/ed_panels.json"       // состояние инструментов
+#define ED_SHELL_BENCH_PATH "engine/assets/ed_panels.bench.json" // то же для тест/бенч
 #define ED_TOP_CHROME 0   // легаси-полос в окне редактора нет: их несёт лента
 #define ED_TABS_H 26      // полоса заголовков лент
 #define ED_RIBBON_H 40    // полоса кнопок активной ленты
 
 // Что тянет сплиттер (у доков три края — один механизм, не три сплиттера).
 enum { ED_SP_NONE = 0, ED_SP_LEFT = 1, ED_SP_RIGHT = 2, ED_SP_BOTTOM = 3 };
+
+// Что РЕЖИМ обязан сообщить оболочке (без этого она не поставит панель в док и не
+// сохранит его состояние). Всё остальное — у самого режима.
+typedef struct EdShellMode {
+    // Желаемый размер панели i: h = высота содержимого, minh = минимум (одна
+    // строка). minh == 0 — режим сам следит за размером (оболочка не зажимает).
+    void (*panel_size)(int i, float *h, float *minh);
+    // Свои поля режима в ОБЩИЙ файл состояния (активная лента, инструмент сцены):
+    // пишем ВНУТРЬ объекта (после полей хоста), читаем из строки файла.
+    void (*state_write)(FILE *f);
+    void (*state_read)(const char *json);
+} EdShellMode;
 
 // ОБОЛОЧКА. Кадр ЧИТАЕТ поля; менять — только через ed_shell_* (иначе раскладка
 // разъезжается: полосы перестают совпадать с вьюпортом, порядок панелей — с z).
@@ -51,7 +68,28 @@ typedef struct EdShell {
     int order[ED_PANEL_MAX];   // порядок панелей: ПОСЛЕДНИЙ = верхний
     int grab;                  // какую панель тащат за заголовок (-1 = нет)
     float grabDX, grabDY;      // где взяли внутри панели
+    // --- ДВЕРИ РЕЖИМА и герметичность ---
+    EdShellMode mode;          // что РЕЖИМ сообщает оболочке (копия, не указатель)
+    int no_save;               // 1 = файл состояния не писать (--selftest)
 } EdShell;
+
+// Режим отдаёт оболочке свои двери (зовётся ДО ed_shell_init).
+void ed_shell_mode(EdShell *S, const EdShellMode *m);
+// Герметичность: 1 = не писать файл состояния (тест/прогон юзера не пачкаем).
+void ed_shell_no_save(EdShell *S, int v);
+// Создать хром: дерево + виджеты-панели по таблице режима (имя/вид — из записи).
+void ed_shell_init(EdShell *S);
+// Расставить панели по их докам (закрытые = 0x0, оторванные не трогаем).
+void ed_shell_sync(EdShell *S, int ww, int wh);
+// «Домашнее» место панели в доке — БЕЗ движения виджета (сравнения/док-зона).
+void ed_shell_panel_home(const EdShell *S, int ww, int wh, int i, float *x, float *y, float *w,
+                         float *h);
+// Панель не выезжает за окно ни одной стороной (таск + ресайз).
+void ed_shell_panels_keep_inside(EdShell *S, int ww, int wh);
+// Состояние инструментов: путь (в тест/сид-режиме — свой файл), запись, чтение.
+const char *ed_shell_path(void);
+void ed_shell_save(const EdShell *S);
+void ed_shell_load(EdShell *S, int ww, int wh);
 
 void ed_shell_reset(EdShell *S); // дефолты доков + открытость панелей из режима
 int ed_shell_top(void);          // верх инструментов (под полосой лент)

@@ -26,8 +26,10 @@ enum { ED_DK_LEFT = 0, ED_DK_RIGHT = 1, ED_DK_BOTTOM = 2 };
 typedef struct EdPanelDesc {
     const char *id;      // машинный id ("palette"/"tree"/"inspector"/"console")
     const char *caption; // подпись в шапке панели ("PALETTE")
+    const char *tag;     // имя ВИДЖЕТА панели в хром-дереве ("EdPalette")
     unsigned char dock;  // ED_DK_*
     unsigned char open;  // открыта по умолчанию (1/0)
+    unsigned char look;  // вид панели: 0 = основной фон, 1 = вторичный
 } EdPanelDesc;
 
 // Один режим работы редактора.
@@ -55,5 +57,7 @@ const char *ed_ws_tab(int i);        // подпись ленты ("" вне г�
 int ed_ws_panels(void);              // сколько инструментов у активного режима
 const EdPanelDesc *ed_ws_panel(int i); // запись панели (0 вне границ)
 const char *ed_ws_caption(int i);    // подпись панели ("" вне границ)
+const char *ed_ws_tag(int i);        // имя виджета панели в хром-дереве ("" вне границ)
 int ed_ws_dock(int i);               // док панели (ED_DK_LEFT вне границ)
 int ed_ws_open_default(int i);       // открыта ли панель по умолчанию (0 вне границ)
+int ed_ws_look(int i);               // вид панели (1 = вторичный фон вне границ)

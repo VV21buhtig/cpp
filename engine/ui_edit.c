@@ -196,34 +196,21 @@ static int tabs_hit(float px, float py, int *which) { // вкладка под �
     return 0;
 }
 static void tabs_toggle(int i); // ниже: нужны sync/persist
+// Двери режима «UI» оболочке (определения ниже: ed_chrome_init их только отдаёт).
+static void ui_panel_size(int i, float *h, float *minh);
+static void ui_state_write(FILE *f);
+static void ui_state_read(const char *json);
 
 
 static void ed_chrome_init(void) {
-    ed_host_init(); // ХОСТ: реестр команд (одна таблица) + документы
-    widget_tree_init(&g_sh.wt);
-    memset(g_sh.moved, 0, sizeof g_sh.moved);
-    UiWidgetStyle s, s2;
-    memset(&s, 0, sizeof s);
-    s.alpha = 1.0f;
-    s.rounding = 6.0f;
-    s.fontSize = 14.0f;
-    s.bg[0] = 0.11f;
-    s.bg[1] = 0.12f;
-    s.bg[2] = 0.16f;
-    s.bg[3] = 1.0f;
-    s2 = s;
-    s2.bg[0] = 0.09f;
-    s2.bg[1] = 0.10f;
-    s2.bg[2] = 0.13f;
-    UiWidgetRect r;
-    memset(&r, 0, sizeof r);
-    r.anchors = UI_A_LEFT | UI_A_TOP;
-    g_sh.panel[ED_PN_PAL] = widget_add(&g_sh.wt, UI_W_PANEL, "EdPalette", 0, &r, &s);
-    g_sh.panel[ED_PN_TREE] = widget_add(&g_sh.wt, UI_W_PANEL, "EdHierarchy", 0, &r, &s2);
-    g_sh.panel[ED_PN_INS] = widget_add(&g_sh.wt, UI_W_PANEL, "EdInspector", 0, &r, &s2);
-    g_sh.panel[ED_PN_CON] = widget_add(&g_sh.wt, UI_W_PANEL, "EdConsole", 0, &r, &s2);
-    for (int i = 0; i < ed_ws_panels(); i++) g_sh.order[i] = i; // F5j: порядок = z
-    g_sh.grab = -1;
+    ed_host_init(); // ХОСТ: реестр команд (одна таблица) + документы + таблица режима
+    EdShellMode m;  // двери режима оболочке: размер панели + свои поля состояния
+    memset(&m, 0, sizeof m);
+    m.panel_size = ui_panel_size;
+    m.state_write = ui_state_write;
+    m.state_read = ui_state_read;
+    ed_shell_mode(&g_sh, &m);
+    ed_shell_init(&g_sh); // хром: дерево + виджеты-панели режима (имя/вид — из записи)
 }
 
 static void pal_rect(int i, float *x, float *y, float *w, float *h) {
@@ -869,130 +856,39 @@ static void ins_rect(int i, float *x, float *y, float *w, float *h) {
     *h = (i < 0 ? (float)(INS_HEAD - 4) : (float)INS_RH);
 }
 
-// Раскладка хрома по умолчанию: панели привязаны к вьюпорту (L|T-якоря и оффсеты
-// окна) — двинулся док, двинулся хром. Правку юзера (g_sh.moved) не перетираем.
-// §14 F5j: «домашнее» место панели в доке (панели соседствуют, не пересекаются).
-static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
-    // §14 F5l(4): панели стоят в СВОИХ полосах дока, а не поверх экрана игры:
-    // левый док — от левого края ОКНА, правый — от правого, вьюпорт = середина.
-    float palW = (float)g_sh.dockWl;
-    float palH =
-        (float)(ED_PAD * 2 + ED_TITLE_H + ed_pal_n() * (PAL_BH + PAL_GAP) - PAL_GAP);
-    float x0 = (float)ED_PAD;
-    float y0 = (float)ed_shell_top(); // под полосой лент (F5l(2): одна точка правды)
-    // Ш1c: нижний док (консоль) съедает низ окна. Боковые панели НЕ имеют права
-    // залезть под него — иначе «вьюпорт = остаток» врёт, а консоль накрыта деревом.
-    float roomH = (float)(g_WH - g_sh.dockB - ED_PAD) - y0;
-    if (palH > roomH) palH = roomH;
-    if (i == 0) { // палитра: верх левого дока
-        *ox = x0;
-        *oy = y0;
-        *ow = palW;
-        *oh = palH;
+// --- ДВЕРИ РЕЖИМА «UI» оболочке (A3-2b-2) -------------------------------------
+// Оболочка ставит панель в док и хранит состояние, но ВЫСОТУ задаёт СОДЕРЖИМОЕ, а
+// содержимое знает только режим. Здесь режим отвечает на её вопросы: размер панели,
+// и свои поля в общий файл состояния (одна лента/инструмент сцены — один файл).
+static void ui_panel_size(int i, float *h, float *minh) {
+    if (i == ED_PN_PAL) { // палитра: заголовок + ряды действий (один вид реестра)
+        *h = (float)(ED_PAD * 2 + ED_TITLE_H + ed_pal_n() * (PAL_BH + PAL_GAP) - PAL_GAP);
+        *minh = 1.0f; // зажимаем в свободное место дока, но не схлопываем в ноль
         return;
     }
-    if (i == 1) { // дерево: под палитрой (или на её месте, если палитра закрыта)
-        float ty = g_sh.open[0] ? y0 + palH + 10 : y0;
-        *ox = x0;
-        *oy = ty;
-        *ow = palW;
-        {
-            float h = (float)(ED_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10);
-            float avail = (float)(g_WH - g_sh.dockB) - ty - ED_PAD;
-            float one = (float)(ED_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH);
-            if (h > avail) h = avail;
-            if (h < one) h = one;
-            *oh = h;
-        }
+    if (i == ED_PN_TREE) { // дерево: заголовок + путь + видимая часть списка
+        *h = (float)(ED_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH * 10);
+        *minh = (float)(ED_PAD * 2 + TREE_HDR + TREE_PATH + TREE_RH); // минимум — строка
         return;
     }
-    if (ed_ws_dock(i) == ED_DK_BOTTOM) { // Ш1c: КОНСОЛЬ — нижний док окна (VS Code)
-        *ox = (float)ED_PAD;
-        *oy = (float)(g_WH - g_sh.dockH - ED_PAD);
-        *ow = (float)(g_WW - 2 * ED_PAD);
-        *oh = (float)g_sh.dockH;
+    if (i == ED_PN_INS) { // инспектор: заголовок + поля выбранного виджета
+        *h = (float)(ED_PAD * 2 + ED_TITLE_H + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+        *minh = 0.0f; // поля НЕ режем: лучше торчат за край, чем молча исчезнут
         return;
     }
-    *ow = (float)(g_sh.dockWr + 2 * ED_PAD); // инспектор: правый док (ширина тянется)
-    *ox = (float)(g_WW - g_sh.dockWr - ED_PAD);
-    *oy = y0;
-    *oh = (float)(ED_PAD * 2 + ED_TITLE_H + INS_HEAD + IF_N * (INS_RH + INS_GAP));
+    *h = (float)ED_PAD * 2; // консоль живёт в нижнем доке: высоту задаёт сам док
+    *minh = 0.0f;
 }
-// Раскладка хрома: панели, которых юзер НЕ двигал, ставим на их док-места.
-// Оторванную (g_sh.moved) не трогаем — она живёт там, куда её положил юзер.
-static void ed_chrome_sync(void) {
-    ed_shell_compute(&g_sh, g_WW, g_WH); // F5l(4): вьюпорт = окно минус полосы доков
-    for (int i = 0; i < ed_ws_panels(); i++) {
-        UiWidget *p = widget_get(&g_sh.wt, g_sh.panel[i]);
-        if (!p) continue;
-        if (!g_sh.open[i]) { // F5k: инструмент закрыт -> виджет нулевого размера:
-            // рантайм его не рисует, хит/ряды (ширины считаются от панели) — тоже.
-            p->rect.anchors = UI_A_LEFT | UI_A_TOP;
-            p->rect.x = p->rect.y = 0;
-            p->rect.w = p->rect.h = 0;
-            continue;
-        }
-        if (g_sh.moved[g_sh.panel[i] - 1]) continue; // F5j: оторванную не трогаем
-        float x, y, w, h;
-        ed_panel_home(i, &x, &y, &w, &h);
-        p->rect.anchors = UI_A_LEFT | UI_A_TOP;
-        p->rect.x = x;
-        p->rect.y = y;
-        p->rect.w = w;
-        p->rect.h = h;
-    }
+
+// Свои поля режима в ОБЩИЙ файл состояния (тот же ed_panels.json): активная лента и
+// инструмент сцены. Второго файла не заводим — одно состояние, один файл.
+static void ui_state_write(FILE *f) {
+    fprintf(f, "\"edTab\": %d,\n  \"edTool\": %d", g_edTab, g_panels ? ui_panels_tool(g_panels) : 0);
 }
-// §14 F5k: панель не выезжает за окно ни одной стороной (тестер: «вверх невидимая
-// полоса, а влево/вправо/вниз уползает за край»). Тянем при таске и при ресайзе.
-static void ed_panels_clamp(void) {
-    for (int i = 0; i < ed_ws_panels(); i++) {
-        if (!g_sh.open[i]) continue;
-        UiWidget *p = widget_get(&g_sh.wt, g_sh.panel[i]);
-        if (!p) continue;
-        float mx = (float)g_WW - p->rect.w, my = (float)g_WH - p->rect.h;
-        if (mx < 0) mx = 0;
-        if (my < 0) my = 0;
-        if (p->rect.x > mx) p->rect.x = mx;
-        if (p->rect.x < 0) p->rect.x = 0;
-        if (p->rect.y > my) p->rect.y = my;
-        if (p->rect.y < 0) p->rect.y = 0;
-    }
-}
-// §14 F5k: хранилище состояния инструментов. layout.json делят доки (§11) и
-// документ (§14) — хром редактора туда не лезет, у него свой маленький файл.
-// Герметичность: в тест/сид/бенч-режимах путь уводится в …bench.json.
-#define ED_PANELS_PATH "engine/assets/ed_panels.json"
-#define ED_PANELS_BENCH "engine/assets/ed_panels.bench.json"
-static const char *ed_panels_path(void) {
-    if (getenv("UI_EDIT_BENCH") || getenv("UI_EDIT_SEED")) return ED_PANELS_BENCH;
-    return ED_PANELS_PATH;
-}
-static void ed_panels_save(void) {
-    if (g_selftest && !getenv("UI_EDIT_BENCH")) return; // тест файл юзера не пачкает
-    const char *path = ed_panels_path();
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
-    fprintf(f,
-            "{\n  \"_note\": \"ui_edit tools (#14 F5k): 1 = panel open, "
-            "edTab = active ribbon, edTool = scene tool mode, dockL/dockR/dockH = "
-            "dock pane sizes. Editor state, not a document.\",\n  \"edOpen\": [");
-    for (int i = 0; i < ed_ws_panels(); i++)
-        fprintf(f, "%s%d", i ? ", " : "", g_sh.open[i]);
-    fprintf(f, "],\n  \"edTab\": %d,\n  \"edTool\": %d,\n"
-               "  \"dockL\": %d,\n  \"dockR\": %d,\n  \"dockH\": %d\n}\n",
-            g_edTab, g_panels ? ui_panels_tool(g_panels) : 0, g_sh.dockWl, g_sh.dockWr, g_sh.dockH);
-    fclose(f);
-}
-static void ed_panels_load(void) {
-    const char *path = ed_panels_path();
-    FILE *f = fopen(path, "rb");
-    if (!f) return;
-    char s[512];
-    size_t n = fread(s, 1, sizeof s - 1, f);
-    fclose(f);
-    s[n] = 0;
-    { // режим инструмента сцены (лента MODEL) — состояние движка, не документа
-        const char *tt = strstr(s, "\"edTool\"");
+
+static void ui_state_read(const char *json) {
+    { // инструмент сцены (лента MODEL) — состояние движка, не документа
+        const char *tt = strstr(json, "\"edTool\"");
         if (tt) {
             int tv = -1;
             tt = strchr(tt, ':');
@@ -1000,58 +896,16 @@ static void ed_panels_load(void) {
                 ui_panels_set_tool(g_panels, tv);
         }
     }
-    const char *q = strstr(s, "\"edOpen\"");
-    if (!q) return;
-    q = strchr(q, '[');
-    if (!q) return;
-    int v[ED_PANEL_MAX], got = 0;
-    for (int i = 0; i < ED_PANEL_MAX; i++) v[i] = -1;
-    {
-        const char *r = q + 1; // сразу за '['
-        while (got < ED_PANEL_MAX && sscanf(r, "%d", &v[got]) == 1) {
-            got++;
-            r = strchr(r, ',');
-            if (!r) break;
-            r++;
-        }
-    }
-    if (got >= 3) { // старый файл (три значения) читается как есть: консоль закрыта
-        for (int i = 0; i < ed_ws_panels(); i++) g_sh.open[i] = (i < got && v[i]) ? 1 : 0;
-    }
-    { // F5l(4b): ширина доков (кламп при чтении: битый файл панель не сносит)
-        const char *dl = strstr(s, "\"dockL\"");
-        const char *dr = strstr(s, "\"dockR\"");
-        if (dl) {
-            int v = -1;
-            dl = strchr(dl, ':');
-            if (dl && sscanf(dl + 1, "%d", &v) == 1 && v > 0) g_sh.dockWl = v;
-        }
-        if (dr) {
-            int v = -1;
-            dr = strchr(dr, ':');
-            if (dr && sscanf(dr + 1, "%d", &v) == 1 && v > 0) g_sh.dockWr = v;
-        }
-        { // высота нижнего дока: кламп при чтении (битый файл экран не съест)
-            const char *db = strstr(s, "\"dockH\"");
-            if (db) {
-                int v = -1;
-                db = strchr(db, ':');
-                if (db && sscanf(db + 1, "%d", &v) == 1 && v > 0) g_sh.dockH = v;
-            }
-            ed_shell_dock_set(&g_sh, ED_SP_BOTTOM, g_sh.dockH, g_WW, g_WH);
-        }
-        ed_shell_clamp_all(&g_sh, g_WW);
-        ed_shell_compute(&g_sh, g_WW, g_WH);
-    }
-    { // F5l(2): активная лента — тоже состояние инструмента (переживает запуск)
-        const char *t = strstr(s, "\"edTab\"");
-        if (t) {
+    { // активная лента — тоже состояние инструмента (переживает запуск)
+        const char *tb = strstr(json, "\"edTab\"");
+        if (tb) {
             int tv = -1;
-            t = strchr(t, ':');
-            if (t && sscanf(t + 1, "%d", &tv) == 1 && tv >= 0 && tv < ed_ws_tabs()) g_edTab = tv;
+            tb = strchr(tb, ':');
+            if (tb && sscanf(tb + 1, "%d", &tv) == 1 && tv >= 0 && tv < ed_ws_tabs()) g_edTab = tv;
         }
     }
 }
+
 // §14 F5k: вкладка = тумблер инструмента. Открываем В ДОК (как Word/Roblox:
 // панель возвращается на своё место), закрываем — место перетекает соседям.
 static void tabs_toggle(int i) {
@@ -1063,8 +917,8 @@ static void tabs_toggle(int i) {
     } else if (g_sh.grab == i) {
         g_sh.grab = -1;
     }
-    ed_chrome_sync();
-    ed_panels_save();
+    ed_shell_sync(&g_sh, g_WW, g_WH);
+    ed_shell_save(&g_sh);
     edit_push();
 }
 // ============================================================================
@@ -1285,7 +1139,7 @@ static int act_impl_run(int i) {
         if (!g_panels) return 0;
         ui_panels_set_tool(g_panels, a->arg);
         ui_log_add("scene tool: %s", a->label);
-        ed_panels_save();
+        ed_shell_save(&g_sh);
         edit_push();
         return 1;
     }
@@ -1318,10 +1172,10 @@ static const EdWorkspace UI_WORKSPACE = {
     {"HOME", "MODEL", "VIEW"},
     3,
     {
-        {"palette", "PALETTE", ED_DK_LEFT, 1},
-        {"tree", "WIDGETS", ED_DK_LEFT, 1},
-        {"inspector", "INSPECTOR", ED_DK_RIGHT, 1},
-        {"console", "CONSOLE", ED_DK_BOTTOM, 0}, // Ш1c: консоль закрыта по умолчанию
+        {"palette", "PALETTE", "EdPalette", ED_DK_LEFT, 1, 0},
+        {"tree", "WIDGETS", "EdHierarchy", ED_DK_LEFT, 1, 1},
+        {"inspector", "INSPECTOR", "EdInspector", ED_DK_RIGHT, 1, 1},
+        {"console", "CONSOLE", "EdConsole", ED_DK_BOTTOM, 0, 1}, // Ш1c: закрыта
     },
     4,
 };
@@ -2284,7 +2138,7 @@ static int ed_text_vis(int own, float x, float y) {
 // Вернуть панель в свой док (снять «двинул юзер»).
 static void ed_panel_dock(int i) {
     ed_shell_panel_dock(&g_sh, i); // снять «оторвана» — состояние у оболочки
-    ed_chrome_sync();
+    ed_shell_sync(&g_sh, g_WW, g_WH);
     edit_push(); // ДЕЙСТВИЕ редактора (возврат в док): undo коммитим в конце
 }
 
@@ -2362,7 +2216,7 @@ static int wt_event(const UiEvent *e) {
                 p->rect.anchors = UI_A_LEFT | UI_A_TOP;
                 p->rect.x = e->x - g_sh.grabDX;
                 p->rect.y = e->y - g_sh.grabDY;
-                ed_panels_clamp(); // F5k: панель не выезжает за окно ни одной стороной
+                ed_shell_panels_keep_inside(&g_sh, g_WW, g_WH); // F5k: панель не выезжает за окно ни одной стороной
                 g_sh.moved[g_sh.panel[g_sh.grab] - 1] = 1; // оторвана от дока
                 edit_push(); // панель тащат редко: полный кадр честнее полос
             }
@@ -2469,7 +2323,7 @@ static int wt_event(const UiEvent *e) {
             g_sh.grab = -1;
             {
                 float hx, hy, hw, hh, x, y, w, h;
-                ed_panel_home(i, &hx, &hy, &hw, &hh);
+                ed_shell_panel_home(&g_sh, g_WW, g_WH, i, &hx, &hy, &hw, &hh);
                 ed_shell_panel_rect(&g_sh, g_WW, g_WH, i, &x, &y, &w, &h);
                 float mx = x + w * 0.5f, my = y + (float)ED_TITLE_H * 0.5f;
                 if (mx > hx - 40.0f && mx < hx + hw + 40.0f && my > hy - 40.0f &&
@@ -2552,7 +2406,7 @@ static int wt_event(const UiEvent *e) {
         if (topP < 0 && tabs_hit(e->x, e->y, &tw)) {
             if (g_edTab != tw) {
                 g_edTab = tw;
-                ed_panels_save();
+                ed_shell_save(&g_sh);
                 edit_push();
             }
             return 1;
@@ -2685,7 +2539,7 @@ static int build_shapes(RcVecShape *shapes) {
         memcpy(shapes[n].rgba, voidCol, sizeof shapes[n].rgba);
         n++;
     }
-    ed_chrome_sync(); // §14 F3c: раскладка панелей хрома (док мог поменяться)
+    ed_shell_sync(&g_sh, g_WW, g_WH); // §14 F3c: раскладка панелей хрома (док мог поменяться)
     wt_draw_all(shapes, &n); // документ — тем же рантаймом, что и игра
     // F5j: рамка/ручки активного — над документом, но ПОД панелями: панель это
     // окно, она перекрывает и холст, и рамку (что видно, то и кликается).
@@ -2798,7 +2652,7 @@ static int ed_split_event(const UiEvent *e) {
     if (e->kind == UI_EV_UP) {
         if (!g_sh.split) return 0;
         g_sh.split = 0;
-        ed_panels_save(); // ширина доков — состояние ИНСТРУМЕНТА (конец операции)
+        ed_shell_save(&g_sh); // ширина доков — состояние ИНСТРУМЕНТА (конец операции)
         return 1;
     }
     return 0;
@@ -3035,6 +2889,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, 0, _IONBF, 0);
     if (argc > 1 && !strcmp(argv[1], "--selftest")) {
         g_selftest = 1; // файлы состояния инструментов юзера не трогаем
+        ed_shell_no_save(&g_sh, getenv("UI_EDIT_BENCH") ? 0 : 1);
         // Без окна/GL: панели в EDIT строят примитивы, вьюпорт — остаток,
         // скриптованный сплиттер двигает hierW. Файлов не пачкаем (remove).
         int bad = 0;
@@ -3107,7 +2962,7 @@ int main(int argc, char **argv) {
         g_sh.vpw = w;
         g_sh.vph = h;
         ed_chrome_init(); // §14 F3c(1b): хром = виджеты; геометрия от вьюпорта
-        ed_chrome_sync();
+        ed_shell_sync(&g_sh, g_WW, g_WH);
         {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
@@ -3586,7 +3441,7 @@ int main(int argc, char **argv) {
             g_dragId = 0;
             g_dragHandle = 0;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             float px, py, pw, ph;
             ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_PAL, &px, &py, &pw, &ph);
             if (pw <= 0 || ph <= 0) {
@@ -3618,7 +3473,7 @@ int main(int argc, char **argv) {
                 printf("SELF FAIL: self-move %f %f\n", x2, y2);
                 bad = 1;
             }
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_PAL, &x2, &y2, &w2, &h2);
             if (x2 != px + 40 || y2 != py + 25) {
                 printf("SELF FAIL: self-keep %f %f\n", x2, y2);
@@ -3663,7 +3518,7 @@ int main(int argc, char **argv) {
             g_act = &g_wt;
             g_wtSel = 0;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
         }
         // §14 F3c(1b): список виджетов — ОКНО СО СКРОЛЛОМ (жалоба: строки
         // вылезали за панель; листать было нельзя).
@@ -4025,7 +3880,7 @@ int main(int argc, char **argv) {
         // залезают на легаси-строку меню/коллапса (тестер: «всё стоит криво»,
         // панели «съехали»). Дерево вмещает заголовок + крошки + >=3 строки.
         {
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             float ax, ay, aw, ah, bx, by, bw, bh, cx, cy, cw, ch;
             ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_PAL, &ax, &ay, &aw, &ah);
             ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_TREE, &bx, &by, &bw, &bh);
@@ -4073,7 +3928,7 @@ int main(int argc, char **argv) {
             g_editSelf = 0;
             g_wtSel = probe; // выделение есть: именно при нём и всплывал баг
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 0;
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int c0 = 0, c1 = 0, c2 = 0;
             pal_draw(pc, &c0);
             tree_draw(pc, &c1);
@@ -4090,7 +3945,7 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int n0 = 0, n1 = 0, n2 = 0;
             pal_draw(p0, &n0);
             tree_draw(p1, &n1);
@@ -4114,7 +3969,7 @@ int main(int argc, char **argv) {
             g_act = saveAct;
             g_wtSel = saveSel;
             g_editSelf = saveSelf;
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
         }
         // §14 F5d: ИЕРАРХИЯ — крошки предков (клик = выбрать предка), обрезка
         // слева при нехватке места, Ctrl+клик «сквозь» верхний в стопке.
@@ -4223,7 +4078,7 @@ int main(int argc, char **argv) {
             g_treePress = 0;
             g_treeDrag = 0;
             g_treeDropId = -1;
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int a = wt_spawn(UI_W_PANEL);
             int b = wt_spawn(UI_W_BUTTON);
             int c = wt_spawn(UI_W_LABEL);
@@ -4401,7 +4256,7 @@ int main(int argc, char **argv) {
             g_editSelf = 0;
             g_act = &g_wt;
             g_wtSel = 0;
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int ca = wt_spawn(UI_W_PANEL);
             g_wtSel = ca; // выбран: поля инспектора есть
             UiEvent ce;
@@ -4468,11 +4323,11 @@ int main(int argc, char **argv) {
             for (int i = 0; i < ed_ws_panels(); i++) g_sh.order[i] = i;
             memset(g_sh.moved, 0, sizeof g_sh.moved);
             ed_chrome_init(); // вернуть хром на док-места после прошлых проб
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int ca = wt_spawn(UI_W_PANEL);
             g_wtSel = ca;
             float hx, hy, hw, hh;
-            ed_panel_home(0, &hx, &hy, &hw, &hh);
+            ed_shell_panel_home(&g_sh, g_WW, g_WH, 0, &hx, &hy, &hw, &hh);
             UiEvent fe;
             // (1) заголовок палитры = таск панели; панель уходит наверх
             memset(&fe, 0, sizeof fe);
@@ -4514,7 +4369,7 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             // (3) раскладка доков её больше НЕ возвращает
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_PAL, &fx, &fy, &fw, &fh);
             if (fx != hx + 100 || fy != hy + 196) {
                 printf("SELF FAIL: float-sync x=%.0f y=%.0f\n", (double)fx, (double)fy);
@@ -4615,7 +4470,7 @@ int main(int argc, char **argv) {
                 }
             }
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
@@ -4630,7 +4485,7 @@ int main(int argc, char **argv) {
             g_wtSel = 0;
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int p1 = wt_spawn(UI_W_PANEL);
             int b1 = wt_spawn(UI_W_BUTTON);
             if (!p1 || !b1 || !widget_reparent(&g_wt, b1, p1)) {
@@ -4733,7 +4588,7 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
         }
         // §14 F5l(3): ДОКУМЕНТ ВНУТРИ ВЬЮПОРТА (экран игры). Тестер: «нажал на
         // панель и зебра полетела» — в тесном окне виджет рождался ЗА границей
@@ -4745,7 +4600,7 @@ int main(int argc, char **argv) {
             widget_tree_init(&g_wt);
             g_wtSel = 0;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             // (1) вьюпорт = окно МИНУС полосы доков; экран игры в середине
             if (g_sh.vpx != ED_DOCK_W + ED_PAD ||
                 g_sh.vpx + g_sh.vpw != g_WW - (ED_DOCK_W + ED_PAD) ||
@@ -4821,7 +4676,7 @@ int main(int argc, char **argv) {
                 int kw = g_WW, kh = g_WH;
                 g_WW = 640;
                 g_WH = 360;
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
                 if (g_sh.vpx != ED_DOCK_W + ED_PAD || g_sh.vpw < 64 || g_sh.vph < 64 ||
                     g_sh.vpx + g_sh.vpw > 640 - (ED_DOCK_W + ED_PAD) + 1) {
                     printf("SELF FAIL: vp-narrow vp=%d,%d %dx%d\n", g_sh.vpx, g_sh.vpy, g_sh.vpw,
@@ -4842,12 +4697,12 @@ int main(int argc, char **argv) {
                 }
                 g_WW = kw;
                 g_WH = kh;
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
             }
             widget_tree_init(&g_wt);
             g_wtSel = 0;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
         }
         // §14 F5k: ИНСТРУМЕНТЫ-ВКЛАДКИ. Тестер: «хотел, чтобы панели были
         // ИНСТРУМЕНТАМИ: открыл сам — вот они, закрыл — места не занимают»
@@ -4862,12 +4717,12 @@ int main(int argc, char **argv) {
             memset(g_sh.moved, 0, sizeof g_sh.moved);
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             int ca = wt_spawn(UI_W_PANEL);
             g_wtSel = ca;
             float phx, phy, phw, phh, thx, thy, thw, thh;
-            ed_panel_home(0, &phx, &phy, &phw, &phh);
-            ed_panel_home(1, &thx, &thy, &thw, &thh);
+            ed_shell_panel_home(&g_sh, g_WW, g_WH, 0, &phx, &phy, &phw, &phh);
+            ed_shell_panel_home(&g_sh, g_WW, g_WH, 1, &thx, &thy, &thw, &thh);
             if (!(thy > phy)) { // палитра сверху, дерево под ней
                 printf("SELF FAIL: tabs-stack pal=%.0f tree=%.0f\n", (double)phy,
                        (double)thy);
@@ -4893,7 +4748,7 @@ int main(int argc, char **argv) {
                 bad = 1;
             }
             // (2) место ПЕРЕТЕКЛО: дерево встало на место палитры
-            ed_panel_home(1, &thx, &thy, &thw, &thh);
+            ed_shell_panel_home(&g_sh, g_WW, g_WH, 1, &thx, &thy, &thw, &thh);
             if (thy != phy) {
                 printf("SELF FAIL: tabs-reflow tree=%.0f want %.0f\n", (double)thy,
                        (double)phy);
@@ -4977,17 +4832,17 @@ int main(int argc, char **argv) {
                 g_sh.open[0] = 1;
                 g_sh.open[1] = 0;
                 g_sh.open[2] = 1;
-                ed_panels_save();
+                ed_shell_save(&g_sh);
                 g_sh.open[0] = 0;
                 g_sh.open[1] = 1;
                 g_sh.open[2] = 0;
-                ed_panels_load();
+                ed_shell_load(&g_sh, g_WW, g_WH);
                 if (g_sh.open[0] != 1 || g_sh.open[1] != 0 || g_sh.open[2] != 1) {
                     printf("SELF FAIL: tabs-persist %d%d%d\n", g_sh.open[0], g_sh.open[1],
                            g_sh.open[2]);
                     bad = 1;
                 }
-                remove(ED_PANELS_BENCH);
+                remove(ED_SHELL_BENCH_PATH);
                 unsetenv("UI_EDIT_BENCH");
                 g_sh.open[0] = keep[0];
                 g_sh.open[1] = keep[1];
@@ -4995,7 +4850,7 @@ int main(int argc, char **argv) {
             }
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
@@ -5021,7 +4876,7 @@ int main(int argc, char **argv) {
             memset(g_sh.moved, 0, sizeof g_sh.moved);
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             ui_wundo_init(&g_undo);
             undo_commit("load"); // нулевое состояние истории — как при старте редактора
             // (1) реестр корректен: id уникальны, метки непусты, каждая лента непуста
@@ -5051,7 +4906,8 @@ int main(int argc, char **argv) {
                 int pn = ed_ws_panels(), badw = 0, badd = 0, cnt = 0;
                 for (int i = 0; i < pn; i++) {
                     const EdPanelDesc *p = ed_ws_panel(i);
-                    if (!p || !p->id || !p->id[0] || !ed_ws_caption(i)[0]) badw++;
+                    if (!p || !p->id || !p->id[0] || !ed_ws_caption(i)[0] || !ed_ws_tag(i)[0] ||
+                        ed_ws_look(i) < 0 || ed_ws_look(i) > 1) badw++;
                     int d = ed_ws_dock(i);
                     if (d != ED_DK_LEFT && d != ED_DK_RIGHT && d != ED_DK_BOTTOM) badd++;
                 }
@@ -5071,7 +4927,30 @@ int main(int argc, char **argv) {
             {
                 int err = 0;
                 float x, y, w, h;
-                ed_chrome_sync(); // геометрия панелей = из доков (нужна для проверок)
+                ed_shell_sync(&g_sh, g_WW, g_WH); // геометрия панелей = из доков (нужна для проверок)
+                for (int i = 0; i < ed_ws_panels(); i++) { // (1d) панель стоит в СВОЕЙ полосе дока:
+                    // левая — у левого края во всю полосу, правая — полосой вправо, нижняя — во всю
+                    // ширину. Ловит «док посчитан, а панель легла мимо» (иначе проверять нечем).
+                    if (!ed_shell_panel_live(&g_sh, i)) continue;
+                    ed_shell_panel_rect(&g_sh, g_WW, g_WH, i, &x, &y, &w, &h);
+                    int dk = ed_ws_dock(i);
+                    // Докладываем СРАЗУ: ниже err переиспользуется (err = 2, 3...), и мой
+                    // код тонул бы молча (проверка без зубов = проверки нет).
+                    int band = 0;
+                    if (dk == ED_DK_LEFT) {
+                        if (x != (float)ED_PAD || w != (float)g_sh.dockWl) band = 1;
+                    } else if (dk == ED_DK_RIGHT) {
+                        if (w != (float)(g_sh.dockWr + 2 * ED_PAD) ||
+                            x != (float)(g_WW - g_sh.dockWr - ED_PAD))
+                            band = 1;
+                    } else if (x != (float)ED_PAD || w != (float)(g_WW - 2 * ED_PAD))
+                        band = 1;
+                    if (band) {
+                        printf("SELF FAIL: panel-band i=%d dk=%d x=%.0f w=%.0f (dockL=%d dockR=%d)\n", i,
+                               dk, x, w, g_sh.dockWl, g_sh.dockWr);
+                        bad = 1;
+                    }
+                }
                 int keepCon = g_sh.open[ED_PN_CON];
                 g_sh.open[ED_PN_CON] = 0; // закрытая консоль: ни пикселя, ни хитбокса
                 ed_shell_panel_rect(&g_sh, g_WW, g_WH, ED_PN_CON, &x, &y, &w, &h);
@@ -5352,23 +5231,23 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 setenv("UI_EDIT_BENCH", "1", 1);
-                ed_panels_save();
+                ed_shell_save(&g_sh);
                 g_sh.dockWl = ED_DOCK_W; // сброс: «прочиталось» не спутать с дефолтом
-                ed_panels_load();
+                ed_shell_load(&g_sh, g_WW, g_WH);
                 if (g_sh.dockWl != want || g_sh.dockWr != ED_DOCK_W) {
                     printf("SELF FAIL: dock-persist w=%d want %d r=%d\n", g_sh.dockWl, want,
                            g_sh.dockWr);
                     bad = 1;
                 }
                 { // БИТЫЙ файл: 99999 в dockL -> кламп ПАРОЙ, а не панель во всё окно
-                    FILE *f = fopen(ED_PANELS_BENCH, "wb");
+                    FILE *f = fopen(ED_SHELL_BENCH_PATH, "wb");
                     if (f) {
                         fprintf(f, "{\n \"edOpen\": [1,1,1],\n \"dockL\": 99999,\n"
                                    " \"dockR\": 1\n}\n");
                         fclose(f);
                     }
                     int room = g_WW - 2 * ED_PAD - 64; // оба дока открыты
-                    ed_panels_load();
+                    ed_shell_load(&g_sh, g_WW, g_WH);
                     int vpx2 = 0, vpw2 = 0;
                     ed_shell_compute(&g_sh, g_WW, g_WH);
                     vpx2 = g_sh.vpx;
@@ -5380,7 +5259,7 @@ int main(int argc, char **argv) {
                         bad = 1;
                     }
                 }
-                remove(ED_PANELS_BENCH);
+                remove(ED_SHELL_BENCH_PATH);
                 unsetenv("UI_EDIT_BENCH");
                 g_sh.dockWl = g_sh.dockWr = ED_DOCK_W; // дальше тесты считают от дефолта
                 g_sh.open[0] = keepOpen[0];
@@ -5409,7 +5288,7 @@ int main(int argc, char **argv) {
                 // (2) тумблер: лента VIEW (Ctrl+4) -> нижний док занят, экран игры
                 // сузился по высоте; закрытая — ни пикселя, ни хитбокса
                 g_sh.open[3] = 0;
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
                 int vph0 = g_sh.vph;
                 if (g_sh.dockB != 0 || ed_shell_panel_live(&g_sh, 3)) {
                     printf("SELF FAIL: con-closed dockB=%d live=%d\n", g_sh.dockB, ed_shell_panel_live(&g_sh, 3));
@@ -5419,7 +5298,7 @@ int main(int argc, char **argv) {
                     printf("SELF FAIL: con-toggle open=%d\n", g_sh.open[3]);
                     bad = 1;
                 }
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
                 if (g_sh.dockB != g_sh.dockH + ED_PAD || !ed_shell_panel_live(&g_sh, 3) ||
                     g_sh.vph != vph0 - g_sh.dockB || g_sh.vph != g_WH - ed_shell_top() - g_sh.dockB) {
                     printf("SELF FAIL: con-open dockB=%d h=%d vph=%d\n", g_sh.dockB, g_sh.dockH,
@@ -5477,34 +5356,34 @@ int main(int argc, char **argv) {
                     // (4) персист: высота нижнего дока и открытость консоли
                     setenv("UI_EDIT_BENCH", "1", 1);
                     int want = g_sh.dockH;
-                    ed_panels_save();
+                    ed_shell_save(&g_sh);
                     g_sh.dockH = 123;
                     g_sh.open[3] = 0;
-                    ed_panels_load();
+                    ed_shell_load(&g_sh, g_WW, g_WH);
                     if (g_sh.dockH != want || !g_sh.open[3]) {
                         printf("SELF FAIL: con-persist h=%d want=%d open=%d\n", g_sh.dockH,
                                want, g_sh.open[3]);
                         bad = 1;
                     }
                     { // битая высота: кламп, панель не съедает экран игры
-                        FILE *f = fopen(ED_PANELS_BENCH, "wb");
+                        FILE *f = fopen(ED_SHELL_BENCH_PATH, "wb");
                         if (f) {
                             fprintf(f, "{\n \"edOpen\": [1,1,1,1],\n \"dockH\": 99999\n}\n");
                             fclose(f);
                         }
-                        ed_panels_load();
+                        ed_shell_load(&g_sh, g_WW, g_WH);
                         ed_shell_compute(&g_sh, g_WW, g_WH);
                         if (g_sh.dockH != g_WH - ed_shell_top() - 64 - ED_PAD || g_sh.vph < 64) {
                             printf("SELF FAIL: con-load-clamp h=%d vph=%d\n", g_sh.dockH, g_sh.vph);
                             bad = 1;
                         }
                     }
-                    remove(ED_PANELS_BENCH);
+                    remove(ED_SHELL_BENCH_PATH);
                     unsetenv("UI_EDIT_BENCH");
                 }
                 // (5) видимый срез и прокрутка: хвост внизу; «кручу в пустоту» — 0
                 g_sh.dockH = keepH;
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
                 {
                     int start = 0, rows = 0;
                     g_conScroll = 0;
@@ -5584,7 +5463,7 @@ int main(int argc, char **argv) {
                 g_conScroll = 0;
                 widget_tree_init(&g_wt);
                 g_wtSel = 0;
-                ed_chrome_sync();
+                ed_shell_sync(&g_sh, g_WW, g_WH);
             }
             // (3b) ЛЕГАСИ-ХРОМА В ОКНЕ НЕТ. Было: полосы ui_panels — меню «File
             // Edit View» (0..26), тулбар «Q:Sel W:Move E:Rot R:Scale» (26..58),
@@ -5749,14 +5628,14 @@ int main(int argc, char **argv) {
                 int keepTab = g_edTab;
                 int keepOpen[3] = {g_sh.open[0], g_sh.open[1], g_sh.open[2]};
                 g_edTab = 2;
-                ed_panels_save();
+                ed_shell_save(&g_sh);
                 g_edTab = 0;
-                ed_panels_load();
+                ed_shell_load(&g_sh, g_WW, g_WH);
                 if (g_edTab != 2) {
                     printf("SELF FAIL: ribbon-persist tab=%d\n", g_edTab);
                     bad = 1;
                 }
-                remove(ED_PANELS_BENCH);
+                remove(ED_SHELL_BENCH_PATH);
                 unsetenv("UI_EDIT_BENCH");
                 g_edTab = keepTab;
                 g_sh.open[0] = keepOpen[0];
@@ -5816,14 +5695,14 @@ int main(int argc, char **argv) {
                 }
                 // режим — состояние ИНСТРУМЕНТА: переживает запуск (edTool)
                 setenv("UI_EDIT_BENCH", "1", 1);
-                ed_panels_save();
+                ed_shell_save(&g_sh);
                 ui_panels_set_tool(sp, 0);
-                ed_panels_load();
+                ed_shell_load(&g_sh, g_WW, g_WH);
                 if (ui_panels_tool(sp) != 3) {
                     printf("SELF FAIL: scene-persist tool=%d\n", ui_panels_tool(sp));
                     bad = 1;
                 }
-                remove(ED_PANELS_BENCH);
+                remove(ED_SHELL_BENCH_PATH);
                 unsetenv("UI_EDIT_BENCH");
                 g_panels = keep;
                 ui_panels_destroy(sp);
@@ -5834,7 +5713,7 @@ int main(int argc, char **argv) {
             g_rbHot = -1;
             g_sh.open[0] = g_sh.open[1] = g_sh.open[2] = 1;
             ed_chrome_init();
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             widget_tree_init(&g_wt);
             g_wtSel = 0;
         }
@@ -5895,12 +5774,12 @@ int main(int argc, char **argv) {
     }
     widget_tree_init(&g_wt); // §14: пусто до создания из палитры
     ed_chrome_init();        // §14 F3c(1b): собственный UI редактора — тоже виджеты
-    ed_panels_load();        // §14 F5k: какие инструменты были открыты (переживают запуск)
+    ed_shell_load(&g_sh, g_WW, g_WH);        // §14 F5k: какие инструменты были открыты (переживают запуск)
     // Ш1c: консоль начинается с фактов (что открыто), а не с пустоты.
     ui_log_add("state: panels [%d%d%d%d] tab=%s", g_sh.open[0], g_sh.open[1], g_sh.open[2],
                g_sh.open[3], ed_ws_tab(g_edTab));
     ed_shell_compute(&g_sh, g_WW, g_WH); // F5l(4): вьюпорт редактора считают ДОКИ, а не легаси-панели
-    ed_chrome_sync();
+    ed_shell_sync(&g_sh, g_WW, g_WH);
     {
         const char *sf = getenv("UI_EDIT_SELF");
         if (sf && sf[0] == '1') {
@@ -6176,8 +6055,8 @@ int main(int argc, char **argv) {
                 if (vec->frame) vec->frame(vec, &vu);
                 v.resW = g_WW;
                 v.resH = g_WH;
-                ed_chrome_sync(); // F5k: док пересчитываем от нового размера
-                ed_panels_clamp(); // и оторванные панели втягиваем в окно
+                ed_shell_sync(&g_sh, g_WW, g_WH); // F5k: док пересчитываем от нового размера
+                ed_shell_panels_keep_inside(&g_sh, g_WW, g_WH); // и оторванные панели втягиваем в окно
                 edit_push();
                 printf("ui_edit: resize %dx%d\n", g_WW, g_WH);
             }
@@ -6186,7 +6065,7 @@ int main(int argc, char **argv) {
         if (rcEnv && rcEnv[0] == '1' && tdcnt == 3) { // F5j: где стоят панели
             for (int i = 0; i < ed_ws_panels(); i++) {
                 float x, y, w, h, ix, iy, iw, ih;
-                ed_panel_home(i, &x, &y, &w, &h);
+                ed_shell_panel_home(&g_sh, g_WW, g_WH, i, &x, &y, &w, &h);
                 ed_shell_panel_rect(&g_sh, g_WW, g_WH, i, &ix, &iy, &iw, &ih);
                 printf("ui_edit: panel %d id=%d home=%.0f,%.0f %.0fx%.0f now=%.0f,%.0f "
                        "%.0fx%.0f float=%d\n",
@@ -6382,7 +6261,7 @@ int main(int argc, char **argv) {
             }
         }
         if ((tdEnv || tdpEnv) && tdcnt >= 3) {
-            ed_chrome_sync();
+            ed_shell_sync(&g_sh, g_WW, g_WH);
             tree_build();
             if (tdpEnv && tdpEnv[0] >= '0' && tdcnt == 3) { // бросок — один раз
                 int sr = -1, tr = -1, md2 = 0;
