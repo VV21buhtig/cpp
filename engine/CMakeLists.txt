@@ -163,10 +163,20 @@ add_executable(ui_test ui/ui_test.c)
 target_include_directories(ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ui_test PRIVATE engine_shared m)
 target_compile_options(ui_test PRIVATE -Wall -Wextra)
+# ЯДРО РЕДАКТОРА (хост-приложение): командный реестр, клавиши, вызов. Ни виджетов,
+# ни сцены внутри — исполнение команд приходит колбэками (editor/ed_cmd.h).
+# Отдельная библиотека, потому что её будут линковать и редактор, и его режимы.
+add_library(editor_core STATIC editor/ed_cmd.c)
+target_include_directories(editor_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
+target_link_libraries(editor_core PUBLIC glfw m)
+target_compile_options(editor_core PRIVATE -Wall -Wextra)
 # Отдельный правщик фронта (§13): своё окно, без 3D, всегда EDIT.
+# Пока это и режим, и приложение; оболочка переезжает в editor/ (A3/A4).
 add_executable(ui_edit ui_edit.c)
 target_include_directories(ui_edit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ui_edit PRIVATE engine_shared m)
+target_link_libraries(ui_edit PRIVATE engine_shared editor_core m)
 target_compile_options(ui_edit PRIVATE -Wall -Wextra)
 # Прямой вьювер (схема Roblox/UE5): отдельный процесс, своё окно, GPU->GPU.
 add_executable(direct_view direct_view.c)

@@ -1,6 +1,7 @@
-// ui_edit: отдельный правщик фронта редактора (§13). Своё окно, без 3D:
-// панели (UiPanels, всегда EDIT) + плейсхолдер вьюпорта + хинт.
-// НЕ режим внутри игрового редактора (там игре — игра, правке — правка).
+// ui_edit: РЕЖИМ «UI» + пока ещё и приложение (исправление 18.10: оболочка —
+// редактора, режим — это он). Правщик фронта (§13): своё окно, без 3D.
+// Разделение файлов: editor/ed_cmd.* = командное ядро ХОСТА (реестр/клавиши),
+// editor/ed_shell.* (A3) = доки/панели/лента/консоль, mode_ui.* (A4) = режим.
 // Файлы-обменники с игровым редактором: layout.json + theme.json
 // (коммиты пишут сами панели: lay_commit / ui_theme_save).
 // Запуск из корня репо (шейдеры относительные, как ui_test): ./engine/build/ui_edit
@@ -18,6 +19,7 @@
 #include "ui/ui_widget_runtime.h" // §14 F3c: общий порядок/рендер/хит (игре и редактору)
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "ui/ui_log.h" // Ш1c: кольцо строк консоли (данные; вид — панель)
+#include "editor/ed_cmd.h" // командное ядро РЕДАКТОРА: реестр один на всё
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "comp.h"
@@ -97,6 +99,7 @@ static int ed_pal_act(int row);
 static const char *ed_pal_label(int row);
 static int ed_pal_is_action(int row);
 static const char *wt_type_name(int type);
+static void ed_cmd_init(void); // ядро команд: записи режима + сервисы
 
 // --- §14 F3c(1b): ХРОМ РЕДАКТОРА = ВИДЖЕТЫ (self-host) ---
 // Свой UI правщика живёт ВТОРЫМ деревом (g_edWt): палитра/дерево/инспектор — это
@@ -358,6 +361,7 @@ static void ed_rect(int id, float *x, float *y, float *w, float *h) {
 }
 
 static void ed_chrome_init(void) {
+    ed_cmd_init(); // реестр команд редактора (одна таблица на все виды)
     widget_tree_init(&g_edWt);
     memset(g_edMoved, 0, sizeof g_edMoved);
     UiWidgetStyle s, s2;
@@ -1232,15 +1236,8 @@ static void tabs_toggle(int i) {
 // (никаких «работающих» кнопок-пустышек). key2 — второй аккорд той же команды
 // (Ctrl+Shift+Z для Redo), поэтому клавиша и команда не разъезжаются.
 // ============================================================================
-enum { ED_WHEN_ALWAYS = 0, ED_WHEN_SEL = 1, ED_WHEN_UNDO = 2, ED_WHEN_REDO = 3 };
-enum { ED_K_CMD = 0, ED_K_SPAWN = 1, ED_K_TOGGLE = 2, ED_K_TOOL = 3 };
-// ДОМЕН действия: ЧЕЙ это инструмент. Граница, о которой просил тестер («для
-// самого редактора отдельно ... разделить, но чтобы функционал сохранился»):
-// SCENE = игровой мир (то, что делает игра: режимы Move/Rotate/Scale), FRONT =
-// сам редактор и интерфейс, который в нём строят (панели/виджеты/панели-доки).
-// Ради этого поля реестр не сваливается в одну кучу: у доменов СВОИ ленты, а
-// запись одна на все виды (лента/клавиша/шпаргалка/строка палитры).
-enum { ED_DM_FRONT = 0, ED_DM_SCENE = 1 };
+// ED_WHEN_*/ED_K_*/ED_V_*/ED_DM_*/ED_MOD_* и сама запись EdCmd — в командном
+// ядре (editor/ed_cmd.h): реестр принадлежит РЕДАКТОРУ, а не этому режиму.
 enum {
     ED_CMD_RENAME = 1,
     ED_CMD_DELETE = 2,
@@ -1249,32 +1246,13 @@ enum {
     ED_CMD_KEYS = 5,
     ED_CMD_LOGCLR = 6 // Ш1c: очистить журнал консоли
 };
-// Запись реестра, которая живёт ещё и в ПАНЕЛИ-ПАЛИТРЕ: палитра — второй ВИД той
-// же таблицы (как Place Actors и меню во UE), а не второй список строк.
-#define ED_V_PALETTE 1u // строка в панели-палитре
-#define ED_V_DOCK 2u    // кнопка в шапке своей панели (Ш1c: «Clear» консоли)
 // arg тумблера: 0..ED_PN-1 = панель, ED_TOG_SELF = «правим хром редактора».
 // Раньше тут было 3 — и это столкнулось бы с панелью консоли (индекс 3).
 #define ED_TOG_SELF 99
-typedef struct {
-    const char *id;    // машинный id (тесты/персист), уникален
-    const char *label; // человеческая метка (лента/палитра/тултип/шпаргалка)
-    const char *group; // группа на ленте (подложка + подпись)
-    unsigned char tab; // 0..ED_TABS_N-1
-    unsigned char when;
-    unsigned char kind;
-    unsigned char views; // ED_V_PALETTE
-    short arg;           // spawn-тип / индекс панели / ED_TOG_SELF / ED_CMD_*
-    int key, mods, key2, mods2;
-    unsigned char domain; // ED_DM_* (по умолчанию FRONT — редактор и его UI)
-} EdAction;
-#define ED_MOD_CTRL GLFW_MOD_CONTROL
-#define ED_MOD_CTRLSHIFT (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
-#define ED_MOD_MASK (GLFW_MOD_CONTROL | GLFW_MOD_SHIFT)
 // Порядок строк = порядок кнопок на ленте (смена группы = новая подложка) И
 // порядок строк ПАЛИТРЫ (у кого вид ED_V_PALETTE). Здесь только то, что РАБОТАЕТ:
 // заглушек-пустышек нет — действие попадает сюда вместе со своим исполнением.
-static const EdAction ED_ACT[] = {
+static const EdCmd ED_MODE_ACTIONS[] = {
     // Панель «PALETTE»: чем правим интерфейс — здесь и ТОЛЬКО здесь (строки
     // Panel/Button/Label/Delete). tab у этих записей не используется: в ленте они
     // не рисуются (правило «одна кнопка на действие»).
@@ -1326,7 +1304,14 @@ static const EdAction ED_ACT[] = {
     {"scene.scale", "Scale", "Tool", 1, ED_WHEN_ALWAYS, ED_K_TOOL, 0, 3, GLFW_KEY_R, 0, 0, 0,
      ED_DM_SCENE},
 };
-#define ED_ACT_N ((int)(sizeof ED_ACT / sizeof ED_ACT[0]))
+#define ED_MODE_N ((int)(sizeof ED_MODE_ACTIONS / sizeof ED_MODE_ACTIONS[0]))
+// Записи режима уходят в ОБЩИЙ реестр ядра: своей копии списка действий здесь
+// больше нет, все виды (лента/палитра/шпаргалка/клавиши) читают РЕЕСТР.
+static void ed_cmd_register_mode(void) {
+    for (int i = 0; i < ED_MODE_N; i++) ed_cmd_add(&ED_MODE_ACTIONS[i]);
+}
+// ED_ACT — это РЕЕСТР (все записи: хоста и режимов), а не локальная таблица.
+#define ED_ACT ed_cmd_all()
 
 static void wt_persist(void); // определены НИЖЕ по файлу
 static void undo_commit(const char *what);
@@ -1342,33 +1327,21 @@ static UiWidgetUndo g_undo;
 static float ed_txt_w(const char *s) {
     return g_text ? ui_text_width(g_text, s) : (float)(8 * (int)strlen(s));
 }
-static int ed_act_find(const char *id) {
-    for (int i = 0; i < ED_ACT_N; i++)
-        if (strcmp(ED_ACT[i].id, id) == 0) return i;
-    return -1;
-}
 // --- палитра = ВИД реестра (второго списка строк больше нет) ----------------
 static int ed_pal_n(void) {
     int n = 0;
-    for (int i = 0; i < ED_ACT_N; i++)
+    for (int i = 0; i < ed_cmd_n(); i++)
         if (ED_ACT[i].views & ED_V_PALETTE) n++;
     return n;
 }
 static int ed_pal_act(int row) {
     if (row < 0) return -1;
-    for (int i = 0, k = 0; i < ED_ACT_N; i++)
+    for (int i = 0, k = 0; i < ed_cmd_n(); i++)
         if (ED_ACT[i].views & ED_V_PALETTE) {
             if (k == row) return i;
             k++;
         }
     return -1;
-}
-// ОДНА КНОПКА НА ДЕЙСТВИЕ. Запись, у которой есть СТРОКА В ПАЛИТРЕ (ED_V_PALETTE),
-// в ленте НЕ рисуется: две одинаковые кнопки на экране = второй кликабельный путь
-// к тому же. Клавиша и шпаргалка у действия остаются (шпаргалка — справка о ВСЕХ
-// командах, а не кнопки; в ней же написано, ГДЕ команда живёт: PALETTE или лента).
-static int ed_act_in_ribbon(int i) {
-    return ED_ACT[i].views == 0; // у действия есть СВОЙ вид (палитра/шапка) — в ленте нет
 }
 static const char *ed_pal_label(int row) {
     int a = ed_pal_act(row);
@@ -1381,24 +1354,24 @@ static int ed_pal_is_action(int row) {
 // Имя типа виджета — из ТОГО ЖЕ реестра (у записи-создания arg = тип). Третьей
 // копии строк «Panel»/«Button»/«Label» (дерево/инспектор) больше нет.
 static const char *wt_type_name(int type) {
-    for (int i = 0; i < ED_ACT_N; i++)
-        if (ED_ACT[i].kind == ED_K_SPAWN && ED_ACT[i].arg == type) return ED_ACT[i].label;
-    return "?";
+    return ed_cmd_label_of(ED_K_SPAWN, type); // имя типа — из той же записи реестра
 }
 // Тумблер включён? — одна точка правды для галочки на ленте.
-static int ed_act_on(int i) {
-    if (i < 0 || i >= ED_ACT_N) return 0;
-    if (ED_ACT[i].kind == ED_K_TOOL) // режим сцены: включён ровно один
-        return g_panels && ED_ACT[i].arg >= 0 && ui_panels_tool(g_panels) == ED_ACT[i].arg;
-    if (ED_ACT[i].kind != ED_K_TOGGLE) return 0;
-    if (ED_ACT[i].arg == ED_TOG_SELF) return g_editSelf;
-    if (ED_ACT[i].arg >= 0 && ED_ACT[i].arg < ED_PN) return g_edOpen[ED_ACT[i].arg];
+static int act_impl_on(int i) {
+    const EdCmd *a = ed_cmd_at(i);
+    if (!a) return 0;
+    if (a->kind == ED_K_TOOL) // режим сцены: включён ровно один
+        return g_panels && a->arg >= 0 && ui_panels_tool(g_panels) == a->arg;
+    if (a->kind != ED_K_TOGGLE) return 0;
+    if (a->arg == ED_TOG_SELF) return g_editSelf;
+    if (a->arg >= 0 && a->arg < ED_PN) return g_edOpen[a->arg];
     return 0;
 }
 // canExecute: ОДНА точка правды «действие сейчас доступно».
-static int ed_act_enabled(int i) {
-    if (i < 0 || i >= ED_ACT_N) return 0;
-    switch (ED_ACT[i].when) {
+static int act_impl_enabled(int i) {
+    const EdCmd *a = ed_cmd_at(i);
+    if (!a) return 0;
+    switch (a->when) {
     case ED_WHEN_ALWAYS: return 1;
     case ED_WHEN_SEL: return g_wtSel > 0 && widget_cget(g_act, g_wtSel) != 0;
     case ED_WHEN_UNDO: return ui_wundo_depth(&g_undo) > 0;
@@ -1406,54 +1379,7 @@ static int ed_act_enabled(int i) {
     default: return 0; // ED_WHEN_NEVER: ещё не реализовано
     }
 }
-// Имя клавиши с модификатором: "Ctrl+Z", "Del", "F2".
-static const char *ed_key_name(int key, int mods, char *buf, int cap) {
-    char k[16];
-    if (key == 0) k[0] = 0;
-    else if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
-        k[0] = (char)('A' + (key - GLFW_KEY_A));
-        k[1] = 0;
-    } else if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9) {
-        k[0] = (char)('0' + (key - GLFW_KEY_0));
-        k[1] = 0;
-    } else if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F12)
-        snprintf(k, sizeof k, "F%d", key - GLFW_KEY_F1 + 1);
-    else if (key == GLFW_KEY_DELETE) snprintf(k, sizeof k, "Del");
-    else if (key == GLFW_KEY_BACKSPACE) snprintf(k, sizeof k, "Backspace");
-    else snprintf(k, sizeof k, "?");
-    int c = mods & GLFW_MOD_CONTROL, s = mods & GLFW_MOD_SHIFT;
-    if (c && s) snprintf(buf, cap, "Ctrl+Shift+%s", k);
-    else if (c) snprintf(buf, cap, "Ctrl+%s", k);
-    else if (s) snprintf(buf, cap, "Shift+%s", k);
-    else snprintf(buf, cap, "%s", k);
-    return buf;
-}
-// Все аккорды действия через " / " (пусто, если клавиш нет).
-static void ed_act_keys(int i, char *buf, int cap) {
-    const EdAction *a = &ED_ACT[i];
-    char b1[40], b2[40];
-    buf[0] = 0;
-    if (a->key) {
-        ed_key_name(a->key, a->mods, b1, sizeof b1);
-        snprintf(buf, cap, "%s", b1);
-    }
-    if (a->key2) {
-        ed_key_name(a->key2, a->mods2, b2, sizeof b2);
-        int used = (int)strlen(buf);
-        snprintf(buf + used, (size_t)(cap - used), "%s%s", a->key ? " / " : "", b2);
-    }
-}
-// Клавиша -> действие. Ctrl/Shift значимы: Ctrl+Z != Ctrl+Shift+Z.
-static int ed_act_by_key(int mods, int key) {
-    int m = mods & ED_MOD_MASK;
-    for (int i = 0; i < ED_ACT_N; i++) {
-        const EdAction *a = &ED_ACT[i];
-        if (a->key && a->key == key && (a->mods & ED_MOD_MASK) == m) return i;
-        if (a->key2 && a->key2 == key && (a->mods2 & ED_MOD_MASK) == m) return i;
-    }
-    return -1;
-}
-static int ed_cmd_run(int cmd) {
+static int cmd_builtin(int cmd) {
     switch (cmd) {
     case ED_CMD_RENAME: name_edit_begin(); return 1;
     case ED_CMD_DELETE: return wt_delete_sel();
@@ -1470,11 +1396,12 @@ static int ed_cmd_run(int cmd) {
     default: return 0;
     }
 }
-// Выполнить действие. 0 = не сработало (выключено/отказалось) — вызывающий сам
-// решает, съесть клавишу или отдать дальше (undo/redo делят историю с доками).
-static int ed_act_run(int i) {
-    if (!ed_act_enabled(i)) return 0;
-    const EdAction *a = &ED_ACT[i];
+// Выполнить действие. Ядро зовёт это ТОЛЬКО после гейта (ed_cmd_run), поэтому
+// здесь нет проверки «а можно ли». 0 = отказалось — вызывающий сам решает,
+// съесть клавишу или отдать дальше (undo/redo делят историю с доками).
+static int act_impl_run(int i) {
+    const EdCmd *a = ed_cmd_at(i);
+    if (!a) return 0;
     if (a->kind == ED_K_SPAWN) {
         int id = wt_spawn(a->arg);
         if (!id) return 0;
@@ -1495,12 +1422,21 @@ static int ed_act_run(int i) {
         if (a->arg == ED_TOG_SELF) ed_self_toggle(!g_editSelf);
         else tabs_toggle(a->arg);
         // Ш1c: журнал показывает, что инструменты переключались (ярлык — из
-        // реестра, состояние — из ed_act_on: ни то, ни другое не копируем).
+        // реестра, состояние — из ed_cmd_on: ни то, ни другое не копируем).
         if (a->arg != ED_TOG_SELF)
-            ui_log_add("panel %s: %s", a->label, ed_act_on(i) ? "on" : "off");
+            ui_log_add("panel %s: %s", a->label, ed_cmd_on(i) ? "on" : "off");
         return 1;
     }
-    return ed_cmd_run(a->arg);
+    return cmd_builtin(a->arg);
+}
+// Сервисы ядра: РЕЕСТР принадлежит редактору, а ИСПОЛНЕНИЕ пока здешнее
+// (A3/A4 разделят его на хост-часть и часть режима UI). Зовётся из ed_chrome_init:
+// так реестр есть и в приложении, и в selftest, и не регистрируется дважды.
+static void ed_cmd_init(void) {
+    if (ed_cmd_n() > 0) return;
+    static const EdCmdHost HOST = {act_impl_enabled, act_impl_on, act_impl_run};
+    ed_cmd_host(&HOST);
+    ed_cmd_register_mode();
 }
 // --- геометрия ленты -------------------------------------------------------
 static void ed_ribbon_band(float *x, float *y, float *w, float *h) {
@@ -1509,7 +1445,7 @@ static void ed_ribbon_band(float *x, float *y, float *w, float *h) {
     *w = (float)g_WW;
     *h = (float)ED_RIBBON_H;
 }
-static float ed_ribbon_item_w(const EdAction *a) {
+static float ed_ribbon_item_w(const EdCmd *a) {
     float tw = ed_txt_w(a->label);
     if (a->kind == ED_K_TOGGLE || a->kind == ED_K_TOOL)
         return tw + 34.0f; // метка-галочка/радио + поля
@@ -1528,8 +1464,8 @@ static void ed_ribbon_layout(void) {
     g_rbGroupN = 0;
     const char *grp = 0;
     float x = (float)PAL_PAD;
-    for (int i = 0; i < ED_ACT_N && g_rbN < ED_RB_MAX; i++) {
-        if (!ed_act_in_ribbon(i)) continue; // у действия своя строка в палитре
+    for (int i = 0; i < ed_cmd_n() && g_rbN < ED_RB_MAX; i++) {
+        if (!ed_cmd_ribbon(i)) continue; // у действия своя строка в палитре
         if ((int)ED_ACT[i].tab != g_edTab) continue;
         if (!grp || strcmp(grp, ED_ACT[i].group) != 0) {
             if (grp) x += (float)ED_RIBBON_SEP; // зазор между группами
@@ -1602,9 +1538,9 @@ static int ed_ribbon_hit(float px, float py, int *slot) {
 // Текст тултипа: "Delete  (Del)" / "... [off]" у нереализованного.
 static void ed_ribbon_tip_text(int act, char *buf, int cap) {
     char kb[48];
-    ed_act_keys(act, kb, sizeof kb);
-    const EdAction *a = &ED_ACT[act];
-    if (!ed_act_enabled(act)) snprintf(buf, cap, "%s [off]", a->label);
+    ed_cmd_keys(act, kb, sizeof kb);
+    const EdCmd *a = &ED_ACT[act];
+    if (!ed_cmd_enabled(act)) snprintf(buf, cap, "%s [off]", a->label);
     else if (kb[0]) snprintf(buf, cap, "%s  (%s)", a->label, kb);
     else snprintf(buf, cap, "%s", a->label);
 }
@@ -1639,7 +1575,7 @@ static void ed_keys_rect(float *x, float *y, float *w, float *h) {
     (void)bx;
     (void)bw;
     *w = (float)ED_KEYS_W;
-    *h = 26.0f + (float)ED_ACT_N * (float)ED_KEYS_RH + 8.0f;
+    *h = 26.0f + (float)ed_cmd_n() * (float)ED_KEYS_RH + 8.0f;
     *x = (float)(g_vpx > 0 ? g_vpx : ED_DOCK_W + PAL_PAD) + 8.0f;
     *y = by + bh + 6.0f;
     if (*x + *w > (float)g_WW) *x = (float)g_WW - *w;
@@ -1674,10 +1610,10 @@ static void ed_ribbon_draw(RcVecShape *sh, int *n) {
         if (w > 0) wt_emit(sh, n, x, y, w, h, grp, 4.0f);
     }
     for (int s = 0; s < g_rbN; s++) {
-        const EdAction *a = &ED_ACT[g_rbAct[s]];
+        const EdCmd *a = &ED_ACT[g_rbAct[s]];
         float x = g_rbX[s], w = g_rbW[s], y = by + 4.0f, h = (float)ED_RIBBON_ITEM_H;
-        int en = ed_act_enabled(g_rbAct[s]);
-        int on = ed_act_on(g_rbAct[s]);
+        int en = ed_cmd_enabled(g_rbAct[s]);
+        int on = ed_cmd_on(g_rbAct[s]);
         const float *col = !en ? dim : (on ? ton : (g_rbHot == g_rbAct[s] ? hot : btn));
         wt_emit(sh, n, x, y, w, h, col, 3.0f);
         if (a->kind == ED_K_TOGGLE || a->kind == ED_K_TOOL) {
@@ -2767,7 +2703,7 @@ static int wt_event(const UiEvent *e) {
     { // F5l(2): КНОПКА ЛЕНТЫ = действие из реестра (spawn/тумблер/команда)
         int rs = -1;
         if (topP < 0 && ed_ribbon_hit(e->x, e->y, &rs)) {
-            ed_act_run(g_rbAct[rs]);
+            ed_cmd_run(g_rbAct[rs]);
             return 1; // клик по ленте холст не трогает (как у панелей)
         }
     }
@@ -2776,7 +2712,7 @@ static int wt_event(const UiEvent *e) {
         if (ed_panel_head_at(e->x, e->y, &pw)) {
             ed_panel_raise(pw); // взялся за неё — она наверх (как окно в WM)
             if (pw == 3 && con_clear_hit(e->x, e->y)) { // Ш1c: Clear в шапке консоли
-                ed_act_run(ed_act_find("console.clear"));
+                ed_cmd_run(ed_cmd_find("console.clear"));
                 return 1;
             }
             if (ed_panel_float(pw)) {
@@ -2799,7 +2735,7 @@ static int wt_event(const UiEvent *e) {
     int pi = ed_panel_open(0) ? pal_hit(e->x, e->y) : -1;
     if (pi >= 0 && topP == 0) { // палитра = ВИД реестра: строка -> запись реестра
         int ai = ed_pal_act(pi);
-        if (ai >= 0) ed_act_run(ai); // создание/действие — ТОТ ЖЕ путь, что у ленты
+        if (ai >= 0) ed_cmd_run(ai); // создание/действие — ТОТ ЖЕ путь, что у ленты
         return 1;
     }
     tree_build();
@@ -3152,19 +3088,19 @@ static void on_key(GLFWwindow *win, int key, int scancode, int action, int mods)
     // и горячие клавиши (как FInputBindingManager во UE): второго списка, который
     // мог разойтись с лентой, больше нет.
     if (key == GLFW_KEY_BACKSPACE) { // алиас Del
-        int ai = ed_act_find("edit.delete");
+        int ai = ed_cmd_find("edit.delete");
         if (ai >= 0) {
-            ed_act_run(ai);
+            ed_cmd_run(ai);
             return;
         }
     }
     {
-        int ai = ed_act_by_key(mods, key);
+        int ai = ed_cmd_by_key(mods, key);
         if (ai >= 0) {
             // undo/redo делят историю с доками: не взялось — клавиша идёт дальше.
             int passthru = ED_ACT[ai].kind == ED_K_CMD &&
                            (ED_ACT[ai].arg == ED_CMD_UNDO || ED_ACT[ai].arg == ED_CMD_REDO);
-            if (ed_act_run(ai)) return;
+            if (ed_cmd_run(ai)) return;
             if (!passthru) return; // выключено, но клавиша принадлежит редактору
         }
     }
@@ -3198,7 +3134,7 @@ static int panel_content_inside(const RcVecShape *s, int n, int panelId) {
 // ленте, поэтому сначала переключаем ленту (как юзер заголовком), потом кликаем
 // в центр её прямоугольника (ту же геометрию, что рисует и хит-тест).
 static int sel_clip_click(const char *id) {
-    int ai = ed_act_find(id);
+    int ai = ed_cmd_find(id);
     if (ai < 0) return 0;
     g_edTab = ED_ACT[ai].tab;
     float x, y, w, h;
@@ -3216,7 +3152,7 @@ static int sel_clip_click(const char *id) {
 // (событие DOWN в строку). Нужен для команд, которые живут в палитре и в ленте НЕ
 // рисуются (правило «одна кнопка на действие»).
 static int sel_pal_click(const char *id) {
-    int ai = ed_act_find(id);
+    int ai = ed_cmd_find(id);
     if (ai < 0) return 0;
     for (int row = 0; row < ed_pal_n(); row++) {
         if (ed_pal_act(row) != ai) continue;
@@ -5229,18 +5165,18 @@ int main(int argc, char **argv) {
             {
                 int dup = 0, empty = 0, perTab[ED_TABS_N];
                 for (int t = 0; t < ED_TABS_N; t++) perTab[t] = 0;
-                for (int i = 0; i < ED_ACT_N; i++) {
-                    const EdAction *a = &ED_ACT[i];
+                for (int i = 0; i < ed_cmd_n(); i++) {
+                    const EdCmd *a = &ED_ACT[i];
                     if (!a->id[0] || !a->label[0] || !a->group[0]) empty++;
                     if ((int)a->tab >= ED_TABS_N) empty++;
                     else perTab[a->tab]++;
-                    for (int j = i + 1; j < ED_ACT_N; j++)
+                    for (int j = i + 1; j < ed_cmd_n(); j++)
                         if (strcmp(ED_ACT[i].id, ED_ACT[j].id) == 0) dup++;
                 }
                 for (int t = 0; t < ED_TABS_N; t++)
                     if (perTab[t] == 0) empty++;
-                if (ED_ACT_N < 10 || dup || empty) {
-                    printf("SELF FAIL: ribbon-registry n=%d dup=%d empty=%d\n", ED_ACT_N, dup,
+                if (ed_cmd_n() < 10 || dup || empty) {
+                    printf("SELF FAIL: ribbon-registry n=%d dup=%d empty=%d\n", ed_cmd_n(), dup,
                            empty);
                     bad = 1;
                 }
@@ -5271,12 +5207,12 @@ int main(int argc, char **argv) {
             // (2) canExecute = canExecute: ОДНА точка правды «доступно сейчас», и она
             // ЖИВАЯ (меняется вместе с документом), а не таблица констант
             {
-                int sel0 = ed_act_enabled(ed_act_find("edit.rename"));
-                int del0 = ed_act_enabled(ed_act_find("edit.delete"));
-                int undo0 = ed_act_enabled(ed_act_find("hist.undo"));
-                int pal0 = ed_act_enabled(ed_act_find("view.panel.palette"));
-                int self0 = ed_act_enabled(ed_act_find("tools.self"));
-                if (sel0 || del0 || undo0 || !pal0 || !self0 || ed_act_on(ed_act_find("tools.self"))) {
+                int sel0 = ed_cmd_enabled(ed_cmd_find("edit.rename"));
+                int del0 = ed_cmd_enabled(ed_cmd_find("edit.delete"));
+                int undo0 = ed_cmd_enabled(ed_cmd_find("hist.undo"));
+                int pal0 = ed_cmd_enabled(ed_cmd_find("view.panel.palette"));
+                int self0 = ed_cmd_enabled(ed_cmd_find("tools.self"));
+                if (sel0 || del0 || undo0 || !pal0 || !self0 || ed_cmd_on(ed_cmd_find("tools.self"))) {
                     printf("SELF FAIL: ribbon-gate sel=%d del=%d undo=%d pal=%d self=%d\n", sel0,
                            del0, undo0, pal0, self0);
                     bad = 1;
@@ -5284,10 +5220,10 @@ int main(int argc, char **argv) {
                 int w1 = wt_spawn(UI_W_BUTTON); // выбрали + появилась история -> гейт открылся
                 g_wtSel = w1;
                 undo_commit("add");
-                int sel1 = ed_act_enabled(ed_act_find("edit.rename"));
-                int del1 = ed_act_enabled(ed_act_find("edit.delete"));
-                int undo1 = ed_act_enabled(ed_act_find("hist.undo"));
-                int redo1 = ed_act_enabled(ed_act_find("hist.redo"));
+                int sel1 = ed_cmd_enabled(ed_cmd_find("edit.rename"));
+                int del1 = ed_cmd_enabled(ed_cmd_find("edit.delete"));
+                int undo1 = ed_cmd_enabled(ed_cmd_find("hist.undo"));
+                int redo1 = ed_cmd_enabled(ed_cmd_find("hist.redo"));
                 if (!sel1 || !del1 || !undo1 || redo1) {
                     printf("SELF FAIL: ribbon-gate-live sel=%d del=%d undo=%d redo=%d\n", sel1,
                            del1, undo1, redo1);
@@ -5312,7 +5248,7 @@ int main(int argc, char **argv) {
                 }
                 ed_ribbon_layout();
                 int uin = g_rbN;
-                ed_ribbon_item_rect(ed_act_find("view.panel.palette"), &tx, &ty, &tw, &th);
+                ed_ribbon_item_rect(ed_cmd_find("view.panel.palette"), &tx, &ty, &tw, &th);
                 if (uin != 4 || tw <= 0 || ty < (float)(ED_TOP_CHROME + ED_TABS_H) ||
                     ty + th > (float)ed_top()) {
                     printf("SELF FAIL: ribbon-tab-items n=%d rect=%.0f,%.0f %.0fx%.0f\n", uin,
@@ -5325,10 +5261,10 @@ int main(int argc, char **argv) {
                 for (int t = 0; t < ED_TABS_N; t++) {
                     g_edTab = t;
                     ed_ribbon_layout();
-                    for (int i = 0; i < ED_ACT_N; i++) {
+                    for (int i = 0; i < ed_cmd_n(); i++) {
                         float ix, iy, iw, ih;
                         ed_ribbon_item_rect(i, &ix, &iy, &iw, &ih);
-                        int inRb = ed_act_in_ribbon(i); // предикат — тот же, что у ленты
+                        int inRb = ed_cmd_ribbon(i); // предикат — тот же, что у ленты
                         if (!inRb && iw > 0) dupBtn++;
                         if (inRb && (int)ED_ACT[i].tab == t && iw <= 0) missing++;
                     }
@@ -5341,9 +5277,9 @@ int main(int argc, char **argv) {
                 g_edTab = 0; // HOME
                 ed_ribbon_layout();
                 int hnn = g_rbN;
-                ed_ribbon_item_rect(ed_act_find("edit.rename"), &tx, &ty, &tw, &th);
-                ed_ribbon_item_rect(ed_act_find("view.panel.palette"), &p2x, &p2y, &p2w, &p2h);
-                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &p3x, &p3y, &p3w, &p3h);
+                ed_ribbon_item_rect(ed_cmd_find("edit.rename"), &tx, &ty, &tw, &th);
+                ed_ribbon_item_rect(ed_cmd_find("view.panel.palette"), &p2x, &p2y, &p2w, &p2h);
+                ed_ribbon_item_rect(ed_cmd_find("ui.spawn.button"), &p3x, &p3y, &p3w, &p3h);
                 if (hnn != 5 || tw <= 0 || p2w != 0 || p3w != 0) {
                     printf("SELF FAIL: ribbon-tab-set home=%d rename_w=%.0f pal_w=%.0f "
                            "spawn_w=%.0f\n",
@@ -5358,12 +5294,12 @@ int main(int argc, char **argv) {
                 ed_ribbon_layout();
                 int mscn = g_rbN, domOk = 1, toolOk = 1;
                 for (int s = 0; s < mscn; s++) {
-                    const EdAction *ma = &ED_ACT[g_rbAct[s]];
+                    const EdCmd *ma = &ED_ACT[g_rbAct[s]];
                     if (ma->domain != ED_DM_SCENE) domOk = 0;
                     if (ma->kind != ED_K_TOOL) toolOk = 0;
                 }
-                ed_ribbon_item_rect(ed_act_find("scene.move"), &tx, &ty, &tw, &th);
-                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &p2x, &p2y, &p2w, &p2h);
+                ed_ribbon_item_rect(ed_cmd_find("scene.move"), &tx, &ty, &tw, &th);
+                ed_ribbon_item_rect(ed_cmd_find("ui.spawn.button"), &p2x, &p2y, &p2w, &p2h);
                 // и в обратную сторону: на фронте нет инструментов сцены
                 int frontHasScene = 0;
                 g_edTab = 0;
@@ -5656,7 +5592,7 @@ int main(int argc, char **argv) {
                 // (6) Clear: ЕДИНСТВЕННОЕ место команды — кнопка в шапке (в ленте её
                 // нет); клик по кнопке чистит журнал
                 {
-                    int ai = ed_act_find("console.clear");
+                    int ai = ed_cmd_find("console.clear");
                     float x, y, w, h;
                     g_edTab = ED_ACT[ai].tab;
                     ed_ribbon_layout();
@@ -5744,7 +5680,7 @@ int main(int argc, char **argv) {
             {
                 g_wtSel = 0;
                 int c0 = g_wt.count;
-                int r = ed_act_run(ed_act_find("edit.delete"));
+                int r = ed_cmd_run(ed_cmd_find("edit.delete"));
                 sel_pal_click("edit.delete"); // клик по строке палитры (в ленте её нет)
                 if (r || g_wt.count != c0) {
                     printf("SELF FAIL: ribbon-disabled r=%d %d->%d\n", r, c0, g_wt.count);
@@ -5777,7 +5713,7 @@ int main(int argc, char **argv) {
             // имена клавиш читаемы (тултип/шпаргалка)
             {
                 int dup = 0, keys = 0, km[64], kk[64], kn = 0;
-                for (int i = 0; i < ED_ACT_N; i++)
+                for (int i = 0; i < ed_cmd_n(); i++)
                     for (int s = 0; s < 2; s++) {
                         int key = s == 0 ? ED_ACT[i].key : ED_ACT[i].key2;
                         int mods = s == 0 ? ED_ACT[i].mods : ED_ACT[i].mods2;
@@ -5793,18 +5729,18 @@ int main(int argc, char **argv) {
                     for (int j = i + 1; j < kn; j++)
                         if (km[i] == km[j] && kk[i] == kk[j]) dup++;
                 char b[40];
-                int okn = strcmp(ed_key_name(GLFW_KEY_F2, 0, b, sizeof b), "F2") == 0 &&
-                          strcmp(ed_key_name(GLFW_KEY_DELETE, 0, b, sizeof b), "Del") == 0 &&
-                          strcmp(ed_key_name(GLFW_KEY_Z, GLFW_MOD_CONTROL, b, sizeof b),
+                int okn = strcmp(ed_cmd_key_name(GLFW_KEY_F2, 0, b, sizeof b), "F2") == 0 &&
+                          strcmp(ed_cmd_key_name(GLFW_KEY_DELETE, 0, b, sizeof b), "Del") == 0 &&
+                          strcmp(ed_cmd_key_name(GLFW_KEY_Z, GLFW_MOD_CONTROL, b, sizeof b),
                                  "Ctrl+Z") == 0 &&
-                          strcmp(ed_key_name(GLFW_KEY_1, GLFW_MOD_CONTROL, b, sizeof b),
+                          strcmp(ed_cmd_key_name(GLFW_KEY_1, GLFW_MOD_CONTROL, b, sizeof b),
                                  "Ctrl+1") == 0;
                 if (keys < 8 || dup || !okn) {
                     printf("SELF FAIL: ribbon-keys keys=%d dup=%d names=%d\n", keys, dup, okn);
                     bad = 1;
                 }
                 // клавиша в реестре действительно находит действие (Ctrl+3 -> Inspector)
-                int ai = ed_act_by_key(GLFW_MOD_CONTROL, GLFW_KEY_3);
+                int ai = ed_cmd_by_key(GLFW_MOD_CONTROL, GLFW_KEY_3);
                 if (ai < 0 || strcmp(ED_ACT[ai].id, "view.panel.inspector") != 0) {
                     printf("SELF FAIL: ribbon-keyroute ai=%d\n", ai);
                     bad = 1;
@@ -5817,7 +5753,7 @@ int main(int argc, char **argv) {
                 float kx, ky, kw, kh;
                 ed_keys_rect(&kx, &ky, &kw, &kh);
                 int rows = (int)((kh - 26.0f - 8.0f) / (float)ED_KEYS_RH);
-                if (!g_edShowKeys || rows != ED_ACT_N || !ed_keys_hit(kx + 10, ky + 10) ||
+                if (!g_edShowKeys || rows != ed_cmd_n() || !ed_keys_hit(kx + 10, ky + 10) ||
                     ed_keys_hit(kx - 20, ky - 20)) {
                     printf("SELF FAIL: ribbon-keysheet on=%d rows=%d\n", g_edShowKeys, rows);
                     bad = 1;
@@ -5843,7 +5779,7 @@ int main(int argc, char **argv) {
             // честная пометка [off]; плашка не вылезает за окно
             {
                 g_edTab = 2; // VIEW
-                g_rbHot = ed_act_find("view.panel.tree");
+                g_rbHot = ed_cmd_find("view.panel.tree");
                 char tip[160];
                 ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
                 float tx, ty, tw, th;
@@ -5852,7 +5788,7 @@ int main(int argc, char **argv) {
                 int in1 = tw > 0 && tx >= 0 && ty >= 0 && tx + tw <= (float)g_WW &&
                           ty + th <= (float)g_WH;
                 g_edTab = 0; // HOME
-                g_rbHot = ed_act_find("edit.delete");
+                g_rbHot = ed_cmd_find("edit.delete");
                 ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
                 int ok2 = strstr(tip, "off") != 0;
                 if (!ok1 || !in1 || !ok2) {
@@ -5897,22 +5833,22 @@ int main(int argc, char **argv) {
                 UiPanels *sp = ui_panels_create();
                 UiPanels *keep = g_panels;
                 g_panels = sp;
-                int mv = ed_act_find("scene.move");
-                int srt = ed_act_find("scene.rotate");
-                int sca = ed_act_find("scene.scale");
-                int ssl = ed_act_find("scene.select");
-                int pan = ed_act_find("ui.spawn.panel");
+                int mv = ed_cmd_find("scene.move");
+                int srt = ed_cmd_find("scene.rotate");
+                int sca = ed_cmd_find("scene.scale");
+                int ssl = ed_cmd_find("scene.select");
+                int pan = ed_cmd_find("ui.spawn.panel");
                 int domBad = !(mv >= 0 && srt >= 0 && sca >= 0 && ssl >= 0 && pan >= 0) ||
                              ED_ACT[mv].domain != ED_DM_SCENE ||
                              ED_ACT[pan].domain != ED_DM_FRONT ||
                              ED_ACT[mv].kind != ED_K_TOOL;
                 ui_panels_set_tool(sp, 1);
                 int onN = 0;
-                for (int i = 0; i < ED_ACT_N; i++)
-                    if (ED_ACT[i].domain == ED_DM_SCENE && ed_act_on(i)) onN++;
-                if (domBad || onN != 1 || !ed_act_on(mv) || ed_act_on(ssl)) {
+                for (int i = 0; i < ed_cmd_n(); i++)
+                    if (ED_ACT[i].domain == ED_DM_SCENE && ed_cmd_on(i)) onN++;
+                if (domBad || onN != 1 || !ed_cmd_on(mv) || ed_cmd_on(ssl)) {
                     printf("SELF FAIL: scene-radio dom=%d on=%d mv=%d sel=%d\n", domBad, onN,
-                           ed_act_on(mv), ed_act_on(ssl));
+                           ed_cmd_on(mv), ed_cmd_on(ssl));
                     bad = 1;
                 }
                 // клик по кнопке ленты MODEL переключает режим ДВИЖКА (тот же путь,
@@ -5927,7 +5863,7 @@ int main(int argc, char **argv) {
                     printf("SELF FAIL: scene-key tool=%d\n", ui_panels_tool(sp));
                     bad = 1;
                 }
-                int ai = ed_act_by_key(0, GLFW_KEY_Q); // Q = Select
+                int ai = ed_cmd_by_key(0, GLFW_KEY_Q); // Q = Select
                 if (ai < 0 || strcmp(ED_ACT[ai].id, "scene.select") != 0) {
                     printf("SELF FAIL: scene-keyroute ai=%d\n", ai);
                     bad = 1;
@@ -6046,7 +5982,7 @@ int main(int argc, char **argv) {
         const char *kb = getenv("UI_EDIT_KEYS");
         if (kb && kb[0] == '1') {
             g_edShowKeys = 1;
-            printf("ui_edit: keys overlay ON rows=%d\n", ED_ACT_N);
+            printf("ui_edit: keys overlay ON rows=%d\n", ed_cmd_n());
         }
     }
     if (!text) printf("ui_edit: text OFF (rects only)\n");
@@ -6314,13 +6250,13 @@ int main(int argc, char **argv) {
             printf("ui_edit: vp=%d,%d %dx%d win=%dx%d\n", g_vpx, g_vpy, g_vpw, g_vph, g_WW,
                    g_WH);
             printf("ui_edit: ribbon tab=%s n=%d groups=%d actions=%d\n",
-                   g_edRibbonTab[g_edTab], g_rbN, g_rbGroupN, ED_ACT_N);
+                   g_edRibbonTab[g_edTab], g_rbN, g_rbGroupN, ed_cmd_n());
             for (int s2 = 0; s2 < g_rbN; s2++) { // кнопки активной ленты
-                const EdAction *a = &ED_ACT[g_rbAct[s2]];
+                const EdCmd *a = &ED_ACT[g_rbAct[s2]];
                 float x, y, w, h;
                 ed_ribbon_item_rect(g_rbAct[s2], &x, &y, &w, &h);
                 printf("ui_edit: rb %s x=%.0f y=%.0f %.0fx%.0f en=%d\n", a->id, (double)x,
-                       (double)y, (double)w, (double)h, ed_act_enabled(g_rbAct[s2]));
+                       (double)y, (double)w, (double)h, ed_cmd_enabled(g_rbAct[s2]));
             }
         }
         if (clEnv && clEnv[0] >= '0' && tdcnt == 3) { // F5h2: клик по коду события
@@ -6599,7 +6535,7 @@ int main(int argc, char **argv) {
                     if (gn && gw > 0) ui_text_quad(text, gx + 6, gy + gh - 12, gn, gcol);
                 }
                 for (int s = 0; s < g_rbN; s++) { // метки кнопок активной ленты
-                    const EdAction *a = &ED_ACT[g_rbAct[s]];
+                    const EdCmd *a = &ED_ACT[g_rbAct[s]];
                     float x, y, w, h;
                     ed_ribbon_item_rect(g_rbAct[s], &x, &y, &w, &h);
                     if (w <= 0) continue;
@@ -6608,7 +6544,7 @@ int main(int argc, char **argv) {
                                    ? x + 20.0f
                                    : x + (w - tw) * 0.5f;
                     ui_text_quad(text, tx, y + 2.0f, a->label,
-                                 ed_act_enabled(g_rbAct[s]) ? tcol : ocol);
+                                 ed_cmd_enabled(g_rbAct[s]) ? tcol : ocol);
                 }
             }
             {
@@ -6825,19 +6761,19 @@ int main(int argc, char **argv) {
                 float x, y, w, h;
                 ed_keys_rect(&x, &y, &w, &h);
                 char hd[64];
-                snprintf(hd, sizeof hd, "KEYS: %d actions (F1/Esc close)", ED_ACT_N);
+                snprintf(hd, sizeof hd, "KEYS: %d actions (F1/Esc close)", ed_cmd_n());
                 ui_text_quad(text, x + 8, y + 4, hd, tcol);
-                for (int i = 0; i < ED_ACT_N; i++) {
+                for (int i = 0; i < ed_cmd_n(); i++) {
                     float ry = y + 26.0f + (float)i * (float)ED_KEYS_RH;
                     char kb[48];
-                    ed_act_keys(i, kb, sizeof kb);
-                    int en = ed_act_enabled(i);
+                    ed_cmd_keys(i, kb, sizeof kb);
+                    int en = ed_cmd_enabled(i);
                     // ГДЕ команда живёт: строка палитры -> "PALETTE", кнопка в шапке
                     // панели -> "PANEL", иначе — лента. Тестеру («нажимаю Panel, иду
                     // в UI — опять Panel?») эта колонка и отвечает: команда живёт в
                     // ОДНОМ месте, и колонка берёт это из вида записи.
-                    const EdAction *ka = &ED_ACT[i];
-                    const char *where = ed_act_in_ribbon(i)
+                    const EdCmd *ka = &ED_ACT[i];
+                    const char *where = ed_cmd_ribbon(i)
                                             ? g_edRibbonTab[ka->tab]
                                             : ((ka->views & ED_V_PALETTE) ? "PALETTE" : "PANEL");
                     ui_text_quad(text, x + 8, ry, where, hcol);
