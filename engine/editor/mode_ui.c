@@ -15,6 +15,7 @@
 #include <strings.h> // strcasecmp (ручки теста: имя ленты)
 #include <math.h>
 #include <unistd.h> // F5h: access() — герметичность selftest (бэкап раскладки)
+#include <time.h>   // nanosleep: потолок кадра (ноут не молотит кадры вхолостую)
 #include "rhi_gl.h" // ПЕРВЫМ: GLFW_INCLUDE_NONE + glad (иначе gl.h-конфликт)
 #include "render_api.h"
 #include "ui/ui_panels.h" // меню/тулбар/иерархия/статус + EDIT-правка
@@ -5862,6 +5863,25 @@ static int mode_ui_run(int argc, char **argv) {
         const char *vs = getenv("UI_EDIT_VSYNC");
         glfwSwapInterval(vs && vs[0] == '0' ? 0 : 1);
     }
+    // ПОТОЛОК КАДРА (как «Frame rate limit» в UE/Unity). Vsync просят не все
+    // драйверы/композиторы: без потолка редактор молотит тысячи кадров в секунду и
+    // греет ноут вхолостую — между кадрами картинка не меняется. Правило: быстрее
+    // частоты монитора кадры не нужны. UI_EDIT_FPS=n — свой потолок (0 = снять);
+    // UI_EDIT_VSYNC=0 (замеры/бенч) снимает потолок сам — иначе мерим не то.
+    int frame_cap = 0;
+    {
+        const char *fs = getenv("UI_EDIT_FPS");
+        const char *vs = getenv("UI_EDIT_VSYNC");
+        if (fs && fs[0]) frame_cap = atoi(fs);
+        else if (vs && vs[0] == '0') frame_cap = 0;
+        else {
+            const GLFWvidmode *vm = glfwGetVideoMode(glfwGetPrimaryMonitor());
+            frame_cap = (vm && vm->refreshRate > 0) ? vm->refreshRate : 60;
+        }
+        if (frame_cap < 0) frame_cap = 0;
+        if (frame_cap > 240) frame_cap = 240; // больше мониторов не бывает
+        printf("editor/ui: потолок кадра %d FPS (0 = без потолка, UI_EDIT_FPS)\n", frame_cap);
+    }
     {
         const char *nf = getenv("UI_EDIT_FULL");
         if (nf && nf[0] == '1') {
@@ -6032,6 +6052,7 @@ static int mode_ui_run(int argc, char **argv) {
     int tdcnt = 0;
     static const float hintCol[4] = {0.55f, 0.55f, 0.58f, 1.0f};
     while (!glfwWindowShouldClose(win) && !g_quit) {
+        double frameT0 = glfwGetTime(); // начало кадра: потолок спит остаток бюджета
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
         { // живой FPS (для жалобы «со временем деградирует»)
             double nowT = glfwGetTime();
@@ -6763,6 +6784,17 @@ static int mode_ui_run(int argc, char **argv) {
         eng_pass_end(&t);
         comp_present_gl(prog, vao, &t, g_WW, g_WH);
         glfwSwapBuffers(win);
+        if (frame_cap > 0) { // потолок: спим остаток бюджета кадра (ноут холодный)
+            double budget = 1.0 / (double)frame_cap;
+            double el = glfwGetTime() - frameT0;
+            if (el < budget) {
+                double rest = budget - el;
+                struct timespec ts;
+                ts.tv_sec = (time_t)rest;
+                ts.tv_nsec = (long)((rest - (double)ts.tv_sec) * 1e9);
+                nanosleep(&ts, 0);
+            }
+        }
         glfwPollEvents();
         drain_ev(); // применить ввод раз за кадр (коалесинг MOVE)
         frames++;
