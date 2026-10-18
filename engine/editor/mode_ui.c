@@ -1,10 +1,14 @@
-// ui_edit: РЕЖИМ «UI» + пока ещё и приложение (исправление 18.10: оболочка —
-// редактора, режим — это он). Правщик фронта (§13): своё окно, без 3D.
+// mode_ui: РЕЖИМ «UI» редактора — правка фронта (§13): доки, панели, вьюпорт-
+// документ. Это РЕЖИМ приложения-редактора (editor_main.c): хост выбирает его по
+// --mode ui, а mode_ui ведёт окно, кадр и свой документ.
 // Разделение файлов: editor/ed_cmd.* = командное ядро ХОСТА (реестр/клавиши),
-// editor/ed_shell.* (A3) = доки/панели/лента/консоль, mode_ui.* (A4) = режим.
+// editor/ed_shell.* (A3) = доки/панели/лента/консоль, editor/ed_mode.* = список
+// режимов, mode_ui.* (A4) = сам режим.
 // Файлы-обменники с игровым редактором: layout.json + theme.json
 // (коммиты пишут сами панели: lay_commit / ui_theme_save).
-// Запуск из корня репо (шейдеры относительные, как ui_test): ./engine/build/ui_edit
+// Запуск из корня репо: ./tools/uiedit.sh  (= editor --mode ui)
+#include "editor/ed_mode.h"  // запись режима для реестра хоста
+#include "editor/mode_ui.h" // ED_MODE_UI (её объявление)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2568,7 +2572,7 @@ static void shapes_dump(const RcVecShape *s, int n) {
     const char *e = getenv("UI_EDIT_SHAPES");
     if (!e || !e[0]) return;
     int all = e[0] >= '2';
-    printf("ui_edit: shapes n=%d vp=%d,%d %dx%d win=%dx%d\n", n, g_sh.vpx, g_sh.vpy, g_sh.vpw, g_sh.vph,
+    printf("editor/ui: shapes n=%d vp=%d,%d %dx%d win=%dx%d\n", n, g_sh.vpx, g_sh.vpy, g_sh.vpw, g_sh.vph,
            g_WW, g_WH);
     for (int i = 0; i < n; i++) {
         float x = s[i].a, y = s[i].b, w = s[i].c, h = s[i].d;
@@ -2767,7 +2771,7 @@ static void ed_self_toggle(int on) {
     g_dragHandle = 0;
     g_palHot = -1;
     edit_push();
-    printf("ui_edit: self=%d (правим %s)\n", g_editSelf,
+    printf("editor/ui: self=%d (правим %s)\n", g_editSelf,
            g_editSelf ? "ХРОМ редактора" : "документ (layout.json)");
 }
 
@@ -2885,9 +2889,13 @@ static int sel_pal_click(const char *id) {
     return 0;
 }
 
-int main(int argc, char **argv) {
+// ВХОД РЕЖИМА «UI»: окно, кадр, документ, тесты. Зовёт хост (editor) по --mode ui.
+static int mode_ui_run(int argc, char **argv) {
     setvbuf(stdout, 0, _IONBF, 0);
-    if (argc > 1 && !strcmp(argv[1], "--selftest")) {
+    int selftest_arg = 0; // ключ, а не позиция: editor --mode ui --selftest тоже годится
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--selftest")) selftest_arg = 1;
+    if (selftest_arg) {
         g_selftest = 1; // файлы состояния инструментов юзера не трогаем
         ed_shell_no_save(&g_sh, getenv("UI_EDIT_BENCH") ? 0 : 1);
         // Без окна/GL: панели в EDIT строят примитивы, вьюпорт — остаток,
@@ -2900,7 +2908,7 @@ int main(int argc, char **argv) {
         // прогон перезапишет бэкап своим «пустым» layout.json — файл потерян.
         if (access("engine/assets/layout.json.selftest-bak", F_OK) == 0) {
             rename("engine/assets/layout.json.selftest-bak", "engine/assets/layout.json");
-            printf("ui_edit: selftest вернул бэкап раскладки (прошлый прогон упал)\n");
+            printf("editor/ui: selftest вернул бэкап раскладки (прошлый прогон упал)\n");
         }
         int laySaved = (rename("engine/assets/layout.json",
                                "engine/assets/layout.json.selftest-bak") == 0);
@@ -4984,6 +4992,16 @@ int main(int argc, char **argv) {
                 }
                 if (err) { printf("SELF FAIL: shell-panel err=%d\n", err); bad = 1; }
             }
+            // (1e) РЕЕСТР РЕЖИМОВ ХОСТА (ed_mode): выбор по id, а не по порядку в коде.
+            // Именно этим хост выбирает, какой режим ведёт окно (main → m->run).
+            {
+                int me = 0;
+                const EdMode *ui = ed_mode_find("ui");
+                if (ed_mode_n() < 1 || !ui || ui->run != mode_ui_run || !ui->caption) me = 1;
+                if (ed_mode_find("scene") || ed_mode_find("")) me = 2; // чужого id нет
+                if (ed_mode_at(0) != ui) me = 3;                       // порядок = как завели
+                if (me) { printf("SELF FAIL: mode-registry err=%d\n", me); bad = 1; }
+            }
             // (1b) ПАЛИТРА — вид ТОГО ЖЕ реестра (второго списка строк нет):
             // строки/метки = записи с видом ED_V_PALETTE, имена типов — из записей
             // создания. Раньше это были отдельные PAL_LABEL/PAL_TYPE (дубль).
@@ -5726,16 +5744,16 @@ int main(int argc, char **argv) {
         return bad;
     }
     if (!glfwInit()) {
-        printf("ui_edit: glfw FAIL\n");
+        printf("editor/ui: glfw FAIL\n");
         return 1;
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow *win = glfwCreateWindow(W, H, "ui_edit: front (§13)", 0, 0);
+    GLFWwindow *win = glfwCreateWindow(W, H, "editor — UI (§13)", 0, 0);
     if (!win) {
-        printf("ui_edit: window FAIL\n");
+        printf("editor/ui: window FAIL\n");
         return 1;
     }
     { // §14 F5l: тест-инструмент — окно заданного размера. Жалоба тестера
@@ -5754,7 +5772,7 @@ int main(int argc, char **argv) {
     glfwSetWindowSizeLimits(win, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
     RenderCore *vec = rc_create("vec");
     if (!vec || !vec->init(vec, win)) {
-        printf("ui_edit: vec FAIL\n");
+        printf("editor/ui: vec FAIL\n");
         return 1;
     }
     g_vec = vec;
@@ -5769,7 +5787,7 @@ int main(int argc, char **argv) {
     }
     g_panels = ui_panels_create();
     if (!g_panels) {
-        printf("ui_edit: panels FAIL\n");
+        printf("editor/ui: panels FAIL\n");
         return 1;
     }
     widget_tree_init(&g_wt); // §14: пусто до создания из палитры
@@ -5785,7 +5803,7 @@ int main(int argc, char **argv) {
         if (sf && sf[0] == '1') {
             g_editSelf = 1;
             g_act = &g_sh.wt;
-            printf("ui_edit: self=1 (env): правим ХРОМ редактора\n");
+            printf("editor/ui: self=1 (env): правим ХРОМ редактора\n");
         }
     }
     UiText *text = ui_text_init("engine/assets/mono.ttf", 16.0f);
@@ -5801,16 +5819,16 @@ int main(int argc, char **argv) {
                     if (strcasecmp(tb, ed_ws_tab(i)) == 0) t = i;
             if (t >= 0 && t < ed_ws_tabs()) {
                 g_edTab = t;
-                printf("ui_edit: tab=%s (%d)\n", ed_ws_tab(t), t);
+                printf("editor/ui: tab=%s (%d)\n", ed_ws_tab(t), t);
             }
         }
         const char *kb = getenv("UI_EDIT_KEYS");
         if (kb && kb[0] == '1') {
             g_edShowKeys = 1;
-            printf("ui_edit: keys overlay ON rows=%d\n", ed_cmd_n());
+            printf("editor/ui: keys overlay ON rows=%d\n", ed_cmd_n());
         }
     }
-    if (!text) printf("ui_edit: text OFF (rects only)\n");
+    if (!text) printf("editor/ui: text OFF (rects only)\n");
     // Всегда EDIT (L скриптом — как дефолтный select в ui_test).
     {
         UiEvent ke;
@@ -5818,12 +5836,12 @@ int main(int argc, char **argv) {
         ke.kind = UI_EV_KEY;
         ke.key = 'L';
         ui_panels_event(g_panels, &g_scene, &ke);
-        printf("ui_edit: edit=%d (want 1)\n", ui_panels_edit(g_panels));
+        printf("editor/ui: edit=%d (want 1)\n", ui_panels_edit(g_panels));
     }
     unsigned prog = rhi_gl_prog("engine/shaders/blit/blit.vert", "engine/shaders/blit/blit.frag");
     unsigned vao = rhi_gl_empty_vao();
     if (!prog || !vao) {
-        printf("ui_edit: blit FAIL\n");
+        printf("editor/ui: blit FAIL\n");
         return 1;
     }
     RcTarget t;
@@ -5848,7 +5866,7 @@ int main(int argc, char **argv) {
         const char *nf = getenv("UI_EDIT_FULL");
         if (nf && nf[0] == '1') {
             g_noDirty = 1;
-            printf("ui_edit: full=1 (dirty-rect выключен — диагноз шлейфа при драге)\n");
+            printf("editor/ui: full=1 (dirty-rect выключен — диагноз шлейфа при драге)\n");
         }
     }
     g_curArrow = glfwCreateStandardCursor(GLFW_ARROW_CURSOR);
@@ -5894,7 +5912,7 @@ int main(int argc, char **argv) {
         const char *rn = getenv("UI_EDIT_RENAME");
         if (rn && rn[0] == '1') {
             ed_cmd_run(ed_cmd_find("edit.rename")); // та же дверь, что у F2
-            printf("ui_edit: rename '%s' (sel %d..%d)\n", g_nameBuf, name_sel_lo(),
+            printf("editor/ui: rename '%s' (sel %d..%d)\n", g_nameBuf, name_sel_lo(),
                    name_sel_hi());
         }
     }
@@ -5904,7 +5922,7 @@ int main(int argc, char **argv) {
             int k = atoi(sp);
             for (int i = 0; i < k; i++) wt_spawn(UI_W_BUTTON);
             edit_push();
-            printf("ui_edit: spawn %d (widgets=%d)\n", k, g_wt.count);
+            printf("editor/ui: spawn %d (widgets=%d)\n", k, g_wt.count);
         }
     }
     // Бенч драга: без vsync-капа, синтетика в цикле (ниже).
@@ -6058,7 +6076,7 @@ int main(int argc, char **argv) {
                 ed_shell_sync(&g_sh, g_WW, g_WH); // F5k: док пересчитываем от нового размера
                 ed_shell_panels_keep_inside(&g_sh, g_WW, g_WH); // и оторванные панели втягиваем в окно
                 edit_push();
-                printf("ui_edit: resize %dx%d\n", g_WW, g_WH);
+                printf("editor/ui: resize %dx%d\n", g_WW, g_WH);
             }
         }
         tdcnt++; // кадр: синтетика F5h ждёт ресайза окна (координаты настоящие)
@@ -6067,20 +6085,20 @@ int main(int argc, char **argv) {
                 float x, y, w, h, ix, iy, iw, ih;
                 ed_shell_panel_home(&g_sh, g_WW, g_WH, i, &x, &y, &w, &h);
                 ed_shell_panel_rect(&g_sh, g_WW, g_WH, i, &ix, &iy, &iw, &ih);
-                printf("ui_edit: panel %d id=%d home=%.0f,%.0f %.0fx%.0f now=%.0f,%.0f "
+                printf("editor/ui: panel %d id=%d home=%.0f,%.0f %.0fx%.0f now=%.0f,%.0f "
                        "%.0fx%.0f float=%d\n",
                        i, g_sh.panel[i], (double)x, (double)y, (double)w, (double)h,
                        (double)ix, (double)iy, (double)iw, (double)ih, ed_shell_panel_float(&g_sh, i));
             }
-            printf("ui_edit: vp=%d,%d %dx%d win=%dx%d\n", g_sh.vpx, g_sh.vpy, g_sh.vpw, g_sh.vph, g_WW,
+            printf("editor/ui: vp=%d,%d %dx%d win=%dx%d\n", g_sh.vpx, g_sh.vpy, g_sh.vpw, g_sh.vph, g_WW,
                    g_WH);
-            printf("ui_edit: ribbon tab=%s n=%d groups=%d actions=%d\n",
+            printf("editor/ui: ribbon tab=%s n=%d groups=%d actions=%d\n",
                    ed_ws_tab(g_edTab), g_rbN, g_rbGroupN, ed_cmd_n());
             for (int s2 = 0; s2 < g_rbN; s2++) { // кнопки активной ленты
                 const EdCmd *a = &ED_ACT[g_rbAct[s2]];
                 float x, y, w, h;
                 ed_ribbon_item_rect(g_rbAct[s2], &x, &y, &w, &h);
-                printf("ui_edit: rb %s x=%.0f y=%.0f %.0fx%.0f en=%d\n", a->id, (double)x,
+                printf("editor/ui: rb %s x=%.0f y=%.0f %.0fx%.0f en=%d\n", a->id, (double)x,
                        (double)y, (double)w, (double)h, ed_cmd_enabled(g_rbAct[s2]));
             }
         }
@@ -6098,7 +6116,7 @@ int main(int argc, char **argv) {
                 ce.x = (float)cx;
                 ce.y = (float)cy;
                 route_event(&ce);
-                printf("ui_edit: click %d,%d -> sel=%d\n", cx, cy, g_wtSel);
+                printf("editor/ui: click %d,%d -> sel=%d\n", cx, cy, g_wtSel);
             }
         }
         if (drEnv && drEnv[0] >= '0' && tdcnt == 3) { // F5j: драг (панель/виджет)
@@ -6124,7 +6142,7 @@ int main(int argc, char **argv) {
                 de.y = (float)y2;
                 g_mouseDown = 0;
                 route_event(&de);
-                printf("ui_edit: drag %d,%d -> %d,%d grab=%d float=%d\n", x1, y1, x2, y2,
+                printf("editor/ui: drag %d,%d -> %d,%d grab=%d float=%d\n", x1, y1, x2, y2,
                        g_sh.grab, ed_shell_panel_float(&g_sh, 0) || ed_shell_panel_float(&g_sh, 1) || ed_shell_panel_float(&g_sh, 2) ||
                                      ed_shell_panel_float(&g_sh, 3));
             }
@@ -6161,7 +6179,7 @@ int main(int argc, char **argv) {
                     he.kind = UI_EV_MOVE;
                 }
                 route_event(&he);
-                printf("ui_edit: hold step=%d %.0f,%.0f part=%d n=%d over=%d sel=%d\n", hdStep,
+                printf("editor/ui: hold step=%d %.0f,%.0f part=%d n=%d over=%d sel=%d\n", hdStep,
                        (double)he.x, (double)he.y, g_part, g_dirtyN, g_dirtyOver, g_wtSel);
                 hdStep++;
             }
@@ -6230,7 +6248,7 @@ int main(int argc, char **argv) {
                     glfwSetCursorPos(win, (double)(a / (g_mouseKx > 0 ? g_mouseKx : 1.0f)),
                                      (double)(b / (g_mouseKy > 0 ? g_mouseKy : 1.0f)));
                 }
-                printf("ui_edit: script %s -> sel=%d open=%d%d%d float=%d%d%d", act, g_wtSel,
+                printf("editor/ui: script %s -> sel=%d open=%d%d%d float=%d%d%d", act, g_wtSel,
                        g_sh.open[0], g_sh.open[1], g_sh.open[2], ed_shell_panel_float(&g_sh, 0),
                        ed_shell_panel_float(&g_sh, 1), ed_shell_panel_float(&g_sh, 2));
                 for (int i = 0; i < ed_ws_panels(); i++) {
@@ -6256,7 +6274,7 @@ int main(int argc, char **argv) {
                 ce.x = (float)cx;
                 ce.y = (float)cy;
                 route_event(&ce);
-                printf("ui_edit: click2 %d,%d -> sel=%d float=%d\n", cx, cy, g_wtSel,
+                printf("editor/ui: click2 %d,%d -> sel=%d float=%d\n", cx, cy, g_wtSel,
                        ed_shell_panel_float(&g_sh, 0) || ed_shell_panel_float(&g_sh, 1) || ed_shell_panel_float(&g_sh, 2));
             }
         }
@@ -6276,10 +6294,10 @@ int main(int argc, char **argv) {
                         g_wtSel = drag;
                         wt_persist();
                         undo_commit((nw ? nw->parent : 0) != oldp ? "reparent" : "reorder");
-                        printf("ui_edit: tdrop id=%d -> %d mode=%d ok parent=%d\n",
+                        printf("editor/ui: tdrop id=%d -> %d mode=%d ok parent=%d\n",
                                drag, tgt, md2, nw ? nw->parent : -1);
                     } else {
-                        printf("ui_edit: tdrop id=%d -> %d mode=%d FAIL\n", drag, tgt,
+                        printf("editor/ui: tdrop id=%d -> %d mode=%d FAIL\n", drag, tgt,
                                md2);
                     }
                 }
@@ -6295,14 +6313,14 @@ int main(int argc, char **argv) {
                     g_treeDragY = y + h * 0.5f;
                     g_treeDropId = tree_drop_at(g_treeDragX, g_treeDragY, &g_treeDropMode);
                     if (tdcnt == 3)
-                        printf("ui_edit: tdrag row=%d id=%d -> %d mode=%d\n", row,
+                        printf("editor/ui: tdrag row=%d id=%d -> %d mode=%d\n", row,
                                g_treeDrag, g_treeDropId, g_treeDropMode);
                 }
             }
             if ((tdpEnv && tdpEnv[0] >= '0') || (tdEnv && tdEnv[0] >= '0')) edit_push();
         }
         if (!eng_target_resize(&t, g_WW, g_WH)) {
-            printf("ui_edit: target FAIL\n");
+            printf("editor/ui: target FAIL\n");
             return 1;
         }
         // Чистим цель сами (W2: решение вызывающего, не ядра).
@@ -6609,7 +6627,7 @@ int main(int argc, char **argv) {
             glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
             glViewport(0, 0, g_WW, g_WH);
             if (getenv("UI_EDIT_SHAPES")) // диагноз «текст пропал»: бюджет числом
-                printf("ui_edit: text quads %d/%d\n", ui_text_quads(text), UI_TEXT_MAXQ);
+                printf("editor/ui: text quads %d/%d\n", ui_text_quads(text), UI_TEXT_MAXQ);
             ui_text_flush(text, g_WW, g_WH);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
@@ -6632,7 +6650,7 @@ int main(int argc, char **argv) {
                     for (int y = g_WH - 1; y >= 0; y--)
                         fwrite(px + (size_t)y * g_WW * 3, 1, (size_t)g_WW * 3, ff);
                     fclose(ff);
-                    printf("ui_edit: shot %s\n", shot);
+                    printf("editor/ui: shot %s\n", shot);
                 }
                 free(px);
             }
@@ -6658,7 +6676,7 @@ int main(int argc, char **argv) {
             }
             double t1 = glfwGetTime();
             RcVecShape tmp[UI_MAX_PRIMS];
-            printf("ui_edit: bench spawn n=%d dt=%.3f ms each=%.3f ms shapes=%d widgets=%d\n",
+            printf("editor/ui: bench spawn n=%d dt=%.3f ms each=%.3f ms shapes=%d widgets=%d\n",
                    g_benchNSpawn, (t1 - t0) * 1000.0,
                    (t1 - t0) * 1000.0 / (double)g_benchNSpawn, build_shapes(tmp),
                    g_wt.count);
@@ -6720,7 +6738,7 @@ int main(int argc, char **argv) {
         }
         if (g_bench && frames == 10 + g_benchK - 1) {
             double dt = glfwGetTime() - g_benchT0;
-            printf("ui_edit: bench %s steps=%d dt=%.3f fps=%.1f\n",
+            printf("editor/ui: bench %s steps=%d dt=%.3f fps=%.1f\n",
                    g_forceFull     ? "full"
                    : g_benchSpawn  ? "spawn"
                    : g_benchResize ? "resize"
@@ -6731,7 +6749,7 @@ int main(int argc, char **argv) {
             if (bw) {
                 float rx, ry, rw, rh;
                 widget_rect_px(bw, g_WW, g_WH, &rx, &ry, &rw, &rh);
-                printf("ui_edit: bench geom id=%d x=%.1f y=%.1f w=%.1f h=%.1f\n",
+                printf("editor/ui: bench geom id=%d x=%.1f y=%.1f w=%.1f h=%.1f\n",
                        g_benchId, rx, ry, rw, rh);
             }
             g_quit = 1;
@@ -6740,7 +6758,7 @@ int main(int argc, char **argv) {
         if (g_bench && !g_benchNoEv && frames >= 10 && frames % 100 == 9 && frames > 10) {
             double dt = glfwGetTime() - g_benchT0;
             int done = frames - 9;
-            printf("ui_edit: bench win steps=%d fps=%.1f\n", done, done / dt);
+            printf("editor/ui: bench win steps=%d fps=%.1f\n", done, done / dt);
         }
         eng_pass_end(&t);
         comp_present_gl(prog, vao, &t, g_WW, g_WH);
@@ -6749,7 +6767,7 @@ int main(int argc, char **argv) {
         drain_ev(); // применить ввод раз за кадр (коалесинг MOVE)
         frames++;
     }
-    printf("ui_edit: frames=%d DONE\n", frames);
+    printf("editor/ui: frames=%d DONE\n", frames);
     if (g_curArrow) glfwDestroyCursor(g_curArrow);
     if (g_curResize) glfwDestroyCursor(g_curResize);
     g_curArrow = g_curResize = 0;
@@ -6757,3 +6775,6 @@ int main(int argc, char **argv) {
     ui_text_destroy(text);
     return 0;
 }
+
+// ЗАПИСЬ РЕЖИМА для реестра хоста (ed_mode): id «ui» = --mode ui.
+const EdMode ED_MODE_UI = {"ui", "UI", mode_ui_run};

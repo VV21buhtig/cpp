@@ -167,18 +167,19 @@ target_compile_options(ui_test PRIVATE -Wall -Wextra)
 # ни сцены внутри — исполнение команд приходит колбэками (editor/ed_cmd.h).
 # Отдельная библиотека, потому что её будут линковать и редактор, и его режимы.
 add_library(editor_core STATIC editor/ed_cmd.c editor/ed_doc.c editor/ed_workspace.c
-                             editor/ed_shell.c)
+                             editor/ed_shell.c editor/ed_mode.c)
 target_include_directories(editor_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
 target_link_libraries(editor_core PUBLIC glfw m)
 target_compile_options(editor_core PRIVATE -Wall -Wextra)
-# Отдельный правщик фронта (§13): своё окно, без 3D, всегда EDIT.
-# Пока это и режим, и приложение; оболочка переезжает в editor/ (A3/A4).
-add_executable(ui_edit ui_edit.c)
-target_include_directories(ui_edit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ui_edit PRIVATE engine_shared editor_core m)
-target_compile_options(ui_edit PRIVATE -Wall -Wextra)
+# РЕДАКТОР (§13/§14): приложение-хост. Вход (editor_main.c) выбирает РЕЖИМ по id
+# (--mode ui), режим ведёт окно/кадр/документ. Без --mode — режим "ui".
+# Правщик фронта = режим "ui": tools/uiedit.sh.
+add_executable(editor editor/editor_main.c editor/mode_ui.c)
+target_include_directories(editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(editor PRIVATE engine_shared editor_core m)
+target_compile_options(editor PRIVATE -Wall -Wextra)
 # Прямой вьювер (схема Roblox/UE5): отдельный процесс, своё окно, GPU->GPU.
 add_executable(direct_view direct_view.c)
 target_include_directories(direct_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
