@@ -144,17 +144,19 @@ static void ed_emit_clip(RcVecShape *sh, int *n, float x, float y, float w, floa
 // ленты. Кнопки строятся из РЕЕСТРА ДЕЙСТВИЙ (одна таблица = лента + шпаргалка
 // клавиш + тултипы + горячие клавиши). В UE 4.22 это TCommands/FUICommandInfo:
 // объявил действие один раз — получил команду, клавишу и подсказку.
-#define ED_TABS_N 4
+#define ED_TABS_N 3
 #define ED_RIBBON_H 40      // высота полосы кнопок активной ленты
 #define ED_RIBBON_ITEM_H 20 // высота кнопки ленты
 #define ED_RIBBON_GAP 4
 #define ED_RIBBON_SEP 8 // зазор между группами
-// Ленты/вкладки. Разделение по ДОМЕНУ: HOME/UI/VIEW — САМ РЕДАКТОР и интерфейс,
+// Ленты/вкладки. Разделение по ДОМЕНУ: HOME/VIEW — САМ РЕДАКТОР и интерфейс,
 // который в нём строят (фронт); MODEL — инструменты РЕДАКТОРА СЦЕНЫ (игровой мир).
 // Тестер: «для самого редактора отдельно ... разделить, но чтобы функционал
-// сохранился». Пустых вкладок-заглушек не держим: в ленте нет ни одной кнопки без
-// действия (SCRIPT не заводим — запуска/скриптов ещё нет).
-static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "MODEL", "UI", "VIEW"};
+// сохранился». Пустых вкладок не держим: вкладки UI нет, потому что ВСЁ её
+// содержимое (Panel/Button/Label) — строки палитры, а вторая кнопка для той же
+// команды читается как дубль («нажимаю Panel, иду в UI — почему тут опять Panel?»).
+// SCRIPT не заводим — запуска/скриптов ещё нет.
+static const char *g_edRibbonTab[ED_TABS_N] = {"HOME", "MODEL", "VIEW"};
 static int g_edTab = 0;      // активная лента (0..ED_TABS_N-1)
 static int g_edShowKeys = 0; // F5l(2): шпаргалка клавиш (F1) поверх всего
 static int g_rbHot = -1;     // id действия под курсором (тултип), -1 = нет
@@ -1011,18 +1013,20 @@ typedef struct {
 // порядок строк ПАЛИТРЫ (у кого вид ED_V_PALETTE). Здесь только то, что РАБОТАЕТ:
 // заглушек-пустышек нет — действие попадает сюда вместе со своим исполнением.
 static const EdAction ED_ACT[] = {
-    // UI: чем правим интерфейс (лента UI + строки палитры Panel/Button/Label)
-    {"ui.spawn.panel", "Panel", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+    // Панель «PALETTE»: чем правим интерфейс — здесь и ТОЛЬКО здесь (строки
+    // Panel/Button/Label/Delete). tab у этих записей не используется: в ленте они
+    // не рисуются (правило «одна кнопка на действие»).
+    {"ui.spawn.panel", "Panel", "Create", 0, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
      UI_W_PANEL, 0, 0, 0, 0, ED_DM_FRONT},
-    {"ui.spawn.button", "Button", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+    {"ui.spawn.button", "Button", "Create", 0, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
      UI_W_BUTTON, 0, 0, 0, 0, ED_DM_FRONT},
-    {"ui.spawn.label", "Label", "Create", 2, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
+    {"ui.spawn.label", "Label", "Create", 0, ED_WHEN_ALWAYS, ED_K_SPAWN, ED_V_PALETTE,
      UI_W_LABEL, 0, 0, 0, 0, ED_DM_FRONT},
     // HOME: правка выделения + история + инструменты
     {"edit.rename", "Rename", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, 0, ED_CMD_RENAME, GLFW_KEY_F2,
      0, 0, 0, ED_DM_FRONT},
     {"edit.delete", "Delete", "Edit", 0, ED_WHEN_SEL, ED_K_CMD, ED_V_PALETTE, ED_CMD_DELETE,
-     GLFW_KEY_DELETE, 0, 0, 0, ED_DM_FRONT},
+     GLFW_KEY_DELETE, 0, 0, 0, ED_DM_FRONT}, // строка палитры: в ленте не рисуется
     {"hist.undo", "Undo", "History", 0, ED_WHEN_UNDO, ED_K_CMD, 0, ED_CMD_UNDO, GLFW_KEY_Z,
      ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
     {"hist.redo", "Redo", "History", 0, ED_WHEN_REDO, ED_K_CMD, 0, ED_CMD_REDO, GLFW_KEY_Y,
@@ -1032,11 +1036,11 @@ static const EdAction ED_ACT[] = {
     {"tools.keys", "Cheatsheet", "Tools", 0, ED_WHEN_ALWAYS, ED_K_CMD, 0, ED_CMD_KEYS,
      GLFW_KEY_F1, 0, 0, 0, ED_DM_FRONT},
     // VIEW: галочки инструментов (View в Word / панели в Roblox Studio)
-    {"view.panel.palette", "Palette", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 0,
+    {"view.panel.palette", "Palette", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 0,
      GLFW_KEY_1, ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
-    {"view.panel.tree", "Tree", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 1, GLFW_KEY_2,
+    {"view.panel.tree", "Tree", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 1, GLFW_KEY_2,
      ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
-    {"view.panel.inspector", "Inspector", "Panels", 3, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 2,
+    {"view.panel.inspector", "Inspector", "Panels", 2, ED_WHEN_ALWAYS, ED_K_TOGGLE, 0, 2,
      GLFW_KEY_3, ED_MOD_CTRL, 0, 0, ED_DM_FRONT},
     // MODEL: инструменты РЕДАКТОРА СЦЕНЫ = режим инструмента (radio). Домен SCENE.
     // Эти же четыре режима раньше дублировал легаси-тулбар ui_panels (Q:Sel/W:Move/
@@ -1088,6 +1092,13 @@ static int ed_pal_act(int row) {
             k++;
         }
     return -1;
+}
+// ОДНА КНОПКА НА ДЕЙСТВИЕ. Запись, у которой есть СТРОКА В ПАЛИТРЕ (ED_V_PALETTE),
+// в ленте НЕ рисуется: две одинаковые кнопки на экране = второй кликабельный путь
+// к тому же. Клавиша и шпаргалка у действия остаются (шпаргалка — справка о ВСЕХ
+// командах, а не кнопки; в ней же написано, ГДЕ команда живёт: PALETTE или лента).
+static int ed_act_in_ribbon(int i) {
+    return (ED_ACT[i].views & ED_V_PALETTE) == 0;
 }
 static const char *ed_pal_label(int row) {
     int a = ed_pal_act(row);
@@ -1238,6 +1249,7 @@ static void ed_ribbon_layout(void) {
     const char *grp = 0;
     float x = (float)PAL_PAD;
     for (int i = 0; i < ED_ACT_N && g_rbN < ED_RB_MAX; i++) {
+        if (!ed_act_in_ribbon(i)) continue; // у действия своя строка в палитре
         if ((int)ED_ACT[i].tab != g_edTab) continue;
         if (!grp || strcmp(grp, ED_ACT[i].group) != 0) {
             if (grp) x += (float)ED_RIBBON_SEP; // зазор между группами
@@ -2861,6 +2873,28 @@ static int sel_clip_click(const char *id) {
     e.x = x + w * 0.5f;
     e.y = y + h * 0.5f;
     return wt_event(&e);
+}
+
+// §14 F5l(2b): клик по СТРОКЕ ПАЛИТРЫ — тем же путём, что у пользователя
+// (событие DOWN в строку). Нужен для команд, которые живут в палитре и в ленте НЕ
+// рисуются (правило «одна кнопка на действие»).
+static int sel_pal_click(const char *id) {
+    int ai = ed_act_find(id);
+    if (ai < 0) return 0;
+    for (int row = 0; row < ed_pal_n(); row++) {
+        if (ed_pal_act(row) != ai) continue;
+        float x, y, w, h;
+        pal_rect(row, &x, &y, &w, &h);
+        if (w <= 0 || h <= 0) return 0;
+        UiEvent e;
+        memset(&e, 0, sizeof e);
+        e.kind = UI_EV_DOWN;
+        e.x = x + 4;
+        e.y = y + 4;
+        route_event(&e);
+        return 1;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -4924,11 +4958,13 @@ int main(int argc, char **argv) {
                 }
             }
             // (3) заголовок ленты ПЕРЕКЛЮЧАЕТ ленту (а не панель), кнопки — ниже
-            // полосы заголовков (в свою полосу)
+            // полосы заголовков (в свою полосу). И НИ ОДНОЙ КНОПКИ-КОПИИ: команда,
+            // у которой есть строка палитры, в ленте не рисуется (жалоба тестера
+            // 18.10: «нажимаю Panel, иду в UI — почему тут опять Panel?»).
             {
-                float tx, ty, tw, th;
-                tab_rect(2, &tx, &ty, &tw, &th); // UI (0 HOME, 1 MODEL)
+                float tx, ty, tw, th, p2x, p2y, p2w, p2h, p3x, p3y, p3w, p3h;
                 UiEvent te;
+                tab_rect(2, &tx, &ty, &tw, &th); // VIEW (0 HOME, 1 MODEL)
                 memset(&te, 0, sizeof te);
                 te.kind = UI_EV_DOWN;
                 te.x = tx + 20;
@@ -4939,28 +4975,48 @@ int main(int argc, char **argv) {
                 }
                 ed_ribbon_layout();
                 int uin = g_rbN;
-                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
+                ed_ribbon_item_rect(ed_act_find("view.panel.palette"), &tx, &ty, &tw, &th);
                 if (uin != 3 || tw <= 0 || ty < (float)(ED_TOP_CHROME + ED_TABS_H) ||
                     ty + th > (float)ed_top()) {
                     printf("SELF FAIL: ribbon-tab-items n=%d rect=%.0f,%.0f %.0fx%.0f\n", uin,
                            (double)tx, (double)ty, (double)tw, (double)th);
                     bad = 1;
                 }
+                // ДЕДУП: запись со строкой палитры не рисуется НИ НА ОДНОЙ ленте, а
+                // запись без строки палитры на своей ленте НАРИСОВАНА (обе стороны).
+                int dupBtn = 0, missing = 0;
+                for (int t = 0; t < ED_TABS_N; t++) {
+                    g_edTab = t;
+                    ed_ribbon_layout();
+                    for (int i = 0; i < ED_ACT_N; i++) {
+                        float ix, iy, iw, ih;
+                        ed_ribbon_item_rect(i, &ix, &iy, &iw, &ih);
+                        int pal = (ED_ACT[i].views & ED_V_PALETTE) != 0;
+                        if (pal && iw > 0) dupBtn++;
+                        if (!pal && (int)ED_ACT[i].tab == t && iw <= 0) missing++;
+                    }
+                }
+                if (dupBtn || missing || strcmp(wt_type_name(UI_W_BUTTON), "Button") != 0) {
+                    printf("SELF FAIL: ribbon-nodup dup=%d missing=%d\n", dupBtn, missing);
+                    bad = 1;
+                }
                 // другая лента = ДРУГОЙ НАБОР кнопок (лента, а не одна полоса)
-                g_edTab = 3; // VIEW
+                g_edTab = 0; // HOME
                 ed_ribbon_layout();
-                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &tx, &ty, &tw, &th);
-                float p2x, p2y, p2w, p2h;
+                int hnn = g_rbN;
+                ed_ribbon_item_rect(ed_act_find("edit.rename"), &tx, &ty, &tw, &th);
                 ed_ribbon_item_rect(ed_act_find("view.panel.palette"), &p2x, &p2y, &p2w, &p2h);
-                if (tw != 0 || p2w <= 0) {
-                    printf("SELF FAIL: ribbon-tab-set spawn_w=%.0f pal_w=%.0f\n", (double)tw,
-                           (double)p2w);
+                ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &p3x, &p3y, &p3w, &p3h);
+                if (hnn != 5 || tw <= 0 || p2w != 0 || p3w != 0) {
+                    printf("SELF FAIL: ribbon-tab-set home=%d rename_w=%.0f pal_w=%.0f "
+                           "spawn_w=%.0f\n",
+                           hnn, (double)tw, (double)p2w, (double)p3w);
                     bad = 1;
                 }
                 // MODEL — лента ДРУГОГО ДОМЕНА (игровая сцена, не UI редактора): на ней
                 // только записи ED_DM_SCENE, ровно четыре РЕЖИМА инструмента (radio) и
-                // ни одной кнопки создания виджета. Тестер: «для самого редактора
-                // отдельно ... разделить, но чтобы функционал сохранился».
+                // ни одной кнопки фронта. Тестер: «для самого редактора отдельно ...
+                // разделить, но чтобы функционал сохранился».
                 g_edTab = 1; // MODEL
                 ed_ribbon_layout();
                 int mscn = g_rbN, domOk = 1, toolOk = 1;
@@ -4971,9 +5027,9 @@ int main(int argc, char **argv) {
                 }
                 ed_ribbon_item_rect(ed_act_find("scene.move"), &tx, &ty, &tw, &th);
                 ed_ribbon_item_rect(ed_act_find("ui.spawn.button"), &p2x, &p2y, &p2w, &p2h);
-                // домены не смешаны и в обратную сторону: на UI нет инструментов сцены
+                // и в обратную сторону: на фронте нет инструментов сцены
                 int frontHasScene = 0;
-                g_edTab = 2;
+                g_edTab = 0;
                 ed_ribbon_layout();
                 for (int s = 0; s < g_rbN; s++)
                     if (ED_ACT[g_rbAct[s]].domain == ED_DM_SCENE) frontHasScene++;
@@ -5014,7 +5070,7 @@ int main(int argc, char **argv) {
             // (4) кнопка ленты UI «Button» = спавн виджета (и выбор ложится на него)
             {
                 int c0 = g_wt.count;
-                if (!sel_clip_click("ui.spawn.button") || g_wt.count != c0 + 1 ||
+                if (!sel_pal_click("ui.spawn.button") || g_wt.count != c0 + 1 ||
                     !widget_cget(g_act, g_wtSel)) {
                     printf("SELF FAIL: ribbon-spawn %d->%d sel=%d\n", c0, g_wt.count, g_wtSel);
                     bad = 1;
@@ -5026,7 +5082,7 @@ int main(int argc, char **argv) {
                 g_wtSel = 0;
                 int c0 = g_wt.count;
                 int r = ed_act_run(ed_act_find("edit.delete"));
-                sel_clip_click("edit.delete"); // клик по кнопке ленты HOME
+                sel_pal_click("edit.delete"); // клик по строке палитры (в ленте её нет)
                 if (r || g_wt.count != c0) {
                     printf("SELF FAIL: ribbon-disabled r=%d %d->%d\n", r, c0, g_wt.count);
                     bad = 1;
@@ -5123,7 +5179,7 @@ int main(int argc, char **argv) {
             // (9) тултип: у включённой кнопки — метка и клавиша, у выключенной —
             // честная пометка [off]; плашка не вылезает за окно
             {
-                g_edTab = 3; // VIEW
+                g_edTab = 2; // VIEW
                 g_rbHot = ed_act_find("view.panel.tree");
                 char tip[160];
                 ed_ribbon_tip_text(g_rbHot, tip, sizeof tip);
@@ -6020,8 +6076,9 @@ int main(int argc, char **argv) {
                          "frontedit: click=select | Ctrl+click=under | drag=move |"
                          " edges=resize | tree-row drag=reparent/order | panel head"
                          " drag=float | dock chip=back | F2=rename | Del | Ctrl+Z/Y undo"
-                         " | ribbon: HOME/MODEL/UI/VIEW (MODEL=Q/W/E/R scene tool,"
-                         " VIEW=panel checkboxes) | F1 keys |"
+                         " | ribbon: HOME/MODEL/VIEW (MODEL=Q/W/E/R scene tool,"
+                         " VIEW=panel checkboxes; создание/Delete — строки PALETTE)"
+                         " | F1 keys |"
                          " F7 self | Esc",
                          hintCol);
             { // HUD: FPS + счётчик полных перерисовок + глубина истории (F4)
@@ -6072,8 +6129,14 @@ int main(int argc, char **argv) {
                     char kb[48];
                     ed_act_keys(i, kb, sizeof kb);
                     int en = ed_act_enabled(i);
-                    ui_text_quad(text, x + 8, ry, g_edRibbonTab[ED_ACT[i].tab], hcol);
-                    ui_text_quad(text, x + 62, ry, ED_ACT[i].label, en ? tcol : hcol);
+                    // ГДЕ команда живёт: строка палитры -> "PALETTE", иначе лента.
+                    // Тестеру («нажимаю Panel, иду в UI — опять Panel?») эта колонка
+                    // и отвечает: команда живёт в ОДНОМ месте.
+                    ui_text_quad(text, x + 8, ry,
+                                 ed_act_in_ribbon(i) ? g_edRibbonTab[ED_ACT[i].tab]
+                                                     : "PALETTE",
+                                 hcol);
+                    ui_text_quad(text, x + 70, ry, ED_ACT[i].label, en ? tcol : hcol);
                     if (kb[0])
                         ui_text_quad(text, x + w - 10.0f - ui_text_width(text, kb), ry, kb,
                                      en ? tcol : hcol);
