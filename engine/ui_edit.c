@@ -178,14 +178,25 @@ static int ed_live(int i) {
 // Раньше панели лежали поверх экрана игры: тестер «инструменты не должны быть во
 // вьюпорте, нужно окно, которое отвечает за редакцию». Оторванная (F5j) панель —
 // исключение: она окно и плавает поверх всего, пока её не вернут в док.
-#define ED_DOCK_W (TREE_W + 2 * PAL_PAD) // ширина полосы дока (панель + отступы)
+#define ED_DOCK_W (TREE_W + 2 * PAL_PAD) // ширина полосы дока по умолчанию
+// §14 F5l(4b): СПЛИТТЕРЫ ДОКОВ. Ширина дока не константа: её тянет юзер за край
+// дока (как в VS Code/Blender/UE). Это СОСТОЯНИЕ ИНСТРУМЕНТА, не документ, и
+// живёт в том же файле, что остальное состояние (ed_panels.json) — второго файла
+// не заводим (правило «одно состояние — один файл»).
+#define ED_DOCKWIN_MIN 96 // уже не сужаем: панель перестаёт читаться
+#define ED_SPLIT_HIT 7    // зона захвата сплиттера у края дока (px)
+static int g_dockWl = ED_DOCK_W; // ширина панели ЛЕВОГО дока (палитра/дерево)
+static int g_dockWr = ED_DOCK_W; // ширина панели ПРАВОГО дока (инспектор)
+static int g_split = 0;          // 0 нет, 1 левый, 2 правый: сплиттер тащат
+static double g_splitX0 = 0;     // где взяли (для dx)
+static int g_splitW0 = 0;        // ширина на момент захвата
 static int g_dockL = 0, g_dockR = 0;     // занятые полосы доков в этом кадре
 // §14 F5l(2): верх инструментов = хром + полоса заголовков лент + полоса кнопок
 // активной ленты. Доки и вьюпорт начинаются ПОД ней (одна точка правды).
 static int ed_top(void) { return ED_TOP_CHROME + ED_TABS_H + ED_RIBBON_H + PAL_PAD; }
 static void ed_viewport_compute(void) {
-    g_dockL = (g_edOpen[0] || g_edOpen[1]) ? ED_DOCK_W + PAL_PAD : 0;
-    g_dockR = g_edOpen[2] ? ED_DOCK_W + PAL_PAD : 0;
+    g_dockL = (g_edOpen[0] || g_edOpen[1]) ? g_dockWl + PAL_PAD : 0;
+    g_dockR = g_edOpen[2] ? g_dockWr + PAL_PAD : 0;
     int top = ed_top(); // под полосой лент
     g_vpx = g_dockL;
     g_vpy = top;
@@ -193,6 +204,60 @@ static void ed_viewport_compute(void) {
     g_vph = g_WH - top;
     if (g_vpw < 64) g_vpw = 64; // тесное окно: вьюпорт не схлопываем в ноль
     if (g_vph < 64) g_vph = 64;
+}
+
+// §14 F5l(4b): арифметика сплиттеров доков (см. ED_DOCK_* выше).
+static void ed_dock_clamp(int i, int *w) {
+    // Держим ДВЕ границы: панель не уже минимума, и вьюпорт не схлопывается.
+    int minw = ED_DOCKWIN_MIN;
+    int other = (i == 1) ? (g_edOpen[2] ? g_dockWr + PAL_PAD : 0)
+                         : ((g_edOpen[0] || g_edOpen[1]) ? g_dockWl + PAL_PAD : 0);
+    int maxw = g_WW - other - PAL_PAD - 64; // 64 = минимальный вьюпорт
+    if (maxw < minw) maxw = minw;           // тесное окно: минимум важнее
+    int v = *w;
+    if (v < minw) v = minw;
+    if (v > maxw) v = maxw;
+    *w = v;
+}
+// Кламп ПАРЫ (чтение из файла): значения недоверенные, мало поровну сузить —
+// надо ещё не дать СУММЕ съесть минимальный вьюпорт (иначе доки налезут друг на
+// друга, и «вьюпорт = остаток» станет враньём).
+static void ed_docks_clamp_pair(void) {
+    int gl = (g_edOpen[0] || g_edOpen[1]) ? PAL_PAD : 0;
+    int gr = g_edOpen[2] ? PAL_PAD : 0;
+    int room = g_WW - gl - gr - 64; // всё, что можно отдать докам
+    if (room < 2 * ED_DOCKWIN_MIN) room = 2 * ED_DOCKWIN_MIN;
+    int maxL = room - ED_DOCKWIN_MIN;
+    if (maxL < ED_DOCKWIN_MIN) maxL = ED_DOCKWIN_MIN;
+    if (g_dockWl < ED_DOCKWIN_MIN) g_dockWl = ED_DOCKWIN_MIN;
+    if (g_dockWl > maxL) g_dockWl = maxL;
+    int maxR = room - g_dockWl;
+    if (g_dockWr < ED_DOCKWIN_MIN) g_dockWr = ED_DOCKWIN_MIN;
+    if (g_dockWr > maxR) g_dockWr = maxR;
+}
+static void ed_dock_set(int i, int w) {
+    ed_dock_clamp(i, &w);
+    if (i == 1) g_dockWl = w;
+    else g_dockWr = w;
+}
+static void split_rect(int i, float *x, float *w) {
+    *w = (float)ED_SPLIT_HIT;
+    if (i == 1) *x = (float)g_dockL - *w * 0.5f;    // левый док: его ПРАВЫЙ край
+    else *x = (float)(g_WW - g_dockR) - *w * 0.5f;  // правый док: его ЛЕВЫЙ край
+}
+static int split_hit(float px, float py, int *which) {
+    if (py < (float)ed_top()) return 0; // сплиттеры живут под лентой
+    for (int i = 1; i <= 2; i++) {
+        if (i == 1 && g_dockL <= 0) continue; // дока нет — тянуть нечего
+        if (i == 2 && g_dockR <= 0) continue;
+        float x, w;
+        split_rect(i, &x, &w);
+        if (px >= x && px < x + w) {
+            if (which) *which = i;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // Полоса вкладок-инструментов — во всю ширину ОКНА (это лента редактора, не
@@ -522,6 +587,24 @@ static void chrome_draw(RcVecShape *sh, int *n) {
 // фона панели, но ДО рядов и до текста (текст — отдельный проход).
 // §14 F5j: порядок = g_edOrder (верхняя панель — последняя), у ОТОРВАННОЙ панели
 // дополнительно рамка «я поверх всего» и кнопка «dock» в правом конце заголовка.
+// §14 F5l(4b): линия сплиттера на краю дока. Без неё «за что тянуть» не видно
+// (жалоба тестера на невидимые ручки — та же грабля, что с 8 ручками ресайза).
+static void split_draw(RcVecShape *sh, int *n) {
+    static const float col[4] = {0.28f, 0.31f, 0.38f, 1.0f};
+    static const float hot[4] = {0.35f, 0.62f, 1.0f, 1.0f}; // под курсором/тащат
+    int which = 0;
+    int over = split_hit((float)g_mx, (float)g_my, &which);
+    for (int i = 1; i <= 2; i++) {
+        if (i == 1 && g_dockL <= 0) continue;
+        if (i == 2 && g_dockR <= 0) continue;
+        float x, w;
+        split_rect(i, &x, &w);
+        int on = (g_split == i) || (over && which == i);
+        wt_emit(sh, n, x + w * 0.5f - 1.0f, (float)ed_top(), 2.0f,
+                (float)(g_WH - ed_top()), on ? hot : col, 0.0f);
+    }
+}
+
 static void chrome_heads_draw(RcVecShape *sh, int *n) {
     float head[4] = {0.19f, 0.21f, 0.27f, 1.0f};
     float line[4] = {0.30f, 0.33f, 0.41f, 1.0f};
@@ -824,7 +907,7 @@ static void ins_rect(int i, float *x, float *y, float *w, float *h) {
 static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
     // §14 F5l(4): панели стоят в СВОИХ полосах дока, а не поверх экрана игры:
     // левый док — от левого края ОКНА, правый — от правого, вьюпорт = середина.
-    float palW = (float)ED_DOCK_W;
+    float palW = (float)g_dockWl;
     float palH =
         (float)(PAL_PAD * 2 + PAL_TITLE + ed_pal_n() * (PAL_BH + PAL_GAP) - PAL_GAP);
     float x0 = (float)PAL_PAD;
@@ -851,8 +934,8 @@ static void ed_panel_home(int i, float *ox, float *oy, float *ow, float *oh) {
         }
         return;
     }
-    *ow = (float)(INS_W + 2 * PAL_PAD); // инспектор: правый док
-    *ox = (float)(g_WW - ED_DOCK_W - PAL_PAD);
+    *ow = (float)(g_dockWr + 2 * PAL_PAD); // инспектор: правый док (ширина тянется)
+    *ox = (float)(g_WW - g_dockWr - PAL_PAD);
     *oy = y0;
     *oh = (float)(PAL_PAD * 2 + PAL_TITLE + INS_HEAD + IF_N * (INS_RH + INS_GAP));
 }
@@ -912,11 +995,12 @@ static void ed_panels_save(void) {
     if (!f) return;
     fprintf(f,
             "{\n  \"_note\": \"ui_edit tools (#14 F5k): 1 = panel open, "
-            "edTab = active ribbon, edTool = scene tool mode. Editor state, not "
-            "a document.\",\n  \"edOpen\": "
-            "[%d, %d, %d],\n  \"edTab\": %d,\n  \"edTool\": %d\n}\n",
+            "edTab = active ribbon, edTool = scene tool mode, dockL/dockR = dock "
+            "pane widths. Editor state, not a document.\",\n  \"edOpen\": "
+            "[%d, %d, %d],\n  \"edTab\": %d,\n  \"edTool\": %d,\n"
+            "  \"dockL\": %d,\n  \"dockR\": %d\n}\n",
             g_edOpen[0], g_edOpen[1], g_edOpen[2], g_edTab,
-            g_panels ? ui_panels_tool(g_panels) : 0);
+            g_panels ? ui_panels_tool(g_panels) : 0, g_dockWl, g_dockWr);
     fclose(f);
 }
 static void ed_panels_load(void) {
@@ -945,6 +1029,22 @@ static void ed_panels_load(void) {
         g_edOpen[0] = a ? 1 : 0;
         g_edOpen[1] = b ? 1 : 0;
         g_edOpen[2] = c ? 1 : 0;
+    }
+    { // F5l(4b): ширина доков (кламп при чтении: битый файл панель не сносит)
+        const char *dl = strstr(s, "\"dockL\"");
+        const char *dr = strstr(s, "\"dockR\"");
+        if (dl) {
+            int v = -1;
+            dl = strchr(dl, ':');
+            if (dl && sscanf(dl + 1, "%d", &v) == 1 && v > 0) g_dockWl = v;
+        }
+        if (dr) {
+            int v = -1;
+            dr = strchr(dr, ':');
+            if (dr && sscanf(dr + 1, "%d", &v) == 1 && v > 0) g_dockWr = v;
+        }
+        ed_docks_clamp_pair();
+        ed_viewport_compute();
     }
     { // F5l(2): активная лента — тоже состояние инструмента (переживает запуск)
         const char *t = strstr(s, "\"edTab\"");
@@ -2608,6 +2708,7 @@ static int build_shapes(RcVecShape *shapes) {
     ed_ribbon_draw(shapes, &n); // F5l(2): кнопки активной ленты (реестр действий)
     chrome_draw(shapes, &n);
     chrome_heads_draw(shapes, &n);
+    split_draw(shapes, &n); // F5l(4b): линии сплиттеров доков
     tree_draw(shapes, &n);   // F3: дерево
     ins_draw(shapes, &n);    // F3b: инспектор (справа)
     pal_draw(shapes, &n);
@@ -2674,6 +2775,38 @@ static void edit_push_dirtyN(const int (*rects)[4], int cnt) {
     }
 }
 
+// §14 F5l(4b): событие СПЛИТТЕРА ДОКОВ — самый внешний слой. Съеденное не
+// уходит ни виджетам, ни документу (иначе клик по краю дока ещё и выбирал бы
+// виджет под ним). Сброс/персист — на UP (конец операции, как везде).
+static int ed_split_event(const UiEvent *e) {
+    if (e->kind == UI_EV_DOWN) {
+        int which = 0;
+        if (!split_hit(e->x, e->y, &which)) return 0;
+        g_split = which;
+        g_splitX0 = (double)e->x;
+        g_splitW0 = (which == 1) ? g_dockWl : g_dockWr;
+        return 1;
+    }
+    if (e->kind == UI_EV_MOVE) {
+        if (!g_split) return 0;
+        if (!g_mouseDown) { // UP потерялся (окно ушло из фокуса) — не «липнем»
+            g_split = 0;
+            return 0;
+        }
+        float dx = (float)((double)e->x - g_splitX0);
+        ed_dock_set(g_split, g_splitW0 + (int)((g_split == 1) ? dx : -dx));
+        ed_viewport_compute();
+        return 1;
+    }
+    if (e->kind == UI_EV_UP) {
+        if (!g_split) return 0;
+        g_split = 0;
+        ed_panels_save(); // ширина доков — состояние ИНСТРУМЕНТА (конец операции)
+        return 1;
+    }
+    return 0;
+}
+
 static void route_event(const UiEvent *e) {
     // Порядок §14: виджеты/палитра/лента -> доки. DOWN/UP, съеденный холстом,
     // в доки не идёт; MOVE форвардим обоим (ховер и там, и там).
@@ -2681,6 +2814,10 @@ static void route_event(const UiEvent *e) {
     // (Tab-коллапс, меню, клавиши W/E/R) — СКРЫТЫЙ ДУБЛЬ ленты, из-за которого
     // «убранное» легаси продолжало работать за спиной. UiPanels остаётся только
     // как состояние режима инструмента сцены (ui_panels_tool/set_tool).
+    if (ed_split_event(e)) { // F5l(4b): сплиттеры доков — до всего остального
+        edit_push();
+        return;
+    }
     g_part = 0;
     int mine = wt_event(e);
     if (mine && e->kind != UI_EV_MOVE) {
@@ -5040,6 +5177,134 @@ int main(int argc, char **argv) {
                     bad = 1;
                 }
                 g_edTab = 0;
+            }
+            // (3c) СПЛИТТЕРЫ ДОКОВ (F5l(4b)): ширина дока тянется мышью, вьюпорт
+            // = остаток; клампы держат И панель, И вьюпорт; размер переживает
+            // запуск (ed_panels.json). Ширины вернём к дефолту — дальше тесты
+            // считают от ED_DOCK_W.
+            {
+                int keepOpen[3] = {g_edOpen[0], g_edOpen[1], g_edOpen[2]};
+                g_edOpen[0] = g_edOpen[1] = g_edOpen[2] = 1; // оба дока на месте
+                g_dockWl = g_dockWr = ED_DOCK_W;
+                ed_viewport_compute();
+                int vx0 = g_vpx, vw0 = g_vpw;
+                int maxw = g_WW - (g_dockWr + PAL_PAD) - PAL_PAD - 64;
+                float sx, sw;
+                int which = -1;
+                // попадание: левый/правый край дока — сплиттер, середина — НЕТ
+                split_rect(1, &sx, &sw);
+                int hitL = split_hit(sx + sw * 0.5f, (float)(ed_top() + 40), &which);
+                split_rect(2, &sx, &sw);
+                int hitR = split_hit(sx + sw * 0.5f, (float)(ed_top() + 40), &which);
+                int hitMid = split_hit((float)(g_vpx + g_vpw / 2), (float)(ed_top() + 40),
+                                       &which);
+                if (!hitL || !hitR || hitMid || g_vpx != ED_DOCK_W + PAL_PAD) {
+                    printf("SELF FAIL: dock-hit L=%d R=%d mid=%d vpx=%d\n", hitL, hitR, hitMid,
+                           g_vpx);
+                    bad = 1;
+                }
+                // ЛЕНТА — не зона сплиттера (иначе клик по вкладке резал бы док)
+                split_rect(1, &sx, &sw);
+                if (split_hit(sx + sw * 0.5f, 5.0f, &which)) {
+                    printf("SELF FAIL: dock-hit-ribbon\n");
+                    bad = 1;
+                }
+                // драг левого сплиттера +60: док шире, вьюпорт уехал и сузился
+                UiEvent de;
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_DOWN;
+                split_rect(1, &sx, &sw);
+                de.x = sx + sw * 0.5f;
+                de.y = (float)(ed_top() + 40);
+                g_mouseDown = 1;
+                route_event(&de);
+                if (g_split != 1) {
+                    printf("SELF FAIL: dock-grab %d\n", g_split);
+                    bad = 1;
+                }
+                float grabx = de.x;
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_MOVE;
+                de.x = grabx + 60.0f;
+                de.y = (float)(ed_top() + 40);
+                route_event(&de);
+                if (g_dockWl != ED_DOCK_W + 60 || g_vpx != vx0 + 60 || g_vpw != vw0 - 60) {
+                    printf("SELF FAIL: dock-drag w=%d vpx=%d vpw=%d\n", g_dockWl, g_vpx,
+                           g_vpw);
+                    bad = 1;
+                }
+                // кламп ВПРАВО: вьюпорт не схлопывается (док упирается в границу)
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_MOVE;
+                de.x = (float)g_WW + 5000.0f;
+                de.y = (float)(ed_top() + 40);
+                route_event(&de);
+                if (g_dockWl != maxw || g_vpw < 64) {
+                    printf("SELF FAIL: dock-clamp w=%d max=%d vpw=%d\n", g_dockWl, maxw,
+                           g_vpw);
+                    bad = 1;
+                }
+                // кламп ВЛЕВО: панель не уже минимума (читаемость важнее «широкого»)
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_MOVE;
+                de.x = -5000.0f;
+                de.y = (float)(ed_top() + 40);
+                route_event(&de);
+                if (g_dockWl != ED_DOCKWIN_MIN) {
+                    printf("SELF FAIL: dock-min w=%d\n", g_dockWl);
+                    bad = 1;
+                }
+                // UP = конец операции: размер уходит в файл состояния инструмента
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_MOVE;
+                de.x = (float)(vx0 + 33.0f);
+                de.y = (float)(ed_top() + 40);
+                route_event(&de);
+                memset(&de, 0, sizeof de);
+                de.kind = UI_EV_UP;
+                g_mouseDown = 0;
+                route_event(&de);
+                int want = g_dockWl;
+                if (g_split != 0 || want == ED_DOCK_W) {
+                    printf("SELF FAIL: dock-up split=%d w=%d\n", g_split, want);
+                    bad = 1;
+                }
+                setenv("UI_EDIT_BENCH", "1", 1);
+                ed_panels_save();
+                g_dockWl = ED_DOCK_W; // сброс: «прочиталось» не спутать с дефолтом
+                ed_panels_load();
+                if (g_dockWl != want || g_dockWr != ED_DOCK_W) {
+                    printf("SELF FAIL: dock-persist w=%d want %d r=%d\n", g_dockWl, want,
+                           g_dockWr);
+                    bad = 1;
+                }
+                { // БИТЫЙ файл: 99999 в dockL -> кламп ПАРОЙ, а не панель во всё окно
+                    FILE *f = fopen(ED_PANELS_BENCH, "wb");
+                    if (f) {
+                        fprintf(f, "{\n \"edOpen\": [1,1,1],\n \"dockL\": 99999,\n"
+                                   " \"dockR\": 1\n}\n");
+                        fclose(f);
+                    }
+                    int room = g_WW - 2 * PAL_PAD - 64; // оба дока открыты
+                    ed_panels_load();
+                    int vpx2 = 0, vpw2 = 0;
+                    ed_viewport_compute();
+                    vpx2 = g_vpx;
+                    vpw2 = g_vpw;
+                    if (g_dockWl != room - ED_DOCKWIN_MIN || g_dockWr != ED_DOCKWIN_MIN ||
+                        vpw2 < 64 || g_dockWl + g_dockWr > room || vpx2 + vpw2 > g_WW) {
+                        printf("SELF FAIL: dock-load-clamp L=%d R=%d room=%d vpw=%d\n",
+                               g_dockWl, g_dockWr, room, vpw2);
+                        bad = 1;
+                    }
+                }
+                remove(ED_PANELS_BENCH);
+                unsetenv("UI_EDIT_BENCH");
+                g_dockWl = g_dockWr = ED_DOCK_W; // дальше тесты считают от дефолта
+                g_edOpen[0] = keepOpen[0];
+                g_edOpen[1] = keepOpen[1];
+                g_edOpen[2] = keepOpen[2];
+                ed_viewport_compute();
             }
             // (3b) ЛЕГАСИ-ХРОМА В ОКНЕ НЕТ. Было: полосы ui_panels — меню «File
             // Edit View» (0..26), тулбар «Q:Sel W:Move E:Rot R:Scale» (26..58),
