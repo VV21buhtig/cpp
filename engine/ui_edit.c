@@ -20,6 +20,7 @@
 #include "ui/ui_text.h" // подписи + хинт инструмента
 #include "ui/ui_log.h" // Ш1c: кольцо строк консоли (данные; вид — панель)
 #include "editor/ed_cmd.h" // командное ядро РЕДАКТОРА: реестр один на всё
+#include "editor/ed_doc.h" // A2: документ как интерфейс ХОСТА
 #include "rtarget.h"
 #include "comp_gl.h"
 #include "comp.h"
@@ -99,7 +100,7 @@ static int ed_pal_act(int row);
 static const char *ed_pal_label(int row);
 static int ed_pal_is_action(int row);
 static const char *wt_type_name(int type);
-static void ed_cmd_init(void); // ядро команд: записи режима + сервисы
+static void ed_host_init(void); // ХОСТ: реестр команд + документы
 
 // --- §14 F3c(1b): ХРОМ РЕДАКТОРА = ВИДЖЕТЫ (self-host) ---
 // Свой UI правщика живёт ВТОРЫМ деревом (g_edWt): палитра/дерево/инспектор — это
@@ -361,7 +362,7 @@ static void ed_rect(int id, float *x, float *y, float *w, float *h) {
 }
 
 static void ed_chrome_init(void) {
-    ed_cmd_init(); // реестр команд редактора (одна таблица на все виды)
+    ed_host_init(); // ХОСТ: реестр команд (одна таблица) + документы
     widget_tree_init(&g_edWt);
     memset(g_edMoved, 0, sizeof g_edMoved);
     UiWidgetStyle s, s2;
@@ -1323,6 +1324,33 @@ static void edit_push(void);
 // История документа: нужна гейту canExecute (есть ли что откатывать).
 static UiWidgetUndo g_undo;
 
+// --- A2: ДОКУМЕНТ как ИНТЕРФЕЙС ХОСТА ---------------------------------------
+// Хост-команды (hist.undo/redo, edit.delete/rename) спрашивают ДОКУМЕНТ, а не
+// виджеты: что открыто, есть ли что откатить, есть ли выделение. Что внутри —
+// дело ЭТОГО режима; для хоста это просто «записи активного документа».
+static int ui_doc_dirty(void) {
+    // Режим пишет layout.json на каждую правку — несохранённого не бывает.
+    return 0;
+}
+static int ui_doc_save(void) {
+    wt_persist();
+    return 1;
+}
+static int ui_doc_can_undo(void) { return ui_wundo_depth(&g_undo) > 0; }
+static int ui_doc_can_redo(void) { return ui_wundo_redo_depth(&g_undo) > 0; }
+static int ui_doc_undo(void) { return wt_undo_apply(0); }
+static int ui_doc_redo(void) { return wt_undo_apply(1); }
+static int ui_doc_has_sel(void) { return g_wtSel > 0 && widget_cget(g_act, g_wtSel) != 0; }
+static int ui_doc_del_sel(void) { return wt_delete_sel(); }
+static int ui_doc_rename_sel(void) {
+    name_edit_begin();
+    return 1;
+}
+// Документ режима «UI»: здесь только описание СЕБЯ (хост не знает, что внутри).
+static const EdDoc UI_DOC = {"ui", "UI", ui_doc_dirty, ui_doc_save, ui_doc_can_undo,
+                             ui_doc_can_redo, ui_doc_undo, ui_doc_redo, ui_doc_has_sel,
+                             ui_doc_del_sel, ui_doc_rename_sel};
+
 // Ширина строки — тот же advance, что у текста (иначе подпись и кнопка разъедутся).
 static float ed_txt_w(const char *s) {
     return g_text ? ui_text_width(g_text, s) : (float)(8 * (int)strlen(s));
@@ -1373,18 +1401,21 @@ static int act_impl_enabled(int i) {
     if (!a) return 0;
     switch (a->when) {
     case ED_WHEN_ALWAYS: return 1;
-    case ED_WHEN_SEL: return g_wtSel > 0 && widget_cget(g_act, g_wtSel) != 0;
-    case ED_WHEN_UNDO: return ui_wundo_depth(&g_undo) > 0;
-    case ED_WHEN_REDO: return ui_wundo_redo_depth(&g_undo) > 0;
+    // Гейты спрашивают АКТИВНЫЙ ДОКУМЕНТ: ядру нечего знать про виджеты.
+    case ED_WHEN_SEL: return ed_doc_has_sel();
+    case ED_WHEN_UNDO: return ed_doc_can_undo();
+    case ED_WHEN_REDO: return ed_doc_can_redo();
     default: return 0; // ED_WHEN_NEVER: ещё не реализовано
     }
 }
 static int cmd_builtin(int cmd) {
     switch (cmd) {
-    case ED_CMD_RENAME: name_edit_begin(); return 1;
-    case ED_CMD_DELETE: return wt_delete_sel();
-    case ED_CMD_UNDO: return wt_undo_apply(0);
-    case ED_CMD_REDO: return wt_undo_apply(1);
+    // Команды ДОКУМЕНТА: хост не знает, что за документ открыт.
+    case ED_CMD_RENAME: return ed_doc_rename_sel();
+    case ED_CMD_DELETE: return ed_doc_del_sel();
+    case ED_CMD_UNDO: return ed_doc_undo();
+    case ED_CMD_REDO: return ed_doc_redo();
+    // Команды ХОСТА: к документу не относятся.
     case ED_CMD_KEYS:
         g_edShowKeys = !g_edShowKeys;
         edit_push();
@@ -1437,6 +1468,16 @@ static void ed_cmd_init(void) {
     static const EdCmdHost HOST = {act_impl_enabled, act_impl_on, act_impl_run};
     ed_cmd_host(&HOST);
     ed_cmd_register_mode();
+}
+// Инициализация ХОСТА: реестр команд + список документов. Зовётся из
+// ed_chrome_init — так и приложение, и selftest получают одно и то же и не
+// регистрируют дважды. На A3 переедет в editor_main.c.
+static void ed_host_init(void) {
+    ed_cmd_init();
+    if (ed_doc_n() == 0) {
+        ed_doc_add(&UI_DOC);
+        ed_doc_active_set(0);
+    }
 }
 // --- геометрия ленты -------------------------------------------------------
 static void ed_ribbon_band(float *x, float *y, float *w, float *h) {
@@ -2752,7 +2793,7 @@ static int wt_event(const UiEvent *e) {
         return 1;
     }
     if (topP == 2 && ed_panel_open(2) && ins_head_hit(e->x, e->y)) { // F5a: поле текста
-        name_edit_begin();
+        ed_doc_rename_sel(); // вид зовёт КОМАНДУ, а не функцию режима
         return 1;
     }
     int ii = (topP == 2 && ed_panel_open(2)) ? ins_hit(e->x, e->y) : -1;
@@ -4036,7 +4077,9 @@ int main(int argc, char **argv) {
             undo_commit("add");
             int depth0 = ui_wundo_depth(&g_undo);
             g_wtSel = la;
-            name_edit_begin();
+            // Вход — через КОМАНДУ (гейт canExecute + документ), а не вызовом
+            // функции режима: иначе тест не поймал бы обрыв на этом пути.
+            ed_cmd_run(ed_cmd_find("edit.rename"));
             // F2/клик по имени: имя ВЫДЕЛЕНО ЦЕЛИКОМ (как UE/Unity/Blender).
             if (!g_nameEdit || strcmp(g_nameBuf, "Body") != 0 || g_nameCaret != 4 ||
                 g_nameAnchor != 0 || !name_has_sel()) {
@@ -5229,6 +5272,28 @@ int main(int argc, char **argv) {
                            del1, undo1, redo1);
                     bad = 1;
                 }
+                // (2b) A2: ДОКУМЕНТ — интерфейс ХОСТА. Команды hist./edit. ходят
+                // через ed_doc и про виджеты не знают. Числами: у АКТИВНОГО
+                // документа есть undo/redo/выделение/сохранение, а без
+                // активного документа закрыто ВСЁ (не «падает», а честно 0).
+                {
+                    int n1 = g_wt.count;
+                    int okDoc = ed_doc_active() && strcmp(ed_doc_kind(), "ui") == 0 &&
+                                strcmp(ed_doc_title(), "UI") == 0 && ed_doc_can_undo() &&
+                                ed_doc_has_sel() && !ed_doc_can_redo() && ed_doc_save();
+                    int okUndo = ed_doc_undo() && g_wt.count == n1 - 1 && ed_doc_can_redo();
+                    int okRedo = ed_doc_redo() && g_wt.count == n1;
+                    ed_doc_active_set(-1); // документа нет: закрыто ВСЁ
+                    int okNo = !ed_doc_can_undo() && !ed_doc_has_sel() && !ed_doc_undo() &&
+                               !ed_doc_del_sel() && !ed_doc_rename_sel() && !ed_doc_active();
+                    ed_doc_active_set(0);
+                    g_wtSel = w1; // вернуть выбор: дальше по коду он ожидается
+                    if (!okDoc || !okUndo || !okRedo || !okNo || g_wt.count != n1) {
+                        printf("SELF FAIL: doc-iface doc=%d undo=%d redo=%d no=%d n=%d\n",
+                               okDoc, okUndo, okRedo, okNo, g_wt.count);
+                        bad = 1;
+                    }
+                }
             }
             // (3) заголовок ленты ПЕРЕКЛЮЧАЕТ ленту (а не панель), кнопки — ниже
             // полосы заголовков (в свою полосу). И НИ ОДНОЙ КНОПКИ-КОПИИ: команда,
@@ -6068,7 +6133,7 @@ int main(int argc, char **argv) {
     { // UI_EDIT_RENAME=1: сразу открыть поле имени (скриншот/проверка каретки)
         const char *rn = getenv("UI_EDIT_RENAME");
         if (rn && rn[0] == '1') {
-            name_edit_begin();
+            ed_cmd_run(ed_cmd_find("edit.rename")); // та же дверь, что у F2
             printf("ui_edit: rename '%s' (sel %d..%d)\n", g_nameBuf, name_sel_lo(),
                    name_sel_hi());
         }
