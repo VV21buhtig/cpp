@@ -166,7 +166,7 @@ target_compile_options(ui_test PRIVATE -Wall -Wextra)
 # ЯДРО РЕДАКТОРА (хост-приложение): командный реестр, клавиши, вызов. Ни виджетов,
 # ни сцены внутри — исполнение команд приходит колбэками (editor/ed_cmd.h).
 # Отдельная библиотека, потому что её будут линковать и редактор, и его режимы.
-add_library(editor_core STATIC editor/ed_cmd.c editor/ed_doc.c)
+add_library(editor_core STATIC editor/ed_cmd.c editor/ed_doc.c editor/ed_workspace.c)
 target_include_directories(editor_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/third-party/glad)
